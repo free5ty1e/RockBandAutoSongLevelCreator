@@ -6,6 +6,8 @@
 
 By leveraging modern AI models for stem separation, pitch detection, and vocal alignment, AutoRB automates the complex manual workflow traditionally required to create custom Rock Band tracks.
 
+NOTE: Under development.  No release is available to share just yet.  
+
 ---
 
 ## 🌟 Key Features
