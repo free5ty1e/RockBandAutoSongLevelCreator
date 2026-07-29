@@ -21,26 +21,16 @@ def main(audio_file, lyrics, artist, title, year, genre, output_dir):
     
     # Pipeline stages (to be implemented in separate modules)
     click.echo("[1/5] Separating stems via Demucs...")
-    # stems = split_audio(audio_file, out_path)
     
     click.echo("[2/5] Extracting tempo and quantizing instruments...")
-    # midi_data = generate_instruments(stems)
     
     click.echo("[3/5] Aligning vocals and parsing LRC...")
-    # if lyrics:
-    #     vocal_data = parse_lrc(lyrics)
-    # else:
-    #     vocal_data = transcribe_vocals(stems['vocals'])
     
     click.echo("[4/5] Generating MOGG and DTA metadata...")
-    # generate_mogg(stems, out_path)
-    # generate_dta(artist, title, year, genre, out_path)
     
     click.echo("[5/5] Packaging Xbox 360 CON file...")
-    # pack_stfs(out_path, f"{artist}_{title}.con")
     
     click.echo(f"Success! CON file saved to {out_path.absolute()}")
 
 if __name__ == '__main__':
     main()
-
