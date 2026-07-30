@@ -116,6 +116,19 @@ python -m autorb.cli \
 
 ---
 
+## Previewing Results
+
+### Previewing separated audio mix
+
+To sum the separated audio tracks back together into a single audio file to hear what all tracks would sound like playing in-game in multitrack mode: 
+
+```bash
+python -m autorb.audio.mix_preview
+```
+
+Your stems in `output/stems` will be summed into `output/preview_mix.wav`
+
+
 ## 🧪 Development & Testing
 
 Run unit tests locally with `pytest`:
