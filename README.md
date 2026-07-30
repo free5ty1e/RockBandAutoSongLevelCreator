@@ -126,7 +126,31 @@ To sum the separated audio tracks back together into a single audio file to hear
 python -m autorb.audio.mix_preview
 ```
 
-Your stems in `output/stems` will be summed into `output/preview_mix.wav`
+Your stems in `output/stems` will be summed into `output/preview_mix.mp3`
+
+## Using Original Master Stems (For Bands/Artists)
+
+If you have access to the original studio multitracks (stems) for a song, you can skip the AI audio separation step to achieve perfect, artifact-free audio in-game.
+
+1. Create a `stems` folder inside your designated output directory (e.g., `./output/stems/`).
+2. Place your 4 master audio files in this folder and name them exactly:
+   - `drums.wav`
+   - `bass.wav`
+   - `vocals.wav`
+   - `other.wav` (Guitars, synths, backing tracks, etc.)
+3. Run the CLI tool with the `--skip-separation` flag:
+
+```bash
+python -m autorb.cli \
+  input/dummy-audio.mp3 \
+  --artist "Your Band" \
+  --title "Your Song" \
+  --year 2024 \
+  --genre "Rock" \
+  --lyrics input/your-song.lrc \
+  --output-dir ./output \
+  --skip-separation
+```
 
 
 ## 🧪 Development & Testing

@@ -1,57 +1,65 @@
 #!/usr/bin/env python
 
 import click
-import os
 from pathlib import Path
 import torch
-from autorb.audio.stems import separate_stems
 
 @click.command()
 @click.argument('audio_file', type=click.Path(exists=True))
-@click.option('--lyrics', '-l', type=click.Path(exists=True), help='Path to standard or Enhanced LRC lyrics file.')
-@click.option('--artist', '-a', required=True, prompt=True, help='Artist name')
-@click.option('--title', '-t', required=True, prompt=True, help='Song title')
-@click.option('--year', '-y', default=2024, help='Year of release')
-@click.option('--genre', '-g', default='Rock', help='Song genre')
-@click.option('--output-dir', '-o', default='./output', type=click.Path(), help='Directory to save the resulting CON file.')
-def main(audio_file, lyrics, artist, title, year, genre, output_dir):
-    """
-    AutoRB: Generate Rock Band 3 CON files from audio and lyrics.
-    """
+@click.option('--artist', required=True, help='Artist name')
+@click.option('--title', required=True, help='Song title')
+@click.option('--year', type=int, required=True, help='Release year')
+@click.option('--genre', required=True, help='Song genre')
+@click.option('--lyrics', type=click.Path(exists=True), required=True, help='Path to LRC file')
+@click.option('--output-dir', default='./output', type=click.Path(), help='Output directory')
+@click.option('--skip-separation', is_flag=True, help='Skip Demucs separation and use existing stems in the output directory')
+def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation):
     click.echo(f"Starting AutoRB Pipeline for: {artist} - {title}")
     
-    out_path = Path(output_dir)
-    out_path.mkdir(parents=True, exist_ok=True)
-    
-    # Determine best device
-    device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     click.echo(f"Using compute device: {device}")
     
-    # Pipeline stages
-    click.echo("[1/5] Separating stems via Demucs...")
-    stems = separate_stems(audio_file, out_path, device=device)
-    click.echo(f"Stems generated: {stems}")
-    
-    click.echo("[2/5] Extracting tempo and quantizing instruments...")
+    out_path = Path(output_dir)
+    stems_dir = out_path / "stems"
+
+    if skip_separation:
+        click.echo("\n[1/5] Skipping Demucs separation. Loading existing stems...")
+        stems = {
+            "drums": stems_dir / "drums.wav",
+            "bass": stems_dir / "bass.wav",
+            "other": stems_dir / "other.wav",
+            "vocals": stems_dir / "vocals.wav"
+        }
+        
+        # Validate that the user actually provided all 4 required files
+        for name, path in stems.items():
+            if not path.exists():
+                click.echo(f"Error: --skip-separation used, but missing required stem: {path}", err=True)
+                return
+        click.echo("All pre-existing stems found successfully.")
+    else:
+        click.echo("\n[1/5] Separating stems via Demucs...")
+        from autorb.audio.stems import separate_stems
+        stems = separate_stems(audio_file, out_path, device=device)
+
+    click.echo(f"Stems ready: {stems}")
+
+    click.echo("\n[2/5] Extracting tempo and quantizing instruments...")
     from autorb.audio.tempo import extract_tempo_map
-    
-    # Pass the drums.wav path to our new tempo mapper
     beat_times, dynamic_bpms = extract_tempo_map(stems["drums"])
     
-    # Echo the first few beats just so we can visually verify the drift in the console
     click.echo(f"First 5 beat timestamps (seconds): {beat_times[:5]}")
     click.echo(f"First 5 dynamic tempos (BPM): {[f'{bpm:.2f}' for bpm in dynamic_bpms[:5]]}")
 
     click.echo("\n[3/5] Aligning vocals and parsing LRC...")
-    # ... rest of your code ...   
-    
-    click.echo("[3/5] Aligning vocals and parsing LRC...")
-    
-    click.echo("[4/5] Generating MOGG and DTA metadata...")
-    
-    click.echo("[5/5] Packaging Xbox 360 CON file...")
-    
-    click.echo(f"Success! CON file saved to {out_path.absolute()}")
+    # [Placeholder for next step]
+
+    click.echo("\n[4/5] Generating MOGG and DTA metadata...")
+    # [Placeholder for next step]
+
+    click.echo("\n[5/5] Packaging Xbox 360 CON file...")
+    # [Placeholder for next step]
 
 if __name__ == '__main__':
     main()
+    
