@@ -1,3 +1,4 @@
 .opencode/
 input/
 *.pyc
+output/

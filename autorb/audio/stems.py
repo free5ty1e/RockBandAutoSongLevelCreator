@@ -56,7 +56,15 @@ def separate_stems(audio_path, output_dir, device="cpu", model_name="htdemucs"):
     for i, stem in enumerate(stem_names):
         out_file = stems_out_dir / f"{stem}.wav"
         print(f"Saving {stem} stem to {out_file}...")
-        torchaudio.save(str(out_file), sources[i].cpu(), sr)
+        # torchaudio.save(str(out_file), sources[i].cpu(), sr)
+        import soundfile as sf
+        # Convert the PyTorch tensor back to a NumPy array
+        audio_data = sources[i].cpu().numpy()
+        # PyTorch uses (channels, frames), but soundfile expects (frames, channels)
+        if audio_data.ndim == 2:
+            audio_data = audio_data.T
+        # Write the WAV file using soundfile to bypass torchaudio completely
+        sf.write(str(out_file), audio_data, sr)
         separated_files[stem] = out_file
         
     return separated_files
