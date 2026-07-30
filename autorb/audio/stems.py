@@ -50,9 +50,9 @@ def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu") -> dict
         sf.write(str(out_file), audio_data, sr)
         stems_paths[name] = out_file
 
-    # Generate preview mix by summing tensors in memory
+# Generate preview mix by summing tensors in memory
     print("Generating preview mix...")
-    preview_file = out_dir / "preview_mix.wav"
+    preview_file = out_dir / "preview_mix.mp3"
     mix_data = sources.sum(dim=0).cpu().numpy()
     
     if mix_data.ndim == 2:
@@ -62,7 +62,30 @@ def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu") -> dict
     if peak > 1.0:
         mix_data = mix_data / peak
 
-    sf.write(str(preview_file), mix_data, sr)
+
+# Generate preview mix by summing tensors in memory
+    print("Generating preview mix...")
+    preview_file = out_dir / "preview_mix.mp3"
+    mix_data = sources.sum(dim=0).cpu().numpy()
+    
+    if mix_data.ndim == 2:
+        mix_data = mix_data.T
+        
+    peak = np.max(np.abs(mix_data))
+    if peak > 1.0:
+        mix_data = mix_data / peak
+
+    # Write to an in-memory WAV buffer, then encode to MP3 using pydub
+    import io
+    from pydub import AudioSegment
+
+    wav_io = io.BytesIO()
+    sf.write(wav_io, mix_data, sr, format='WAV')
+    wav_io.seek(0)
+    
+    preview_audio = AudioSegment.from_wav(wav_io)
+    preview_audio.export(str(preview_file), format="mp3", bitrate="192k")
+    
     print(f"Preview mix saved to {preview_file}")
     stems_paths["preview_mix"] = preview_file
 
