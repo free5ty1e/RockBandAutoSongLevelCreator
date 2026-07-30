@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import librosa
 import soundfile as sf
+import click
 from demucs.apply import apply_model
 from demucs.pretrained import get_model
 
@@ -13,11 +14,11 @@ def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu") -> dict
     stems_dir = out_dir / "stems"
     stems_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Loading Demucs model 'htdemucs' on {device}...")
+    click.echo(f"Loading Demucs model 'htdemucs' on {device}...")
     model = get_model("htdemucs")
     model.to(device)
 
-    print(f"Loading audio file '{audio_path}'...")
+    click.echo(f"Loading audio file '{audio_path}'...")
     wav_np, sr = librosa.load(str(audio_path), sr=None, mono=False)
     if wav_np.ndim == 1:
         wav_np = np.expand_dims(wav_np, axis=0)
@@ -27,7 +28,7 @@ def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu") -> dict
     if wav.ndim == 2:
         wav = wav.unsqueeze(0)
 
-    print("Separating stems (this may take a while)...")
+    click.echo("Separating stems (this may take a while)...")
     ref = wav.mean(0)
     wav = (wav - ref.mean()) / ref.std()
     
@@ -41,7 +42,7 @@ def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu") -> dict
     # Save individual stems
     for i, name in enumerate(stem_names):
         out_file = stems_dir / f"{name}.wav"
-        print(f"Saving {name} stem to {out_file}...")
+        click.echo(f"Saving {name} stem to {out_file}...")
         
         audio_data = sources[i].cpu().numpy()
         if audio_data.ndim == 2:
@@ -50,21 +51,8 @@ def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu") -> dict
         sf.write(str(out_file), audio_data, sr)
         stems_paths[name] = out_file
 
-# Generate preview mix by summing tensors in memory
-    print("Generating preview mix...")
-    preview_file = out_dir / "preview_mix.mp3"
-    mix_data = sources.sum(dim=0).cpu().numpy()
-    
-    if mix_data.ndim == 2:
-        mix_data = mix_data.T
-        
-    peak = np.max(np.abs(mix_data))
-    if peak > 1.0:
-        mix_data = mix_data / peak
-
-
-# Generate preview mix by summing tensors in memory
-    print("Generating preview mix...")
+    # Generate preview mix by summing tensors in memory
+    click.echo("Generating preview mix...")
     preview_file = out_dir / "preview_mix.mp3"
     mix_data = sources.sum(dim=0).cpu().numpy()
     
@@ -86,7 +74,7 @@ def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu") -> dict
     preview_audio = AudioSegment.from_wav(wav_io)
     preview_audio.export(str(preview_file), format="mp3", bitrate="192k")
     
-    print(f"Preview mix saved to {preview_file}")
+    click.echo(f"Preview mix saved to {preview_file}")
     stems_paths["preview_mix"] = preview_file
 
     return stems_paths

@@ -33,6 +33,17 @@ def main(audio_file, lyrics, artist, title, year, genre, output_dir):
     click.echo(f"Stems generated: {stems}")
     
     click.echo("[2/5] Extracting tempo and quantizing instruments...")
+    from autorb.audio.tempo import extract_tempo_map
+    
+    # Pass the drums.wav path to our new tempo mapper
+    beat_times, dynamic_bpms = extract_tempo_map(stems["drums"])
+    
+    # Echo the first few beats just so we can visually verify the drift in the console
+    click.echo(f"First 5 beat timestamps (seconds): {beat_times[:5]}")
+    click.echo(f"First 5 dynamic tempos (BPM): {[f'{bpm:.2f}' for bpm in dynamic_bpms[:5]]}")
+
+    click.echo("\n[3/5] Aligning vocals and parsing LRC...")
+    # ... rest of your code ...   
     
     click.echo("[3/5] Aligning vocals and parsing LRC...")
     
