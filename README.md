@@ -81,13 +81,25 @@ pip install -r requirements.txt
 Run `autorb` via the command line:
 
 ```bash
-python autorb/cli.py path/to/song.mp3 \
+python -m autorb.cli \
+  path/to/song.mp3 \
   --artist "The Beatles" \
   --title "Hey Jude" \
   --year 1968 \
   --genre "Classic Rock" \
   --lyrics path/to/lyrics.lrc \
   --output-dir ./output
+
+
+python -m autorb.cli \
+  input/eve6-openRoadSong.mp3 \
+  --artist "Eve 6" \
+  --title "Open Road Song" \
+  --year 1998 \
+  --genre "Alternative" \
+  --lyrics input/eve6-openRoadSong.lrc \
+  --output-dir ./output
+
 ```
 
 ### CLI Options

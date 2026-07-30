@@ -1,6 +1,8 @@
 import click
 import os
 from pathlib import Path
+import torch
+from autorb.audio.stems import separate_stems
 
 @click.command()
 @click.argument('audio_file', type=click.Path(exists=True))
@@ -19,8 +21,14 @@ def main(audio_file, lyrics, artist, title, year, genre, output_dir):
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     
-    # Pipeline stages (to be implemented in separate modules)
+    # Determine best device
+    device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+    click.echo(f"Using compute device: {device}")
+    
+    # Pipeline stages
     click.echo("[1/5] Separating stems via Demucs...")
+    stems = separate_stems(audio_file, out_path, device=device)
+    click.echo(f"Stems generated: {stems}")
     
     click.echo("[2/5] Extracting tempo and quantizing instruments...")
     
