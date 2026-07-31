@@ -102,13 +102,48 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         click.echo(f"Error during step 4 synchronization: {e}", err=True)
         return
 
-    click.echo("\n[5/5] Packaging Xbox 360 CON file...")
+    click.echo("\n[5/5] Building assets and packaging Xbox 360 CON file...")
+    from autorb.export.mogg_builder import build_mogg_from_stems
+    from autorb.export.midi_generator import generate_vocal_midi
+    from autorb.export.dta_writer import generate_songs_dta
     from autorb.export.con_packer import package_con  
+    
+    # Generate a filesystem-safe song ID from the title
+    song_id = title.lower().replace(" ", "_").replace("'", "")
+
     try:
-        con_output_path = package_con(out_path, artist=artist, title=title)
+        # 1. Build the .mogg audio container from your separated stem WAVs
+        click.echo("Building MOGG audio container from stems...")
+        mogg_file = build_mogg_from_stems(stems_dir, out_path, song_id)
+
+        # 2. Generate the PART VOCALS .mid chart from synced_track.json
+        click.echo("Generating vocal MIDI chart...")
+        midi_file = generate_vocal_midi(synced_output_json, out_path, song_id)
+
+        # 3. Generate songs.dta configuration metadata
+        click.echo("Generating songs.dta metadata...")
+        metadata = {
+            "title": title,
+            "artist": artist,
+            "year": year,
+            "genre": genre,
+            "song_id_num": abs(hash(song_id)) % 100000000,
+            "album": title
+        }
+        dta_path = generate_songs_dta(song_id, metadata, out_path)
+
+        # 4. Package everything into the Xbox 360 CON/STFS container
+        click.echo("Packaging into CON container...")
+        con_output_path = package_con(
+            output_dir=out_path,
+            song_id=song_id,
+            mogg_path=mogg_file,
+            midi_path=midi_file,
+            dta_path=dta_path
+        )
         click.echo(f"CON file successfully packaged: {con_output_path}")
     except Exception as e:
-        click.echo(f"Error packaging CON file: {e}", err=True)
+        click.echo(f"Error during asset building or CON packaging: {e}", err=True)
         return
 
     click.echo(f"\nPipeline complete! All assets ready in: {out_path}")

@@ -1,4 +1,4 @@
-# AutoRB 🎸
+# AutoRB 🎸 (MP3 -> CON)
 
 **Automated Rock Band 3 CON File Generator using Machine Learning & Signal Processing.**
 
