@@ -20,5 +20,6 @@ torchvision<0.24.0
 soundfile
 pydub
 
+mido
 
 

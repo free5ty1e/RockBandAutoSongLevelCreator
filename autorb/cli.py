@@ -88,11 +88,30 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         first_note = vocal_notes[0]
         click.echo(f"First vocal note: starts at {first_note[0]:.2f}s, MIDI pitch {first_note[2]}")
 
-    click.echo("\n[4/5] Generating MOGG and DTA metadata...")
-    # [Placeholder for next step]
+    click.echo("\n[4/5] Synchronizing beats and lyrics data...")
+    from autorb.audio.step4_sync import run_step_4
+    
+    beats_json = out_path / "tempo_map.json"
+    lyrics_json = out_path / "vocals_cache.json"
+    synced_output_json = out_path / "synced_track.json"
+    
+    try:
+        run_step_4(str(beats_json), str(lyrics_json), str(synced_output_json))
+        click.echo(f"Successfully generated synchronized track data at: {synced_output_json}")
+    except Exception as e:
+        click.echo(f"Error during step 4 synchronization: {e}", err=True)
+        return
 
     click.echo("\n[5/5] Packaging Xbox 360 CON file...")
-    # [Placeholder for next step]
+    from autorb.export.con_packer import package_con  
+    try:
+        con_output_path = package_con(out_path, artist=artist, title=title)
+        click.echo(f"CON file successfully packaged: {con_output_path}")
+    except Exception as e:
+        click.echo(f"Error packaging CON file: {e}", err=True)
+        return
+
+    click.echo(f"\nPipeline complete! All assets ready in: {out_path}")
 
 if __name__ == '__main__':
     main()
