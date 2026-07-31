@@ -33,13 +33,21 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str)
         
         n = len(input_files)
         filter_str = "".join([f"[{i}:a]" for i in range(n)]) + f"amerge=inputs={n}[aout]"
-        cmd.extend(["-filter_complex", filter_str, "-map", "[aout]", "-c:a", "libvorbis", "-q:a", "5", str(mogg_path)])
+        
+        # Explicitly force the 'ogg' format muxer so ffmpeg accepts the .mogg extension
+        cmd.extend([
+            "-filter_complex", filter_str,
+            "-map", "[aout]",
+            "-c:a", "libvorbis",
+            "-q:a", "5",
+            "-f", "ogg",
+            str(mogg_path)
+        ])
         
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if result.returncode != 0:
-            logger.warning(f"FFmpeg multi-channel merge failed: {result.stderr}. Falling back to copying primary stem.")
-            if input_files:
-                shutil.copy2(input_files[0], mogg_path)
+            logger.error(f"FFmpeg multi-channel merge failed: {result.stderr}")
+            raise RuntimeError(f"FFmpeg failed to build MOGG container: {result.stderr}")
     else:
         logger.warning("No stem WAV files found. Generating placeholder MOGG container.")
         mogg_path.write_bytes(b"OggS\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00" + b"\x00" * 200)

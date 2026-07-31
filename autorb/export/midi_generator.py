@@ -109,4 +109,3 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
 
     logger.info(f"Generated complete vocal MIDI chart at {midi_path}")
     return midi_path
-    
