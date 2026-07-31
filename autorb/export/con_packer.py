@@ -14,7 +14,7 @@ def create_stfs_header(display_name: str, total_payload_blocks: int, total_paylo
     Constructs a valid STFS package header structure with correct content sizing,
     file counts, and volume descriptor metadata for Rock Band 3 customs and ForgeTool GUI.
     """
-    header = bytearray(0xA000)
+    header = bytearray(0xC000)
     header[0:4] = b"CON "
     header[4:132] = b"\x00" * 128
     
@@ -29,12 +29,12 @@ def create_stfs_header(display_name: str, total_payload_blocks: int, total_paylo
     # Volume Descriptor (STFS) starting at offset 0x379 (Strict Free60 Spec)
     header[0x379] = 0x24  # Descriptor size
     header[0x37A] = 0x00  # Reserved/Version
-    header[0x37B] = 0x00  # Block separation/Flags
+    header[0x37B] = 0x01  # Block separation/Flags
     
     # File Table Block Count (2 bytes, Little Endian)
     struct.pack_into("<H", header, 0x37C, 1)  
     
-    # File Table Start Block Number (3 bytes, Little Endian) -> Block 0
+    # File Table Start Block Number (3 bytes, Little Endian) -> Block 0 (relative to payload start)
     header[0x37E:0x381] = b'\x00\x00\x00'
     
     # Total Allocated Blocks (4 bytes, Big Endian)
@@ -116,20 +116,18 @@ def package_con(
     # Initialize entire file table block to 0xFF to cleanly terminate unused slots
     file_table_block = bytearray(b'\xff' * BLOCK_SIZE)
 
-    # Exact Index Mapping required by ForgeTool:
-    # Index 0: songs.dta (Root file, parent 0xFFFF)
-    # Index 1: songs (Root directory, parent 0xFFFF)
-    # Index 2: song_id (Subdirectory inside songs, parent 1)
-    # Index 3: songs.dta (File inside song folder, parent 2)
-    # Index 4: {song_id}.mogg (File inside song folder, parent 2)
-    # Index 5: {song_id}.mid (File inside song folder, parent 2)
+    # Exact Index Mapping matching SmellsLikeNirvana_rb3con:
+    # Index 0: songs (Root directory, parent 0xFFFF)
+    # Index 1: song_id (Subdirectory inside songs, parent 0)
+    # Index 2: songs.dta (File inside songs, parent 0)
+    # Index 3: {song_id}.mid (File inside song folder, parent 1)
+    # Index 4: {song_id}.mogg (File inside song folder, parent 1)
     items = [
-        {"name": "songs.dta", "is_dir": False, "parent": 0xFFFF, "content": dta_parent_content},
         {"name": "songs", "is_dir": True, "parent": 0xFFFF, "content": None},
-        {"name": song_id, "is_dir": True, "parent": 1, "content": None},
-        {"name": "songs.dta", "is_dir": False, "parent": 2, "content": dta_sub_content},
-        {"name": f"{song_id}.mogg", "is_dir": False, "parent": 2, "content": mogg_content},
-        {"name": f"{song_id}.mid", "is_dir": False, "parent": 2, "content": midi_content},
+        {"name": song_id, "is_dir": True, "parent": 0, "content": None},
+        {"name": "songs.dta", "is_dir": False, "parent": 0, "content": dta_parent_content},
+        {"name": f"{song_id}.mid", "is_dir": False, "parent": 1, "content": midi_content},
+        {"name": f"{song_id}.mogg", "is_dir": False, "parent": 1, "content": mogg_content},
     ]
 
     current_block = 1
