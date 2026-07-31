@@ -152,6 +152,45 @@ python -m autorb.cli \
   --skip-separation
 ```
 
+## Usage
+
+Run the pipeline using the CLI. You can optionally skip heavy processing steps if you have already generated the intermediate files (stems, tempo maps, or vocal data) during a previous run.
+
+```bash
+python -m autorb.cli \
+  input/your-audio.mp3 \
+  --artist "Eve 6" \
+  --title "Open Road Song" \
+  --year 1998 \
+  --genre "Alternative" \
+  --lyrics input/lyrics.lrc \
+  --output-dir ./output \
+  --skip-separation \
+  --skip-tempo-detection \
+  --skip-vocals
+```
+
+### Command Line Options
+
+audio_file: (Required) Path to the input audio file.
+
+--artist: (Required) The name of the artist.
+
+--title: (Required) The title of the song.
+
+--year: (Required) The year the song was released.
+
+--genre: (Required) The genre of the song.
+
+--lyrics: (Required) Path to the .lrc lyrics file.
+
+--output-dir: The directory to save all output files (default: ./output).
+
+--skip-separation: Skips the AI stem separation. Requires drums.wav, bass.wav, vocals.wav, and other.wav in the [output-dir]/stems folder.
+
+--skip-tempo-detection: Skips librosa beat tracking and loads tempo_map.json from the output directory.
+
+--skip-vocals: Skips WhisperX alignment and basic-pitch extraction, loading vocals_cache.json from the output directory.
 
 ## 🧪 Development & Testing
 

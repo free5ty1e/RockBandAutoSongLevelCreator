@@ -5,11 +5,20 @@ basic-pitch>=0.3.0
 whisperx>=3.1.1
 mido>=1.3.0
 pretty_midi>=0.2.10
-pydub>=0.25.1
 construct>=2.10.69
+
+# As of version 82.0.0 (released in early 2026), the setuptools maintainers finally pulled the plug and completely deleted pkg_resources from the package
+setuptools>=68.0.0,<82.0.0
 
 # Audio Codecs and Processing
 torchcodec
+# Pinned to avoid dependency issues 
+torch<2.9.0
+torchaudio<2.9.0
+torchvision<0.24.0
+
 soundfile
 pydub
-librosa
+
+
+

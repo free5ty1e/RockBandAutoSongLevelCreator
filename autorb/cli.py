@@ -12,8 +12,10 @@ import torch
 @click.option('--genre', required=True, help='Song genre')
 @click.option('--lyrics', type=click.Path(exists=True), required=True, help='Path to LRC file')
 @click.option('--output-dir', default='./output', type=click.Path(), help='Output directory')
-@click.option('--skip-separation', is_flag=True, help='Skip Demucs separation and use existing stems in the output directory')
-def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation):
+@click.option('--skip-separation', is_flag=True, help='Skip Demucs separation and use existing stems')
+@click.option('--skip-tempo-detection', is_flag=True, help='Skip beat tracking and use cached tempo map')
+@click.option('--skip-vocals', is_flag=True, help='Skip vocal alignment and pitch extraction (uses cached data)')
+def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, skip_tempo_detection, skip_vocals):
     click.echo(f"Starting AutoRB Pipeline for: {artist} - {title}")
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -30,11 +32,9 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             "other": stems_dir / "other.wav",
             "vocals": stems_dir / "vocals.wav"
         }
-        
-        # Validate that the user actually provided all 4 required files
         for name, path in stems.items():
             if not path.exists():
-                click.echo(f"Error: --skip-separation used, but missing required stem: {path}", err=True)
+                click.echo(f"Error: missing required stem: {path}", err=True)
                 return
         click.echo("All pre-existing stems found successfully.")
     else:
@@ -44,15 +44,49 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
 
     click.echo(f"Stems ready: {stems}")
 
-    click.echo("\n[2/5] Extracting tempo and quantizing instruments...")
-    from autorb.audio.tempo import extract_tempo_map
-    beat_times, dynamic_bpms = extract_tempo_map(stems["drums"])
-    
+    if skip_tempo_detection:
+        click.echo("\n[2/5] Skipping tempo detection. Loading cached tempo map...")
+        from autorb.audio.tempo import load_tempo_map
+        try:
+            beat_times, dynamic_bpms = load_tempo_map(out_path)
+            click.echo("Successfully loaded tempo map from cache.")
+        except FileNotFoundError as e:
+            click.echo(f"Error: {e}", err=True)
+            return
+    else:
+        click.echo("\n[2/5] Extracting tempo and quantizing instruments...")
+        from autorb.audio.tempo import extract_tempo_map
+        # Notice we are passing out_path here now so it knows where to save the JSON
+        beat_times, dynamic_bpms = extract_tempo_map(stems["drums"], out_path)
+        
     click.echo(f"First 5 beat timestamps (seconds): {beat_times[:5]}")
     click.echo(f"First 5 dynamic tempos (BPM): {[f'{bpm:.2f}' for bpm in dynamic_bpms[:5]]}")
 
-    click.echo("\n[3/5] Aligning vocals and parsing LRC...")
-    # [Placeholder for next step]
+    if skip_vocals:
+        click.echo("\n[3/5] Skipping vocal extraction. Loading cached data...")
+        from autorb.audio.vocals import load_vocals_cache
+        try:
+            lyrics_data, word_segments, vocal_notes = load_vocals_cache(out_path)
+            click.echo("Successfully loaded vocals data from cache.")
+        except FileNotFoundError as e:
+            click.echo(f"Error: {e}", err=True)
+            return
+    else:
+        click.echo("\n[3/5] Aligning vocals and parsing LRC...")
+        from autorb.audio.vocals import process_vocals
+        # Pass out_path so it knows where to save the JSON cache
+        lyrics_data, word_segments, vocal_notes = process_vocals(stems["vocals"], lyrics, out_path)
+    
+    if word_segments:
+        first_word = word_segments[0]
+        w_text = first_word.get('word', '')
+        w_start = first_word.get('start', 0.0)
+        w_end = first_word.get('end', 0.0)
+        click.echo(f"First aligned word: '{w_text}' (Starts: {w_start:.2f}s, Ends: {w_end:.2f}s)")
+    
+    if vocal_notes:
+        first_note = vocal_notes[0]
+        click.echo(f"First vocal note: starts at {first_note[0]:.2f}s, MIDI pitch {first_note[2]}")
 
     click.echo("\n[4/5] Generating MOGG and DTA metadata...")
     # [Placeholder for next step]
@@ -62,4 +96,3 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
 
 if __name__ == '__main__':
     main()
-    
