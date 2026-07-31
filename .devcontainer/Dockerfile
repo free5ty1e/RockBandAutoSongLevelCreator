@@ -5,6 +5,8 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     && apt-get -y install --no-install-recommends \
     ffmpeg \
     libsndfile1 \
+    pkg-config \
+    libopus-dev \
     build-essential \
     git \
     wget \
