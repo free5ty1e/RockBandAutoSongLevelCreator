@@ -29,10 +29,15 @@ def package_con(
 ) -> Path:
     output_path = Path(output_dir)
     song_staging_dir = output_path / "songs" / song_id
+    song_staging_dir.mkdir(parents=True, exist_ok=True)
     
-    # Move/Copy audio and midi into the song staging folder alongside songs.dta
-    shutil.copy2(mogg_path, song_staging_dir / f"{song_id}.mogg")
-    shutil.copy2(midi_path, song_staging_dir / f"{song_id}.mid")
+    target_mogg = song_staging_dir / f"{song_id}.mogg"
+    target_mid = song_staging_dir / f"{song_id}.mid"
+    
+    if mogg_path.resolve() != target_mogg.resolve():
+        shutil.copy2(mogg_path, target_mogg)
+    if midi_path.resolve() != target_mid.resolve():
+        shutil.copy2(midi_path, target_mid)
     
     files_to_pack = [f for f in song_staging_dir.glob("*") if f.is_file()]
     total_payload_size = sum(f.stat().st_size for f in files_to_pack)

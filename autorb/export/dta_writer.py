@@ -15,6 +15,7 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path) -> Path:
    (master TRUE)
    (song_id {metadata.get('song_id_num', 98765432)})
    (song
+      (name "songs/{song_id}/{song_id}")
       (tracks
          ((vocals (0 1))
          )

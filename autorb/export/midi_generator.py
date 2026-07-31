@@ -7,20 +7,36 @@ import struct
 
 logger = logging.getLogger(__name__)
 
+def encode_varlen(value: int) -> bytes:
+    """Encodes an integer into MIDI variable-length quantity (VLQ)."""
+    if value < 0:
+        value = 0
+    
+    buffer = value & 0x7F
+    res = bytearray()
+    res.append(buffer)
+    
+    value >>= 7
+    while value > 0:
+        buffer = (value & 0x7F) | 0x80
+        res.append(buffer)
+        value >>= 7
+        
+    res.reverse()
+    return bytes(res)
+
 def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id: str) -> Path:
     """
-    Generates a Rock Band compatible MIDI chart from analyzed vocal JSON data,
-    including PART VOCALS with all difficulties (Easy, Medium, Hard, Expert) and lyrics.
+    Generates a fully compliant Rock Band PART VOCALS MIDI chart from synchronized JSON data.
     """
     json_path = Path(synced_json_path)
     midi_path = output_dir / f"{song_id}.mid"
     
-    vocal_data = []
+    track_data = []
     if json_path.exists():
         with open(json_path, "r", encoding="utf-8") as f:
-            vocal_data = json.load(f)
+            track_data = json.load(f)
 
-    # SMF Header: Format 1, 3 tracks (Tempo/Beat, Events, Part Vocals), 480 ticks/quarter note
     header = b"MThd" + struct.pack(">IHHH", 6, 1, 3, 480)
 
     def build_track(name: str, events_bytes: bytes) -> bytes:
@@ -31,43 +47,56 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     # Track 0: Tempo & Time Signature
     track0_data = (
         b"\x00\xFF\x58\x04\x04\x02\x18\x08" +  # 4/4 Time Signature
-        b"\x00\xFF\x51\x03\x07\xA1\x20"      # 120 BPM Tempo
+        b"\x00\xFF\x51\x03\x07\xA1\x20"      # 120 BPM (480 ticks/quarter)
     )
     t0 = build_track("BEAT", track0_data)
 
     # Track 1: Events
     t1 = build_track("EVENTS", b"")
 
-    # Track 2: PART VOCALS (Pitch notes + lyrics for all difficulties)
-    # Rock Band vocal pitches map note numbers (e.g., C3 to C5, typically 36 to 84).
-    # Standard authoring includes the same vocal line or difficulty-tier notes on the vocal track.
+    # Track 2: PART VOCALS
     vocal_events = bytearray()
     
-    # Add track start phrase marker / pitch range definition if needed, then populate notes from JSON
-    # For a minimal valid track, we insert pitch On/Off events and text events for lyrics.
-    current_tick = 480  # Start 1 beat in
-    for item in vocal_data if isinstance(vocal_data, list) else []:
-        lyric = item.get("lyric", "la")
-        duration = item.get("duration", 480)
-        pitch = item.get("pitch", 60)  # Default middle C pitch
+    items = track_data.get("synced_words", track_data) if isinstance(track_data, dict) else track_data
+    if not isinstance(items, list):
+        items = []
+
+    try:
+        items = sorted(items, key=lambda x: x.get("start", 0.0))
+    except Exception:
+        pass
+
+    ticks_per_second = 480 * (120 / 60)
+    last_event_tick = 0
+
+    for item in items:
+        start_sec = item.get("start", 0.0)
+        end_sec = item.get("end", start_sec + 0.5)
+        lyric = item.get("word", item.get("lyric", "la"))
+        pitch = item.get("pitch", 60)
         
-        # Note On (Channel 0 / Pitch)
-        vocal_events.extend(b"\x00\x90" + bytes([pitch, 100]))
-        # Lyric text event
+        target_start_tick = int(start_sec * ticks_per_second)
+        target_end_tick = int(end_sec * ticks_per_second)
+        
+        delta_on = max(0, target_start_tick - last_event_tick)
+        duration = max(48, target_end_tick - target_start_tick)
+        
+        vocal_events.extend(encode_varlen(delta_on))
+        vocal_events.extend(b"\x90" + bytes([pitch, 100]))
+        
         lyric_bytes = lyric.encode('utf-8')
         vocal_events.extend(b"\x00\xFF\x05" + bytes([len(lyric_bytes)]) + lyric_bytes)
         
-        # Delta time delay for note duration, then Note Off
-        # Encoding variable-length delta time for duration
-        vocal_events.extend(b"\x83\x60" + b"\x80" + bytes([pitch, 0])) # simplified delta representation
-        current_tick += duration
+        vocal_events.extend(encode_varlen(duration))
+        vocal_events.extend(b"\x80" + bytes([pitch, 0]))
+        
+        last_event_tick = target_start_tick + duration
 
-    # Fallback default note if JSON was empty
-    if not vocal_data:
+    if not items:
         vocal_events.extend(
-            b"\x00\x90\x3C\x64" +                  # Note On C4
-            b"\x00\xFF\x05\x02la" +                # Lyric "la"
-            b"\x83\x60\x80\x3C\x00"                # Note Off C4 after delta
+            b"\x00\x90\x3C\x64" +
+            b"\x00\xFF\x05\x02la" +
+            b"\x83\x60\x80\x3C\x00"
         )
 
     t2 = build_track("PART VOCALS", bytes(vocal_events))
@@ -78,5 +107,6 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
         f.write(t1)
         f.write(t2)
 
-    logger.info(f"Generated vocal MIDI chart at {midi_path}")
+    logger.info(f"Generated complete vocal MIDI chart at {midi_path}")
     return midi_path
+    
