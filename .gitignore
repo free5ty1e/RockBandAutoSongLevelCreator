@@ -1,4 +1,13 @@
-.opencode/
+.opencode/*
+!.opencode/opencode.json
+!.opencode/agent/
+!.opencode/agent/*.md
+!.opencode/agents/
+!.opencode/skill/
+!.opencode/skills/
+!.opencode/command/
+!.opencode/commands/
+.opencode/node_modules/
 input/
 *.pyc
 output/

@@ -192,13 +192,20 @@ audio_file: (Required) Path to the input audio file.
 
 --skip-vocals: Skips WhisperX alignment and basic-pitch extraction, loading vocals_cache.json from the output directory.
 
-## 🧪 Development & Testing
+## 🧪 Development, Testing & CON Validation
 
-Run unit tests locally with `pytest`:
+Run unit tests and STFS validation locally:
 
 ```bash
-pytest tests/
+# Run test suite
+pytest
+
+# Validate generated CON package structure and parent directory pointers
+python3 autorb/export/stfs_validator.py output/open_road_song.con
 ```
+
+### STFS Packaging & Multi-track DTA Generation
+Step 5 automatically generates a fully compliant Xbox 360 STFS CON package with hierarchical directory structures (`songs/{song_id}/`) and maps all 4 Demucs stems (drums `0-1`, bass `2-3`, guitar `4-5`, vocals `6-7`) in `songs.dta`. All packaging and metadata are dynamically generated via pipeline scripts (never manually edited).
 
 ### CI/CD Pipeline
 This repository uses GitHub Actions (`.github/workflows/ci-cd.yml`) to:
