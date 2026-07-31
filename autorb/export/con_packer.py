@@ -7,18 +7,27 @@ import shutil
 
 logger = logging.getLogger(__name__)
 
-RB3_TITLE_ID = 0x4D53085B
+RB3_TITLE_ID = 0x45410914  # Rock Band 3 Title ID
 CONTENT_TYPE_DLC = 0x00010000
+BLOCK_SIZE = 0x1000
 
-def build_stfs_header(content_size: int, title_id: int) -> bytes:
-    header = bytearray(0xA000)
+def create_stfs_header(display_name: str, title_id: int = RB3_TITLE_ID) -> bytearray:
+    """
+    Constructs a valid STFS package header structure for Rock Band 3 customs.
+    """
+    header = bytearray(0x9400)
     header[0:4] = b"CON "
-    struct.pack_into(">I", header, 0x340, 0x244)
-    struct.pack_into(">I", header, 0x344, CONTENT_TYPE_DLC)
-    struct.pack_into(">q", header, 0x34C, content_size)
-    struct.pack_into(">I", header, 0x360, title_id)
-    header[0x364] = 0x02
-    return bytes(header)
+    header[4:132] = b"\x00" * 128
+    struct.pack_into(">I", header, 0x344, 0x00000001)
+    struct.pack_into(">I", header, 0x3EC, CONTENT_TYPE_DLC)
+    struct.pack_into(">I", header, 0x410, title_id)
+    header[0x37C] = 0x24
+    header[0x37D] = 0x01
+    header[0x37E] = 0x00
+    header[0x37F] = 0x02
+    name_encoded = display_name.encode("utf-16-be")[:0x80]
+    header[0x41C:0x41C + len(name_encoded)] = name_encoded
+    return header
 
 def package_con(
     output_dir: str | Path,
@@ -27,10 +36,24 @@ def package_con(
     midi_path: Path,
     dta_path: Path
 ) -> Path:
+    """
+    Stages song assets into the correct folder hierarchy and generates 
+    a direct Xbox 360 STFS CON container compatible with ForgeTool GUI.
+    """
     output_path = Path(output_dir)
-    song_staging_dir = output_path / "songs" / song_id
+    songs_root = output_path / "songs"
+    song_staging_dir = songs_root / song_id
     song_staging_dir.mkdir(parents=True, exist_ok=True)
     
+    # 1. Stage songs.dta in both parent and subfolder for full tool and game compatibility
+    target_dta_parent = songs_root / "songs.dta"
+    target_dta_sub = song_staging_dir / "songs.dta"
+    
+    if dta_path.resolve() != target_dta_parent.resolve():
+        shutil.copy2(dta_path, target_dta_parent)
+    shutil.copy2(target_dta_parent, target_dta_sub)
+
+    # 2. Stage .mogg and .mid inside the song subfolder
     target_mogg = song_staging_dir / f"{song_id}.mogg"
     target_mid = song_staging_dir / f"{song_id}.mid"
     
@@ -38,18 +61,34 @@ def package_con(
         shutil.copy2(mogg_path, target_mogg)
     if midi_path.resolve() != target_mid.resolve():
         shutil.copy2(midi_path, target_mid)
+        
+    logger.info(f"Staged clean song folder structure at: {song_staging_dir}")
+
+    # 3. Generate direct STFS CON file
+    files_to_pack = [f for f in songs_root.rglob("*") if f.is_file()]
+    file_items = []
     
-    files_to_pack = [f for f in song_staging_dir.glob("*") if f.is_file()]
-    total_payload_size = sum(f.stat().st_size for f in files_to_pack)
-    
+    for file_path in files_to_pack:
+        content = file_path.read_bytes()
+        file_items.append({
+            "size": len(content),
+            "content": content
+        })
+
     con_file_path = output_path / f"{song_id}.con"
-    stfs_header = build_stfs_header(total_payload_size, RB3_TITLE_ID)
-    
+    header = create_stfs_header(song_id)
+
     with open(con_file_path, "wb") as con_file:
-        con_file.write(stfs_header)
-        for file_path in files_to_pack:
-            with open(file_path, "rb") as f:
-                shutil.copyfileobj(f, con_file)
+        con_file.write(header)
+        current_offset = con_file.tell()
+        padding_needed = (BLOCK_SIZE - (current_offset % BLOCK_SIZE)) % BLOCK_SIZE
+        con_file.write(b"\x00" * padding_needed)
+
+        for item in file_items:
+            con_file.write(item["content"])
+            remainder = item["size"] % BLOCK_SIZE
+            if remainder != 0:
+                con_file.write(b"\x00" * (BLOCK_SIZE - remainder))
                 
-    logger.info(f"CON file successfully packaged: {con_file_path}")
+    logger.info(f"Direct CON file successfully packaged: {con_file_path}")
     return con_file_path
