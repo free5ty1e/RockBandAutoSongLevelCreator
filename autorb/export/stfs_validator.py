@@ -1,0 +1,114 @@
+#!/usr/bin/env python
+
+from pathlib import Path
+import struct
+
+BLOCK_SIZE = 0x1000
+
+def validate_con(con_path: str | Path) -> dict:
+    """
+    Parses an Xbox 360 STFS CON file and validates its file table structure,
+    parent directory references, and file integrity to catch errors like
+    'File references non-existent directory' before testing in ForgeTool GUI.
+    """
+    path = Path(con_path)
+    if not path.exists():
+        raise FileNotFoundError(f"CON file not found: {path}")
+
+    data = path.read_bytes()
+    if len(data) < 0xA000:
+        raise ValueError("Invalid CON file: File too small for STFS header")
+
+    magic = data[0:4]
+    if magic != b"CON ":
+        raise ValueError(f"Invalid CON magic bytes: {magic!r} (expected b'CON ')")
+
+    # File table is in Block 0 (starts at offset 0xA000)
+    file_table_offset = 0xA000
+    file_table = data[file_table_offset:file_table_offset + BLOCK_SIZE]
+
+    entries = []
+    for i in range(64):
+        entry_offset = i * 0x40
+        entry_bytes = file_table[entry_offset:entry_offset + 0x40]
+        
+        # Check if entry is empty/unallocated
+        if all(b == 0xFF for b in entry_bytes) or all(b == 0x00 for b in entry_bytes):
+            if not entries: # If very first entry is empty
+                break
+            # Check if all remaining entries are empty
+            if all(all(b in (0x00, 0xFF) for b in file_table[j*0x40:(j+1)*0x40]) for j in range(i, 64)):
+                break
+
+        name_len = entry_bytes[0x28] & 0x3F
+        name = entry_bytes[0:name_len].decode('ascii', errors='ignore')
+        is_dir = bool(entry_bytes[0x28] & 0x80)
+        allocated_blocks = int.from_bytes(entry_bytes[0x29:0x2C], 'little')
+        real_blocks = int.from_bytes(entry_bytes[0x2C:0x2F], 'little')
+        start_block = int.from_bytes(entry_bytes[0x2F:0x32], 'little')
+        parent_index = int.from_bytes(entry_bytes[0x32:0x34], 'big')
+        file_size = int.from_bytes(entry_bytes[0x34:0x38], 'big')
+
+        entries.append({
+            "index": i,
+            "name": name,
+            "is_dir": is_dir,
+            "allocated_blocks": allocated_blocks,
+            "real_blocks": real_blocks,
+            "start_block": start_block,
+            "parent_index": parent_index,
+            "file_size": file_size
+        })
+
+    # Validate parent references
+    errors = []
+    for entry in entries:
+        p_idx = entry["parent_index"]
+        if p_idx != 0xFFFF:
+            if p_idx < 0 or p_idx >= len(entries):
+                errors.append(f"Entry {entry['index']} ({entry['name']}) references out-of-bounds parent index {p_idx}")
+            else:
+                parent_entry = entries[p_idx]
+                if not parent_entry["is_dir"]:
+                    errors.append(f"Entry {entry['index']} ({entry['name']}) references parent index {p_idx} ({parent_entry['name']}) which is a file, not a directory.")
+
+    # Build virtual paths
+    def get_path(entry):
+        parts = [entry["name"]]
+        curr = entry
+        while curr["parent_index"] != 0xFFFF:
+            if curr["parent_index"] >= len(entries):
+                break
+            curr = entries[curr["parent_index"]]
+            parts.insert(0, curr["name"])
+        return "/" + "/".join(parts)
+
+    virtual_paths = [get_path(e) for e in entries]
+
+    return {
+        "valid": len(errors) == 0,
+        "errors": errors,
+        "entry_count": len(entries),
+        "entries": entries,
+        "virtual_paths": virtual_paths
+    }
+
+if __name__ == "__main__":
+    import sys
+    con_file = sys.argv[1] if len(sys.argv) > 1 else "output/open_road_song.con"
+    print(f"Validating CON file: {con_file}")
+    try:
+        result = validate_con(con_file)
+        print(f"Entry count: {result['entry_count']}")
+        for i, (entry, vpath) in enumerate(zip(result["entries"], result["virtual_paths"])):
+            print(f"  [{entry['index']}] {vpath} (is_dir={entry['is_dir']}, parent={entry['parent_index']}, size={entry['file_size']})")
+        if result["valid"]:
+            print("CON file structure is VALID!")
+        else:
+            print("CON file structure has ERRORS:")
+            for err in result["errors"]:
+                print(f"  - {err}")
+            sys.exit(1)
+    except Exception as e:
+        print(f"Validation failed with exception: {e}")
+        sys.exit(1)

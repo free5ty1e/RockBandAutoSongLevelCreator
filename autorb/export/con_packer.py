@@ -83,8 +83,8 @@ def package_con(
     dta_path: Path
 ) -> Path:
     """
-    Stages song assets and generates a flattened Xbox 360 STFS CON container 
-    compatible with ForgeTool GUI.
+    Stages song assets and generates an Xbox 360 STFS CON container 
+    with the correct root structure and table padding for ForgeTool GUI.
     """
     output_path = Path(output_dir)
     songs_root = output_path / "songs"
@@ -113,60 +113,66 @@ def package_con(
     mogg_content = target_mogg.read_bytes()
     midi_content = target_mid.read_bytes()
 
-    # Flattened table layout:
-    # Index 0: Song folder directory (parent: 0xFFFF root)
-    # Index 1: songs.dta at root (parent: 0xFFFF root)
-    # Index 2: songs.dta inside song folder (parent: 0)
-    # Index 3: .mogg inside song folder (parent: 0)
-    # Index 4: .mid inside song folder (parent: 0)
+    # Initialize entire file table block to 0xFF to cleanly terminate unused slots
+    file_table_block = bytearray(b'\xff' * BLOCK_SIZE)
+
+    # Exact Index Mapping required by ForgeTool:
+    # Index 0: songs.dta (Root file, parent 0xFFFF)
+    # Index 1: songs (Root directory, parent 0xFFFF)
+    # Index 2: song_id (Subdirectory inside songs, parent 1)
+    # Index 3: songs.dta (File inside song folder, parent 2)
+    # Index 4: {song_id}.mogg (File inside song folder, parent 2)
+    # Index 5: {song_id}.mid (File inside song folder, parent 2)
     items = [
-        {"name": "songs.dta", "parent": 0xFFFF, "content": dta_parent_content},
-        {"name": "songs.dta", "parent": 0, "content": dta_sub_content},
-        {"name": f"{song_id}.mogg", "parent": 0, "content": mogg_content},
-        {"name": f"{song_id}.mid", "parent": 0, "content": midi_content},
+        {"name": "songs.dta", "is_dir": False, "parent": 0xFFFF, "content": dta_parent_content},
+        {"name": "songs", "is_dir": True, "parent": 0xFFFF, "content": None},
+        {"name": song_id, "is_dir": True, "parent": 1, "content": None},
+        {"name": "songs.dta", "is_dir": False, "parent": 2, "content": dta_sub_content},
+        {"name": f"{song_id}.mogg", "is_dir": False, "parent": 2, "content": mogg_content},
+        {"name": f"{song_id}.mid", "is_dir": False, "parent": 2, "content": midi_content},
     ]
 
     current_block = 1
-    file_table_block = bytearray(BLOCK_SIZE)
-    
-    # Pre-fill all 64 potential file table entries with 0xFFFF (Root) for parent index safety
-    for i in range(64):
-        file_table_block[i * 0x40 + 0x32 : i * 0x40 + 0x34] = b'\xff\xff'
-    
-    # Index 0: Song Subfolder Directory (Parent is 0xFFFF Root)
-    file_table_block[0x00:0x40] = create_file_entry(song_id, 0, 0, 0, parent_index=0xFFFF, file_size=0, is_dir=True)
-
     packed_files = []
+    
     for idx, item in enumerate(items):
-        content = item["content"]
-        file_size = len(content)
-        block_count = (file_size + BLOCK_SIZE - 1) // BLOCK_SIZE
-        
-        # Files start at index 1 (offset 0x40)
-        entry_offset = (1 + idx) * 0x40
-        file_table_block[entry_offset:entry_offset + 0x40] = create_file_entry(
-            name=item["name"],
-            allocated_blocks=block_count,
-            real_blocks=block_count,
-            start_block=current_block,
-            parent_index=item["parent"],
-            file_size=file_size,
-            is_dir=False
-        )
-        
-        packed_files.append({
-            "content": content,
-            "size": file_size,
-            "blocks": block_count
-        })
-        current_block += block_count
+        entry_offset = idx * 0x40
+        if item["is_dir"]:
+            file_table_block[entry_offset:entry_offset + 0x40] = create_file_entry(
+                name=item["name"],
+                allocated_blocks=0,
+                real_blocks=0,
+                start_block=0,
+                parent_index=item["parent"],
+                file_size=0,
+                is_dir=True
+            )
+        else:
+            content = item["content"]
+            file_size = len(content)
+            block_count = (file_size + BLOCK_SIZE - 1) // BLOCK_SIZE
+            
+            file_table_block[entry_offset:entry_offset + 0x40] = create_file_entry(
+                name=item["name"],
+                allocated_blocks=block_count,
+                real_blocks=block_count,
+                start_block=current_block,
+                parent_index=item["parent"],
+                file_size=file_size,
+                is_dir=False
+            )
+            packed_files.append({
+                "content": content,
+                "size": file_size,
+                "blocks": block_count
+            })
+            current_block += block_count
 
     total_payload_blocks = current_block
     total_payload_size = total_payload_blocks * BLOCK_SIZE
 
     con_file_path = output_path / f"{song_id}.con"
-    # Entry count is len(items) + 1 directory entry
-    header = create_stfs_header(song_id, total_payload_blocks, total_payload_size, len(items) + 1)
+    header = create_stfs_header(song_id, total_payload_blocks, total_payload_size, len(items))
 
     with open(con_file_path, "wb") as con_file:
         con_file.write(header)
@@ -185,5 +191,5 @@ def package_con(
             if remainder != 0:
                 con_file.write(b"\x00" * (BLOCK_SIZE - remainder))
                 
-    click.echo(f"Direct CON file successfully packaged with flattened STFS file table: {con_file_path}")
+    click.echo(f"Direct CON file successfully packaged with correct ForgeTool layout: {con_file_path}")
     return con_file_path

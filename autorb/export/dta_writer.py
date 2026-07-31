@@ -9,6 +9,9 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path) -> Path:
     """
     Generates the Rock Band songs.dta metadata configuration file.
     """
+    genre = metadata.get('genre', 'rock').lower().replace(' ', '')
+    year = metadata.get('year', 2026)
+    
     dta_content = f"""({song_id}
    (name "{metadata.get('title', 'Custom Vocals Song')}")
    (artist "{metadata.get('artist', 'Unknown Artist')}")
@@ -17,22 +20,28 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path) -> Path:
    (song
       (name "songs/{song_id}/{song_id}")
       (tracks
-         ((vocals (0 1))
+         ((drum (0 1))
+          (bass (2 3))
+          (guitar (4 5))
+          (vocals (6 7))
          )
       )
-      (pans (-1.0 1.0))
-      (vols (0.0 0.0))
-      (cores (-1 -1))
+      (pans (-1.0 1.0 -1.0 1.0 -1.0 1.0 -1.0 1.0))
+      (vols (0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0))
+      (cores (-1 -1 -1 -1 -1 -1 -1 -1))
       (midi_file "songs/{song_id}/{song_id}.mid")
    )
    (bank sfx/tambourine_bank.milo)
    (anim_tempo 16)
    (preview 30000 60000)
-   (genre pop)
-   (year 2026)
-   (album_name "{metadata.get('album', 'Custom Vocals Album')}")
+   (genre {genre})
+   (year {year})
+   (album_name "{metadata.get('album', metadata.get('title', 'Custom Vocals Album'))}")
    (album_track_number 1)
    (rank
+      (drum 150)
+      (bass 150)
+      (guitar 150)
       (vocals 150)
    )
 )
