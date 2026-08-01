@@ -173,35 +173,53 @@ def package_con(
     
     template_path = output_path / "SmellsLikeNirvana_rb3con"
     if template_path.exists():
-        # Clone signed template CON file to inherit valid cryptographic signatures and certificates
+        # Clone signed template CON file and patch in-place to preserve all 8 entries, milo, art, and signatures
         shutil.copy2(template_path, con_file_path)
         with open(con_file_path, "rb+") as con_file:
             con_data = bytearray(con_file.read())
             
-            # Update header metadata
-            struct.pack_into(">q", con_data, 0x34C, total_payload_size)
-            struct.pack_into(">I", con_data, 0x395, total_payload_blocks)
-            struct.pack_into(">I", con_data, 0x39D, len(items))
-            struct.pack_into(">q", con_data, 0x3A1, total_payload_size)
+            # Update header display name
             name_encoded = song_id.encode("utf-16-be")[:0x80]
             con_data[0x41C:0x41C + len(name_encoded)] = name_encoded
             
-            # Write File Table block at 0xC000
-            con_data[0xC000:0xC000 + BLOCK_SIZE] = file_table_block
+            # File table is at 0xC000
+            ft = con_data[0xC000:0xC000 + BLOCK_SIZE]
             
-            # Write payload files starting at 0xD000 (Block 12 + 1)
-            current_offset = 0xD000
+            # Entry 1: Rename song folder name at offset 0xC040 to song_id (ascii)
+            name_bytes = song_id.encode('ascii', errors='ignore')[:0x28]
+            ft[1*0x40 : 1*0x40 + len(name_bytes)] = name_bytes
+            ft[1*0x40 + 0x28] = (len(name_bytes) & 0x3F) | 0x80 # dir flag
+            
+            def write_file_at_entry(entry_idx, content):
+                entry_offset = entry_idx * 0x40
+                start_block = int.from_bytes(ft[entry_offset + 0x2F : entry_offset + 0x32], 'little')
+                file_size = len(content)
+                block_count = (file_size + BLOCK_SIZE - 1) // BLOCK_SIZE
+                
+                ft[entry_offset + 0x29 : entry_offset + 0x2C] = block_count.to_bytes(3, 'little')
+                ft[entry_offset + 0x2C : entry_offset + 0x2F] = block_count.to_bytes(3, 'little')
+                ft[entry_offset + 0x34 : entry_offset + 0x38] = file_size.to_bytes(4, 'big')
+                
+                payload_off = 0xC000 + start_block * BLOCK_SIZE
+                padded_size = block_count * BLOCK_SIZE
+                padded_content = content + b"\x00" * (padded_size - file_size)
+                
+                # Ensure con_data is large enough
+                if payload_off + len(padded_content) > len(con_data):
+                    con_data.extend(b"\x00" * (payload_off + len(padded_content) - len(con_data)))
+                con_data[payload_off : payload_off + len(padded_content)] = padded_content
+
+            write_file_at_entry(3, dta_parent_content) # songs.dta
+            write_file_at_entry(4, midi_content)       # .mid
+            write_file_at_entry(5, mogg_content)       # .mogg
+            
+            con_data[0xC000:0xC000 + BLOCK_SIZE] = ft
             con_file.seek(0)
-            con_file.write(con_data[:current_offset])
+            con_file.write(con_data)
             
-            for item in packed_files:
-                con_file.write(item["content"])
-                remainder = item["size"] % BLOCK_SIZE
-                if remainder != 0:
-                    con_file.write(b"\x00" * (BLOCK_SIZE - remainder))
         import os
         os.utime(con_file_path, None)
-        click.echo(f"Signed template-patched CON file successfully packaged: {con_file_path}")
+        click.echo(f"In-place signed template-patched CON file successfully packaged: {con_file_path}")
         return con_file_path
     else:
         header = create_stfs_header(song_id, total_payload_blocks, total_payload_size, len(items))

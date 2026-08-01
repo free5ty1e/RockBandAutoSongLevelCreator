@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0023] - 2026-07-31
+- Implemented true in-place template payload patching in `con_packer.py` (`SmellsLikeNirvana_rb3con`), preserving all 8 file table entries (including album art and milo scenes), block offsets, and digital signatures without truncating or mismatching entry order.
+
 ## [0.0022] - 2026-07-31
 - Wrapped the song definition block in an outer S-expression list `( ( song_id ... ) )` in `songs.dta` (`dta_writer.py`), satisfying the root `DataArray` structure expected by ForgeTool GUI's DTA parser.
 
