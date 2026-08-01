@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0043] - 2026-07-31
+- Re-enabled signed template CON cloning in `con_packer.py` combined with the 4-stem aligned `songs.dta` (`dta_writer.py`), satisfying both STFS cryptographic container validation and DTA S-expression parsing rules in ForgeTool GUI.
+
 ## [0.0042] - 2026-07-31
 - Updated `songs.dta` generator (`dta_writer.py`) track count to match the 4-stem multitrack layout (`tracks_count (2 2 2 2)` with 8-channel pans/vols/cores), preventing parser token mismatches.
 
