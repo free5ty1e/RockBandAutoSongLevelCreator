@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0041] - 2026-07-31
+- Reverted to pure standalone programmatic CON packaging (`con_packer.py`) combined with the exact single-quoted C3/Magma `songs.dta` format (`dta_writer.py`), eliminating external template dependencies while satisfying ForgeTool GUI's DTA array parsing rules.
+
 ## [0.0040] - 2026-07-31
 - Updated `songs.dta` generator (`dta_writer.py`) to correctly quote `('drum_bank' "sfx/kit01_bank.milo")`, eliminating unquoted path tokens that caused `Whitespace encountered in symbol` parsing errors in ForgeTool GUI while utilizing signed template CON cloning (`con_packer.py`).
 

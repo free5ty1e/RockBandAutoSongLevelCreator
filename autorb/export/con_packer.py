@@ -1,26 +1,59 @@
 #!/usr/bin/env python
 
 from pathlib import Path
+import struct
 import shutil
 import click
 import os
 
+RB3_TITLE_ID = 0x45410914  # Rock Band 3 Title ID
+CONTENT_TYPE_DLC = 0x00010000
 BLOCK_SIZE = 0x1000
 
-def set_entry_name(con_data: bytearray, ft_offset: int, entry_idx: int, new_name: str):
-    entry_addr = ft_offset + entry_idx * 0x40
-    entry_bytes = con_data[entry_addr : entry_addr + 0x40]
+def create_stfs_header(display_name: str, total_payload_blocks: int, total_payload_size: int, entry_count: int, title_id: int = RB3_TITLE_ID) -> bytearray:
+    header = bytearray(0xC000)
+    header[0:4] = b"CON "
+    header[4:132] = b"\x00" * 128
     
-    flags = entry_bytes[0x28]
-    is_dir = bool(flags & 0x80)
+    struct.pack_into(">q", header, 0x34C, total_payload_size)
+    struct.pack_into(">I", header, 0x344, CONTENT_TYPE_DLC)
+    struct.pack_into(">I", header, 0x3EC, CONTENT_TYPE_DLC)
+    struct.pack_into(">I", header, 0x360, title_id)
+    struct.pack_into(">I", header, 0x410, title_id)
     
-    name_bytes = new_name.encode('ascii', errors='ignore')[:0x28]
-    con_data[entry_addr : entry_addr + 0x28] = b'\x00' * 0x28
-    con_data[entry_addr : entry_addr + len(name_bytes)] = name_bytes
+    header[0x379] = 0x24  # Descriptor size
+    header[0x37A] = 0x00  # Reserved/Version
+    header[0x37B] = 0x01  # Block separation/Flags
+    
+    struct.pack_into("<H", header, 0x37C, 1)  # File Table Block Count
+    header[0x37E:0x381] = b'\x00\x00\x00'   # File Table Start Block Number
+    
+    struct.pack_into(">I", header, 0x395, total_payload_blocks)
+    struct.pack_into(">I", header, 0x399, 0)
+    struct.pack_into(">I", header, 0x39D, entry_count)
+    struct.pack_into(">q", header, 0x3A1, total_payload_size)
+    
+    name_encoded = display_name.encode("utf-16-be")[:0x80]
+    header[0x41C:0x41C + len(name_encoded)] = name_encoded
+    return header
+
+def create_file_entry(name: str, allocated_blocks: int, real_blocks: int, start_block: int, parent_index: int = 0xFFFF, file_size: int = 0, is_dir: bool = False) -> bytearray:
+    entry = bytearray(0x40)
+    name_bytes = name.encode('ascii', errors='ignore')[:0x28]
+    entry[0:len(name_bytes)] = name_bytes
     
     name_len = len(name_bytes) & 0x3F
-    new_flags = name_len | (0x80 if is_dir else 0x40)
-    con_data[entry_addr + 0x28] = new_flags
+    flags = name_len | (0x80 if is_dir else 0x40)
+    entry[0x28] = flags
+    
+    entry[0x29:0x2C] = allocated_blocks.to_bytes(3, 'little', signed=False)
+    entry[0x2C:0x2F] = real_blocks.to_bytes(3, 'little', signed=False)
+    entry[0x2F:0x32] = start_block.to_bytes(3, 'little', signed=False)
+    entry[0x32:0x34] = parent_index.to_bytes(2, 'big', signed=False)
+    entry[0x34:0x38] = file_size.to_bytes(4, 'big', signed=False)
+    entry[0x38:0x3C] = (0x50212000).to_bytes(4, 'big', signed=False)
+    
+    return entry
 
 def package_con(
     output_dir: str | Path,
@@ -51,57 +84,94 @@ def package_con(
         
     click.echo(f"Staged clean song folder structure at: {song_staging_dir}")
 
-    # Use SmellsLikeNirvana_rb3con as a known-good signed template CON
-    template_con = Path("output/known_good_cons/SmellsLikeNirvana_rb3con")
-    con_file_path = output_path / f"{song_id}.con"
-    
-    if template_con.exists():
-        shutil.copy2(template_con, con_file_path)
-        click.echo(f"Cloned signed template CON from {template_con}")
-    else:
-        raise FileNotFoundError(f"Template CON not found at {template_con}")
-
-    con_data = bytearray(con_file_path.read_bytes())
-
-    dta_content = target_dta_parent.read_bytes()
-    midi_content = target_mid.read_bytes()
+    dta_parent_content = target_dta_parent.read_bytes()
     mogg_content = target_mogg.read_bytes()
+    midi_content = target_mid.read_bytes()
+    dummy_milo = b"XBOX_MILO_SCENE_PLACEHOLDER_CONTENT" * 5
+    dummy_png = b"XBOX_PNG_ALBUM_ART_PLACEHOLDER_CONTENT" * 5
 
-    ft_offset = 0xC000
+    file_table_block = bytearray(b'\xff' * BLOCK_SIZE)
 
-    # Update file table entry names to match active song_id
-    set_entry_name(con_data, ft_offset, 1, song_id)
-    set_entry_name(con_data, ft_offset, 4, f"{song_id}.mid")
-    set_entry_name(con_data, ft_offset, 5, f"{song_id}.mogg")
-    set_entry_name(con_data, ft_offset, 6, f"{song_id}.milo_xbox")
-    set_entry_name(con_data, ft_offset, 7, f"{song_id}_keep.png_xbox")
+    # Exact 8-entry layout matching SmellsLikeNirvana_rb3con structure:
+    # Index 0: songs (dir, parent 0xFFFF)
+    # Index 1: song_id (dir, parent 0)
+    # Index 2: gen (dir, parent 1)
+    # Index 3: songs.dta (file, parent 0)
+    # Index 4: {song_id}.mid (file, parent 1)
+    # Index 5: {song_id}.mogg (file, parent 1)
+    # Index 6: {song_id}.milo_xbox (file, parent 2)
+    # Index 7: {song_id}_keep.png_xbox (file, parent 2)
+    items = [
+        {"name": "songs", "is_dir": True, "parent": 0xFFFF, "content": None},
+        {"name": song_id, "is_dir": True, "parent": 0, "content": None},
+        {"name": "gen", "is_dir": True, "parent": 1, "content": None},
+        {"name": "songs.dta", "is_dir": False, "parent": 0, "content": dta_parent_content},
+        {"name": f"{song_id}.mid", "is_dir": False, "parent": 1, "content": midi_content},
+        {"name": f"{song_id}.mogg", "is_dir": False, "parent": 1, "content": mogg_content},
+        {"name": f"{song_id}.milo_xbox", "is_dir": False, "parent": 2, "content": dummy_milo},
+        {"name": f"{song_id}_keep.png_xbox", "is_dir": False, "parent": 2, "content": dummy_png},
+    ]
 
-    # Helper to update file table entry and write payload
-    def update_entry(entry_idx: int, new_content: bytes):
-        entry_addr = ft_offset + entry_idx * 0x40
-        entry_bytes = con_data[entry_addr : entry_addr + 0x40]
+    current_block = 0
+    packed_files = []
+    
+    for idx, item in enumerate(items):
+        entry_offset = idx * 0x40
+        if item["is_dir"]:
+            file_table_block[entry_offset:entry_offset + 0x40] = create_file_entry(
+                name=item["name"],
+                allocated_blocks=0,
+                real_blocks=0,
+                start_block=0,
+                parent_index=item["parent"],
+                file_size=0,
+                is_dir=True
+            )
+        else:
+            content = item["content"]
+            file_size = len(content)
+            block_count = (file_size + BLOCK_SIZE - 1) // BLOCK_SIZE
+            
+            file_table_block[entry_offset:entry_offset + 0x40] = create_file_entry(
+                name=item["name"],
+                allocated_blocks=block_count,
+                real_blocks=block_count,
+                start_block=current_block,
+                parent_index=item["parent"],
+                file_size=file_size,
+                is_dir=False
+            )
+            packed_files.append({
+                "content": content,
+                "size": file_size,
+                "blocks": block_count
+            })
+            current_block += block_count
+
+    total_payload_blocks = current_block
+    total_payload_size = total_payload_blocks * BLOCK_SIZE
+
+    con_file_path = output_path / f"{song_id}.con"
+    header = create_stfs_header(song_id, total_payload_blocks, total_payload_size, len(items))
+
+    with open(con_file_path, "wb") as con_file:
+        con_file.write(header)
         
-        start_block = int.from_bytes(entry_bytes[0x2F:0x32], 'little')
-        size = len(new_content)
-        block_count = (size + BLOCK_SIZE - 1) // BLOCK_SIZE
+        current_offset = con_file.tell()
+        padding_needed = (BLOCK_SIZE - (current_offset % BLOCK_SIZE)) % BLOCK_SIZE
+        con_file.write(b"\x00" * padding_needed)
 
-        con_data[entry_addr + 0x34 : entry_addr + 0x38] = size.to_bytes(4, 'big')
-        con_data[entry_addr + 0x29 : entry_addr + 0x2C] = block_count.to_bytes(3, 'little')
-        con_data[entry_addr + 0x2C : entry_addr + 0x2F] = block_count.to_bytes(3, 'little')
+        # Write File Table block (Block 12 at 0xC000)
+        con_file.write(b"\x00" * (0xC000 - con_file.tell()))
+        con_file.write(file_table_block)
 
-        payload_offset = 0xD000 + start_block * BLOCK_SIZE
-        padding_space = block_count * BLOCK_SIZE
-        con_data[payload_offset : payload_offset + padding_space] = b'\x00' * padding_space
-        con_data[payload_offset : payload_offset + size] = new_content
-
-    # Update entry 3 (songs.dta)
-    update_entry(3, dta_content)
-    # Update entry 4 (mid)
-    update_entry(4, midi_content)
-    # Update entry 5 (mogg)
-    update_entry(5, mogg_content)
-
-    con_file_path.write_bytes(con_data)
+        # Write Payload Files starting at 0xD000
+        for item in packed_files:
+            con_file.write(item["content"])
+            remainder = item["size"] % BLOCK_SIZE
+            if remainder != 0:
+                con_file.write(b"\x00" * (BLOCK_SIZE - remainder))
+                
     os.utime(con_file_path, None)
-    click.echo(f"Successfully patched signed template CON: {con_file_path}")
+    click.echo(f"Standalone programmatic CON file successfully packaged: {con_file_path}")
     return con_file_path
