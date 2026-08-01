@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0026] - 2026-07-31
+- Reverted to clean programmatic 12-block STFS CON generation (`con_packer.py`) with payload offset tracking (`0xD000`), passing all local `forge_simulator.py` and `stfs_validator.py` checks.
+
 ## [0.0025] - 2026-07-31
 - Updated in-place template patcher (`con_packer.py`) to correctly align file table entries 4 and 5 with active song filenames (`open_road_song.mid` and `open_road_song.mogg`), resolving internal stream resolution NullReferenceExceptions in ForgeTool GUI.
 
