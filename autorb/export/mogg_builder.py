@@ -7,17 +7,19 @@ import shutil
 
 logger = logging.getLogger(__name__)
 
-def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str) -> Path:
+def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str, skip_mogg: bool = False) -> Path:
     """
     Combines stem WAV files into a multi-channel MOGG audio container using ffmpeg.
     """
     stems_path = Path(stems_dir)
     mogg_path = output_dir / f"{song_id}.mogg"
     
-    # If a template/valid MOGG already exists for this song, reuse it
-    if mogg_path.exists() and mogg_path.stat().st_size > 100000:
-        logger.info(f"Reusing existing valid MOGG container at {mogg_path}")
-        return mogg_path
+    if skip_mogg:
+        if mogg_path.exists():
+            logger.info(f"Skipping MOGG creation. Using existing MOGG at {mogg_path}")
+            return mogg_path
+        else:
+            raise FileNotFoundError(f"Requested to skip MOGG building, but existing MOGG not found at {mogg_path}")
     
     stem_names = ["drums", "bass", "other", "vocals"]
     input_files = []

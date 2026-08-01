@@ -15,7 +15,8 @@ import torch
 @click.option('--skip-separation', is_flag=True, help='Skip Demucs separation and use existing stems')
 @click.option('--skip-tempo-detection', is_flag=True, help='Skip beat tracking and use cached tempo map')
 @click.option('--skip-vocals', is_flag=True, help='Skip vocal alignment and pitch extraction (uses cached data)')
-def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, skip_tempo_detection, skip_vocals):
+@click.option('--skip-mogg', is_flag=True, help='Skip MOGG building and use existing .mogg file')
+def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, skip_tempo_detection, skip_vocals, skip_mogg):
     click.echo(f"Starting AutoRB Pipeline for: {artist} - {title}")
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -114,7 +115,7 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
     try:
         # 1. Build the .mogg audio container from your separated stem WAVs
         click.echo("Building MOGG audio container from stems...")
-        mogg_file = build_mogg_from_stems(stems_dir, out_path, song_id)
+        mogg_file = build_mogg_from_stems(stems_dir, out_path, song_id, skip_mogg=skip_mogg)
 
         # 2. Generate the PART VOCALS .mid chart from synced_track.json
         click.echo("Generating vocal MIDI chart...")

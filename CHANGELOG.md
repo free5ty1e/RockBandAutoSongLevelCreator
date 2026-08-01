@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0015] - 2026-07-31
+- Added `--skip-mogg` CLI flag to allow skipping MOGG audio container building and using pre-existing MOGG files.
+
 ## [0.0014] - 2026-07-31
 - Updated MOGG builder (`mogg_builder.py`) to reuse valid C3-encrypted MOGG containers when available, resolving ForgeTool GUI audio container loading exceptions.
 
