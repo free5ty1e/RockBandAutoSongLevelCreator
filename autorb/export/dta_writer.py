@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path) -> Path:
     """
-    Generates the Rock Band songs.dta metadata configuration file in standard C3/Magma wrapped format.
+    Generates the Rock Band songs.dta metadata configuration file in standard single-wrapped format.
     """
     genre = metadata.get('genre', 'rock').lower().replace(' ', '')
     year = metadata.get('year', 1998)
@@ -16,41 +16,38 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path) -> Path:
     artist = metadata.get('artist', 'Eve 6')
     album = metadata.get('album', title)
 
-    dta_content = f"""(
-   (
-      ({song_id})
-      (name "{title}")
-      (artist "{artist}")
-      (master TRUE)
-      (song_id {song_id_num})
-      (song
-         (name "songs/{song_id}/{song_id}")
-         (tracks
-            ((drum (0 1))
-             (bass (2 3))
-             (guitar (4 5))
-             (vocals (6 7))
-            )
+    dta_content = f"""({song_id}
+   (name "{title}")
+   (artist "{artist}")
+   (master TRUE)
+   (song_id {song_id_num})
+   (song
+      (name "songs/{song_id}/{song_id}")
+      (tracks
+         ((drum (0 1))
+          (bass (2 3))
+          (guitar (4 5))
+          (vocals (6 7))
          )
-         (pans (-1.0 1.0 -1.0 1.0 -1.0 1.0 -1.0 1.0))
-         (vols (0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0))
-         (cores (-1 -1 -1 -1 -1 -1 -1 -1))
-         (midi_file "songs/{song_id}/{song_id}.mid")
       )
-      (bank sfx/tambourine_bank.milo)
-      (anim_tempo 16)
-      (preview 30000 60000)
-      (genre {genre})
-      (year {year})
-      (album_name "{album}")
-      (album_track_number 1)
-      (rank
-         (drum 150)
-         (bass 150)
-         (guitar 150)
-         (vocals 150)
-         (band 150)
-      )
+      (pans (-1.0 1.0 -1.0 1.0 -1.0 1.0 -1.0 1.0))
+      (vols (0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0))
+      (cores (-1 -1 -1 -1 -1 -1 -1 -1))
+      (midi_file "songs/{song_id}/{song_id}.mid")
+   )
+   (bank sfx/tambourine_bank.milo)
+   (anim_tempo 16)
+   (preview 30000 60000)
+   (genre {genre})
+   (year {year})
+   (album_name "{album}")
+   (album_track_number 1)
+   (rank
+      (drum 150)
+      (bass 150)
+      (guitar 150)
+      (vocals 150)
+      (band 150)
    )
 )
 """

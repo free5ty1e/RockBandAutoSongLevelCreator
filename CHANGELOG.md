@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0035] - 2026-07-31
+- Reverted `songs.dta` (`dta_writer.py`) to standard single-wrapped format `({song_id} ...)` combined with the correct 8-entry file table layout (`con_packer.py`), ensuring ForgeTool GUI parses the song entry correctly now that file table index alignment is correct.
+
 ## [0.0034] - 2026-07-31
 - Wrapped song ID as an array `({song_id})` in `dta_writer.py` to ensure index 0 of the song definition block is parsed as a `DataArray` rather than a `DataSymbol`, satisfying C3 / ForgeTool GUI DTA array validation rules.
 
