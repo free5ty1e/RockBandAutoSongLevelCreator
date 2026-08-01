@@ -11,6 +11,7 @@
 - [x] **Devcontainer Test Suite:** Comprehensive PyTest test suite (`tests/test_con.py`) running locally in the devcontainer.
 
 ## Planned Features & Enhancements
+- [ ] **Vocal Gender Detection:** Automatically analyze the pitch and spectral characteristics of the dominant vocal stem to infer singer vocal gender (`'male'` vs `'female'`) for `songs.dta` metadata.
 - [ ] **Multi-Harmony Vocal Extraction:** Extract harmony parts and melody parts from vocal tracks to support Rock Band's multi-harmony system (up to 3 microphones: 1 melody and 2 harmonies).
 - [ ] **Master Track Multitrack Support:** Allow passing separated master guitar and keyboard audio parts directly when original multitracks/stems are available, bypassing AI Demucs separation.
 - [ ] **Solo Section Recognition:** Automatically detect and mark guitar, drum, and bass solo sections to activate the Rock Band solo scoring/lighting system.
