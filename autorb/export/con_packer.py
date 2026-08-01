@@ -170,7 +170,18 @@ def package_con(
     total_payload_size = total_payload_blocks * BLOCK_SIZE
 
     con_file_path = output_path / f"{song_id}.con"
-    header = create_stfs_header(song_id, total_payload_blocks, total_payload_size, len(items))
+    
+    template_path = output_path / "SmellsLikeNirvana_rb3con"
+    if template_path.exists():
+        header = bytearray(template_path.read_bytes()[:0xC000])
+        struct.pack_into(">q", header, 0x34C, total_payload_size)
+        struct.pack_into(">I", header, 0x395, total_payload_blocks)
+        struct.pack_into(">I", header, 0x39D, len(items))
+        struct.pack_into(">q", header, 0x3A1, total_payload_size)
+        name_encoded = song_id.encode("utf-16-be")[:0x80]
+        header[0x41C:0x41C + len(name_encoded)] = name_encoded
+    else:
+        header = create_stfs_header(song_id, total_payload_blocks, total_payload_size, len(items))
 
     with open(con_file_path, "wb") as con_file:
         con_file.write(header)
