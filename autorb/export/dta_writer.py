@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path) -> Path:
     """
     Generates the Rock Band songs.dta metadata configuration file matching the exact 
-    structure, fields, and CRLF line endings of known-good working CON packages (SmellsLikeNirvana_rb3con).
+    structure, single-quoted keys, double-quoted paths/strings, and CRLF line endings of SmellsLikeNirvana_rb3con.
     """
     genre = metadata.get('genre', 'rock').lower().replace(' ', '')
     year = metadata.get('year', 1998)
@@ -78,7 +78,10 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path) -> Path:
         "      'bank'",
         '      "sfx/tambourine_bank.milo"',
         "   )",
-        "   (drum_bank sfx/kit01_bank.milo)",
+        "   (",
+        "      'drum_bank'",
+        '      "sfx/kit01_bank.milo"',
+        "   )",
         "   ('anim_tempo' 16)",
         "   ('song_length' 230162)",
         "   (",

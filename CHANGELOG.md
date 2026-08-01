@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0040] - 2026-07-31
+- Updated `songs.dta` generator (`dta_writer.py`) to correctly quote `('drum_bank' "sfx/kit01_bank.milo")`, eliminating unquoted path tokens that caused `Whitespace encountered in symbol` parsing errors in ForgeTool GUI while utilizing signed template CON cloning (`con_packer.py`).
+
 ## [0.0039] - 2026-07-31
 - Refactored `con_packer.py` to be 100% standalone and programmatic from scratch (removing dependency on external template files), constructing the 12-block STFS header, 8-entry file table layout, and payload block stream natively.
 
