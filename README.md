@@ -192,6 +192,8 @@ audio_file: (Required) Path to the input audio file.
 
 --skip-vocals: Skips WhisperX alignment and basic-pitch extraction, loading vocals_cache.json from the output directory.
 
+--skip-mogg: Skips MOGG audio container building and uses the existing `.mogg` file.
+
 ## 🧪 Development, Testing & CON Validation
 
 Run unit tests and STFS validation locally:

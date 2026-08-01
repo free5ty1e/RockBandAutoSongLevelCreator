@@ -173,32 +173,54 @@ def package_con(
     
     template_path = output_path / "SmellsLikeNirvana_rb3con"
     if template_path.exists():
-        header = bytearray(template_path.read_bytes()[:0xC000])
-        struct.pack_into(">q", header, 0x34C, total_payload_size)
-        struct.pack_into(">I", header, 0x395, total_payload_blocks)
-        struct.pack_into(">I", header, 0x39D, len(items))
-        struct.pack_into(">q", header, 0x3A1, total_payload_size)
-        name_encoded = song_id.encode("utf-16-be")[:0x80]
-        header[0x41C:0x41C + len(name_encoded)] = name_encoded
+        # Clone signed template CON file to inherit valid cryptographic signatures and certificates
+        shutil.copy2(template_path, con_file_path)
+        with open(con_file_path, "rb+") as con_file:
+            con_data = bytearray(con_file.read())
+            
+            # Update header metadata
+            struct.pack_into(">q", con_data, 0x34C, total_payload_size)
+            struct.pack_into(">I", con_data, 0x395, total_payload_blocks)
+            struct.pack_into(">I", con_data, 0x39D, len(items))
+            struct.pack_into(">q", con_data, 0x3A1, total_payload_size)
+            name_encoded = song_id.encode("utf-16-be")[:0x80]
+            con_data[0x41C:0x41C + len(name_encoded)] = name_encoded
+            
+            # Write File Table block at 0xC000
+            con_data[0xC000:0xC000 + BLOCK_SIZE] = file_table_block
+            
+            # Write payload files starting at 0xD000 (Block 12 + 1)
+            current_offset = 0xD000
+            con_file.seek(0)
+            con_file.write(con_data[:current_offset])
+            
+            for item in packed_files:
+                con_file.write(item["content"])
+                remainder = item["size"] % BLOCK_SIZE
+                if remainder != 0:
+                    con_file.write(b"\x00" * (BLOCK_SIZE - remainder))
+        click.echo(f"Signed template-patched CON file successfully packaged: {con_file_path}")
+        return con_file_path
     else:
         header = create_stfs_header(song_id, total_payload_blocks, total_payload_size, len(items))
 
-    with open(con_file_path, "wb") as con_file:
-        con_file.write(header)
-        
-        current_offset = con_file.tell()
-        padding_needed = (BLOCK_SIZE - (current_offset % BLOCK_SIZE)) % BLOCK_SIZE
-        con_file.write(b"\x00" * padding_needed)
+        with open(con_file_path, "wb") as con_file:
+            con_file.write(header)
+            
+            current_offset = con_file.tell()
+            padding_needed = (BLOCK_SIZE - (current_offset % BLOCK_SIZE)) % BLOCK_SIZE
+            con_file.write(b"\x00" * padding_needed)
 
-        # Write File Table block (Block 0)
-        con_file.write(file_table_block)
+            # Write File Table block (Block 12 at 0xC000)
+            con_file.write(b"\x00" * (0xC000 - con_file.tell()))
+            con_file.write(file_table_block)
 
-        # Write Payload Files
-        for item in packed_files:
-            con_file.write(item["content"])
-            remainder = item["size"] % BLOCK_SIZE
-            if remainder != 0:
-                con_file.write(b"\x00" * (BLOCK_SIZE - remainder))
-                
-    click.echo(f"Direct CON file successfully packaged with correct ForgeTool layout: {con_file_path}")
-    return con_file_path
+            # Write Payload Files
+            for item in packed_files:
+                con_file.write(item["content"])
+                remainder = item["size"] % BLOCK_SIZE
+                if remainder != 0:
+                    con_file.write(b"\x00" * (BLOCK_SIZE - remainder))
+                    
+        click.echo(f"Direct CON file successfully packaged with correct ForgeTool layout: {con_file_path}")
+        return con_file_path

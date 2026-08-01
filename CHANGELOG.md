@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0016] - 2026-07-31
+- Implemented signed template CON cloning and payload patching in `con_packer.py` to preserve valid cryptographic certificates and signatures from known-good templates, preventing signature validation NullReferenceExceptions in ForgeTool GUI.
+
 ## [0.0015] - 2026-07-31
 - Added `--skip-mogg` CLI flag to allow skipping MOGG audio container building and using pre-existing MOGG files.
 
