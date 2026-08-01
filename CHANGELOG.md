@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0037] - 2026-07-31
+- Updated `songs.dta` generator (`dta_writer.py`) to replicate the exact field list (`tracks_count`, `pans`, `vols`, `cores`, `vocal_parts`, `rank`, `version`, `format`, `album_art`, `rating`, `sub_genre`, `tuning_offset_cents`, `guide_pitch_volume`, `game_origin`, `encoding`, etc.) and CRLF line endings of `SmellsLikeNirvana_rb3con`.
+
 ## [0.0036] - 2026-07-31
 - Updated `songs.dta` generator (`dta_writer.py`) to match the exact single-quoted C3/Magma format (`('{song_id}' ('name' "{title}") ...)`), mirroring the structure and syntax of known-good working CON packages (`SmellsLikeNirvana_rb3con` and `311 - Down`).
 
