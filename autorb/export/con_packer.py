@@ -199,6 +199,8 @@ def package_con(
                 remainder = item["size"] % BLOCK_SIZE
                 if remainder != 0:
                     con_file.write(b"\x00" * (BLOCK_SIZE - remainder))
+        import os
+        os.utime(con_file_path, None)
         click.echo(f"Signed template-patched CON file successfully packaged: {con_file_path}")
         return con_file_path
     else:

@@ -2,6 +2,10 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0018] - 2026-07-31
+- Updated `ROADMAP.md` to include vocal overdrive sections and activation phrases during lyrical breaks.
+- Updated `con_packer.py` to explicitly update file modification timestamps (`os.utime`) upon successful packaging.
+
 ## [0.0017] - 2026-07-31
 - Created project feature roadmap (`ROADMAP.md`) tracking completed features and planned enhancements (multi-harmony vocal extraction, master multitrack support, solo section recognition, and overdrive/fill markers).
 

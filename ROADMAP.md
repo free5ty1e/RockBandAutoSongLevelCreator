@@ -14,4 +14,4 @@
 - [ ] **Multi-Harmony Vocal Extraction:** Extract harmony parts and melody parts from vocal tracks to support Rock Band's multi-harmony system (up to 3 microphones: 1 melody and 2 harmonies).
 - [ ] **Master Track Multitrack Support:** Allow passing separated master guitar and keyboard audio parts directly when original multitracks/stems are available, bypassing AI Demucs separation.
 - [ ] **Solo Section Recognition:** Automatically detect and mark guitar, drum, and bass solo sections to activate the Rock Band solo scoring/lighting system.
-- [ ] **Overdrive & Drum Fill Markers:** Automatically compute and mark overdrive (star power) activation phrases across instruments, and generate regular fill opportunities for drum tracks.
+- [ ] **Overdrive & Drum/Vocal Fill Markers:** Automatically compute and mark overdrive (star power) activation phrases across instruments, including vocal overdrive sections and regular activation opportunities / talkie/freestyle phrases during lyrical breaks.
