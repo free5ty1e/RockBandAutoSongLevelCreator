@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0036] - 2026-07-31
+- Updated `songs.dta` generator (`dta_writer.py`) to match the exact single-quoted C3/Magma format (`('{song_id}' ('name' "{title}") ...)`), mirroring the structure and syntax of known-good working CON packages (`SmellsLikeNirvana_rb3con` and `311 - Down`).
+
 ## [0.0035] - 2026-07-31
 - Reverted `songs.dta` (`dta_writer.py`) to standard single-wrapped format `({song_id} ...)` combined with the correct 8-entry file table layout (`con_packer.py`), ensuring ForgeTool GUI parses the song entry correctly now that file table index alignment is correct.
 
