@@ -14,6 +14,11 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str)
     stems_path = Path(stems_dir)
     mogg_path = output_dir / f"{song_id}.mogg"
     
+    # If a template/valid MOGG already exists for this song, reuse it
+    if mogg_path.exists() and mogg_path.stat().st_size > 100000:
+        logger.info(f"Reusing existing valid MOGG container at {mogg_path}")
+        return mogg_path
+    
     stem_names = ["drums", "bass", "other", "vocals"]
     input_files = []
     
