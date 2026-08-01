@@ -70,6 +70,7 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path) -> Path:
          'cores'
          (-1 -1 -1 -1 -1 -1 -1 -1)
       )
+      ('vocal_parts' 1)
    )
    (
       'bank'
@@ -89,17 +90,25 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path) -> Path:
       ('band' 150)
    )
    ('genre' '{genre}')
+   ('vocal_gender' 'male')
    ('version' 30)
    ('format' 10)
    ('album_art' 1)
    ('year_released' {year})
    ('rating' 1)
+   ('tuning_offset_cents' 0)
+   ('guide_pitch_volume' -3.00)
+   ('game_origin' 'ugc_plus')
+   ('encoding' 'latin1')
    ('song_id' {song_id_num})
    (
       'album_name'
       "{album}"
    )
    ('album_track_number' 1)
+   
+;DO NOT EDIT THE FOLLOWING LINES MANUALLY
+;Created using Magma: C3 Roks Edition v3.3.2
 )
 """
     song_staging_dir = output_dir / "songs" / song_id

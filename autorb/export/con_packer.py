@@ -130,7 +130,7 @@ def package_con(
         {"name": f"{song_id}.mogg", "is_dir": False, "parent": 1, "content": mogg_content},
     ]
 
-    current_block = 1
+    current_block = 0
     packed_files = []
     
     for idx, item in enumerate(items):

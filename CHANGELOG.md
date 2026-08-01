@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0020] - 2026-07-31
+- Fixed payload start block alignment (`current_block = 0`) in `con_packer.py` so file table start blocks match the exact payload write offsets (`0xD000`), resolving stream reading NullReferenceExceptions in ForgeTool GUI.
+
 ## [0.0018] - 2026-07-31
 - Updated `ROADMAP.md` to include vocal overdrive sections and activation phrases during lyrical breaks.
 - Updated `con_packer.py` to explicitly update file modification timestamps (`os.utime`) upon successful packaging.
