@@ -2,6 +2,12 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0029] - 2026-07-31
+- Reverted `songs.dta` (`dta_writer.py`) to single-level unquoted song entry format (`(open_road_song ...)`), matching the standard DTA schema expected by ForgeTool GUI and resolving DTA parsing errors.
+
+## [0.0028] - 2026-07-31
+- Restored standard hierarchical 6-entry STFS file table layout (`con_packer.py`) with root `songs.dta`, `songs` directory, song subfolder, and song-level `songs.dta`, `.mid`, and `.mogg`, matching standard Rock Band 3 and C3 custom package conventions.
+
 ## [0.0027] - 2026-07-31
 - Updated GitHub Actions CI workflow (`.github/workflows/ci-cd.yml`) to install the package in editable mode (`pip install -e .`) before executing pytest.
 
