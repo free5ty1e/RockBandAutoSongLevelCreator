@@ -7,8 +7,8 @@ logger = logging.getLogger(__name__)
 
 def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path) -> Path:
     """
-    Generates the Rock Band songs.dta metadata configuration file matching the exact 
-    structure, single-quoted keys, double-quoted paths/strings, and CRLF line endings of SmellsLikeNirvana_rb3con.
+    Generates the Rock Band songs.dta metadata configuration file with 4-stem track mapping
+    matching the exact structure, single-quoted keys, double-quoted strings, and CRLF line endings.
     """
     genre = metadata.get('genre', 'rock').lower().replace(' ', '')
     year = metadata.get('year', 1998)
@@ -36,7 +36,7 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path) -> Path:
         "      )",
         "      (",
         "         'tracks_count'",
-        "         (2 2 2 2 0 2)",
+        "         (2 2 2 2)",
         "      )",
         "      (",
         "         'tracks'",
@@ -61,15 +61,15 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path) -> Path:
         "      )",
         "      (",
         "         'pans'",
-        "         (-1.00 1.00 -1.00 1.00 -1.00 1.00 -1.00 1.00 -1.00 1.00)",
+        "         (-1.00 1.00 -1.00 1.00 -1.00 1.00 -1.00 1.00)",
         "      )",
         "      (",
         "         'vols'",
-        "         (0.00 0.00 0.00 0.00 0.00 0.00 0.00 0.00 0.00 0.00)",
+        "         (0.00 0.00 0.00 0.00 0.00 0.00 0.00 0.00)",
         "      )",
         "      (",
         "         'cores'",
-        "         (-1 -1 -1 -1 -1 -1 -1 -1 -1 -1)",
+        "         (-1 -1 -1 -1 -1 -1 -1 -1)",
         "      )",
         "      ('vocal_parts' 1)",
         "   )",

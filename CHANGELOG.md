@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0042] - 2026-07-31
+- Updated `songs.dta` generator (`dta_writer.py`) track count to match the 4-stem multitrack layout (`tracks_count (2 2 2 2)` with 8-channel pans/vols/cores), preventing parser token mismatches.
+
 ## [0.0041] - 2026-07-31
 - Reverted to pure standalone programmatic CON packaging (`con_packer.py`) combined with the exact single-quoted C3/Magma `songs.dta` format (`dta_writer.py`), eliminating external template dependencies while satisfying ForgeTool GUI's DTA array parsing rules.
 
