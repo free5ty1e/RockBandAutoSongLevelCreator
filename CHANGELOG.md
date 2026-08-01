@@ -2,6 +2,12 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0025] - 2026-07-31
+- Updated in-place template patcher (`con_packer.py`) to correctly align file table entries 4 and 5 with active song filenames (`open_road_song.mid` and `open_road_song.mogg`), resolving internal stream resolution NullReferenceExceptions in ForgeTool GUI.
+
+## [0.0024] - 2026-07-31
+- Updated in-place template patching (`con_packer.py`) to dynamically rewrite filenames (`songs.dta`, `{song_id}.mid`, `{song_id}.mogg`) in file table entries 3, 4, and 5, matching the active song ID and preventing file-lookup NullReferenceExceptions in ForgeTool GUI.
+
 ## [0.0023] - 2026-07-31
 - Implemented true in-place template payload patching in `con_packer.py` (`SmellsLikeNirvana_rb3con`), preserving all 8 file table entries (including album art and milo scenes), block offsets, and digital signatures without truncating or mismatching entry order.
 

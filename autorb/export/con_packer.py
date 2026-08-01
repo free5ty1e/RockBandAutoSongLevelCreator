@@ -190,8 +190,17 @@ def package_con(
             ft[1*0x40 : 1*0x40 + len(name_bytes)] = name_bytes
             ft[1*0x40 + 0x28] = (len(name_bytes) & 0x3F) | 0x80 # dir flag
             
-            def write_file_at_entry(entry_idx, content):
+            def write_file_at_entry(entry_idx, filename, content):
                 entry_offset = entry_idx * 0x40
+                
+                name_bytes = filename.encode('ascii', errors='ignore')[:0x28]
+                ft[entry_offset : entry_offset + 40] = b'\x00' * 40
+                ft[entry_offset : entry_offset + len(name_bytes)] = name_bytes
+                
+                name_len = len(name_bytes) & 0x3F
+                flags = name_len | 0x40
+                ft[entry_offset + 0x28] = flags
+
                 start_block = int.from_bytes(ft[entry_offset + 0x2F : entry_offset + 0x32], 'little')
                 file_size = len(content)
                 block_count = (file_size + BLOCK_SIZE - 1) // BLOCK_SIZE
@@ -204,14 +213,13 @@ def package_con(
                 padded_size = block_count * BLOCK_SIZE
                 padded_content = content + b"\x00" * (padded_size - file_size)
                 
-                # Ensure con_data is large enough
                 if payload_off + len(padded_content) > len(con_data):
                     con_data.extend(b"\x00" * (payload_off + len(padded_content) - len(con_data)))
                 con_data[payload_off : payload_off + len(padded_content)] = padded_content
 
-            write_file_at_entry(3, dta_parent_content) # songs.dta
-            write_file_at_entry(4, midi_content)       # .mid
-            write_file_at_entry(5, mogg_content)       # .mogg
+            write_file_at_entry(3, "songs.dta", dta_parent_content)
+            write_file_at_entry(4, f"{song_id}.mid", midi_content)
+            write_file_at_entry(5, f"{song_id}.mogg", mogg_content)
             
             con_data[0xC000:0xC000 + BLOCK_SIZE] = ft
             con_file.seek(0)
