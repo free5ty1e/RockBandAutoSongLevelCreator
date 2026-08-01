@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0031] - 2026-07-31
+- Wrapped song definition in an outer DTA list `( ( song_id ... ) )` in `dta_writer.py`, ensuring root `DataArray` element at index 0 is a song list Array rather than a DataSymbol, resolving `Element at index 0 is not an Array. It is DataSymbol` errors in ForgeTool GUI.
+
 ## [0.0030] - 2026-07-31
 - Adjusted CI workflow (`.github/workflows/ci-cd.yml`) tag trigger from `v*.*.*` to `v*` so pre-release/test tags (e.g. `v0.001xTest`) correctly trigger CI/CD builds and GitHub Releases.
 - Refactored `con_packer.py` to match the exact 5-entry `SmellsLikeNirvana_rb3con` file table structure (`songs` dir, `{song_id}` dir, `songs.dta` inside `/songs/songs.dta`, `.mid`, and `.mogg`), resolving `Unable to find the file songs.dta` errors in ForgeTool GUI.
