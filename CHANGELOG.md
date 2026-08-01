@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0039] - 2026-07-31
+- Refactored `con_packer.py` to be 100% standalone and programmatic from scratch (removing dependency on external template files), constructing the 12-block STFS header, 8-entry file table layout, and payload block stream natively.
+
 ## [0.0038] - 2026-07-31
 - Implemented signed template CON cloning and payload patching in `con_packer.py` using `SmellsLikeNirvana_rb3con` as a base template, preserving 100% valid cryptographic signatures, STFS certificates, and file table structures while updating `songs.dta`, `.mid`, and `.mogg` in-place.
 
