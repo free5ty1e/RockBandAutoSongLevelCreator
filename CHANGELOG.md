@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0034] - 2026-07-31
+- Wrapped song ID as an array `({song_id})` in `dta_writer.py` to ensure index 0 of the song definition block is parsed as a `DataArray` rather than a `DataSymbol`, satisfying C3 / ForgeTool GUI DTA array validation rules.
+
 ## [0.0033] - 2026-07-31
 - Wrapped song ID in quotes as `("{song_id}")` in `dta_writer.py` to ensure index 0 of the song array is parsed as a String/Array rather than a bare DataSymbol by ForgeTool GUI's DTA parser.
 

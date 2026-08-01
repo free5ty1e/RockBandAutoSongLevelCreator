@@ -18,7 +18,7 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path) -> Path:
 
     dta_content = f"""(
    (
-      ("{song_id}")
+      ({song_id})
       (name "{title}")
       (artist "{artist}")
       (master TRUE)
