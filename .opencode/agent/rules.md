@@ -13,3 +13,8 @@ CRITICAL MANDATE: During every development cycle where code, pipelines, packagin
 4. Update `/workspaces/RockBandAutoSongLevelCreator/llm-wiki-kb/` to keep architectural records and domain knowledge completely up-to-date.
 
 Never skip version bumps, changelog entries, or documentation updates when completing tasks.
+
+Never perform any git write operations, except for git add - please stage your specific changes each development cycle before presenting the changes to the user.
+
+Do not work in /tmp, instead utilize a .gitignored folder inside the workspace that the user can observe.  If an appropriate temp folder does not yet exist, create it and .gitignore it.
+

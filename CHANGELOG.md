@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0017] - 2026-07-31
+- Created project feature roadmap (`ROADMAP.md`) tracking completed features and planned enhancements (multi-harmony vocal extraction, master multitrack support, solo section recognition, and overdrive/fill markers).
+
 ## [0.0016] - 2026-07-31
 - Implemented signed template CON cloning and payload patching in `con_packer.py` to preserve valid cryptographic certificates and signatures from known-good templates, preventing signature validation NullReferenceExceptions in ForgeTool GUI.
 

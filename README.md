@@ -234,6 +234,8 @@ autorb/
 │   ├── transcribe/       # Basic-Pitch, Librosa, and WhisperX logic
 │   └── export/           # MIDI composition, DTA, and STFS packaging
 ├── tests/                # PyTest test suite
+├── ROADMAP.md            # Feature roadmap & progress tracking
+├── CHANGELOG.md          # Version changelog
 ├── AGENT_PLAN.md         # Detailed specification & task tracking for AI agents
 ├── requirements.txt      # Python dependencies
 └── README.md
