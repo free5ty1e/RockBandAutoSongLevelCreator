@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0032] - 2026-07-31
+- Expanded `con_packer.py` file table to match the exact 8-entry `SmellsLikeNirvana_rb3con` layout (including `songs`, `{song_id}`, `gen` directories, `songs.dta`, `.mid`, `.mogg`, `.milo_xbox`, and `_keep.png_xbox`), ensuring correct file index alignment for ForgeTool GUI's DTA parser.
+
 ## [0.0031] - 2026-07-31
 - Wrapped song definition in an outer DTA list `( ( song_id ... ) )` in `dta_writer.py`, ensuring root `DataArray` element at index 0 is a song list Array rather than a DataSymbol, resolving `Element at index 0 is not an Array. It is DataSymbol` errors in ForgeTool GUI.
 

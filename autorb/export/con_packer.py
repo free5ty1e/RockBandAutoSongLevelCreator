@@ -87,21 +87,28 @@ def package_con(
     dta_parent_content = target_dta_parent.read_bytes()
     mogg_content = target_mogg.read_bytes()
     midi_content = target_mid.read_bytes()
+    dummy_asset = b"MILO_PNG_DUMMY_CONTENT"
 
     file_table_block = bytearray(b'\xff' * BLOCK_SIZE)
 
-    # Exact layout matching SmellsLikeNirvana_rb3con (No root songs.dta, songs.dta is inside /songs/songs.dta):
-    # Index 0: songs (Root directory, parent 0xFFFF)
-    # Index 1: song_id (Subdirectory inside songs, parent 0)
-    # Index 2: songs.dta (File inside songs directory, parent 0)
-    # Index 3: {song_id}.mid (File inside song folder, parent 1)
-    # Index 4: {song_id}.mogg (File inside song folder, parent 1)
+    # Exact 8-entry layout matching SmellsLikeNirvana_rb3con:
+    # Index 0: songs (dir, parent 0xFFFF)
+    # Index 1: song_id (dir, parent 0)
+    # Index 2: gen (dir, parent 1)
+    # Index 3: songs.dta (file, parent 0)
+    # Index 4: {song_id}.mid (file, parent 1)
+    # Index 5: {song_id}.mogg (file, parent 1)
+    # Index 6: {song_id}.milo_xbox (file, parent 2)
+    # Index 7: {song_id}_keep.png_xbox (file, parent 2)
     items = [
         {"name": "songs", "is_dir": True, "parent": 0xFFFF, "content": None},
         {"name": song_id, "is_dir": True, "parent": 0, "content": None},
+        {"name": "gen", "is_dir": True, "parent": 1, "content": None},
         {"name": "songs.dta", "is_dir": False, "parent": 0, "content": dta_parent_content},
         {"name": f"{song_id}.mid", "is_dir": False, "parent": 1, "content": midi_content},
         {"name": f"{song_id}.mogg", "is_dir": False, "parent": 1, "content": mogg_content},
+        {"name": f"{song_id}.milo_xbox", "is_dir": False, "parent": 2, "content": dummy_asset},
+        {"name": f"{song_id}_keep.png_xbox", "is_dir": False, "parent": 2, "content": dummy_asset},
     ]
 
     current_block = 0
@@ -165,5 +172,5 @@ def package_con(
                 con_file.write(b"\x00" * (BLOCK_SIZE - remainder))
                 
     os.utime(con_file_path, None)
-    click.echo(f"Direct CON file successfully packaged with SmellsLikeNirvana layout: {con_file_path}")
+    click.echo(f"Direct CON file successfully packaged with 8-entry SmellsLikeNirvana layout: {con_file_path}")
     return con_file_path

@@ -35,7 +35,7 @@ def test_con_packaging_and_validation(tmp_path):
     # Validate STFS structure using validator
     result = validate_con(con_path)
     assert result["valid"] is True
-    assert result["entry_count"] == 5
-    assert "/songs/test_song/test_song.mogg" in result["virtual_paths"]
-    assert "/songs/test_song/test_song.mid" in result["virtual_paths"]
+    assert result["entry_count"] == 8
+    assert f"/songs/{song_id}/{song_id}.mogg" in result["virtual_paths"]
+    assert f"/songs/{song_id}/{song_id}.mid" in result["virtual_paths"]
     assert "/songs/songs.dta" in result["virtual_paths"]
