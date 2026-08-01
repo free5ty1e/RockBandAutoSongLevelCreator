@@ -85,26 +85,23 @@ def package_con(
     click.echo(f"Staged clean song folder structure at: {song_staging_dir}")
 
     dta_parent_content = target_dta_parent.read_bytes()
-    dta_sub_content = target_dta_sub.read_bytes()
     mogg_content = target_mogg.read_bytes()
     midi_content = target_mid.read_bytes()
 
     file_table_block = bytearray(b'\xff' * BLOCK_SIZE)
 
-    # Hierarchical Index Mapping:
-    # Index 0: songs.dta (Root file, parent 0xFFFF)
-    # Index 1: songs (Root directory, parent 0xFFFF)
-    # Index 2: song_id (Subdirectory inside songs, parent 1)
-    # Index 3: songs.dta (File inside song folder, parent 2)
-    # Index 4: {song_id}.mid (File inside song folder, parent 2)
-    # Index 5: {song_id}.mogg (File inside song folder, parent 2)
+    # Exact layout matching SmellsLikeNirvana_rb3con (No root songs.dta, songs.dta is inside /songs/songs.dta):
+    # Index 0: songs (Root directory, parent 0xFFFF)
+    # Index 1: song_id (Subdirectory inside songs, parent 0)
+    # Index 2: songs.dta (File inside songs directory, parent 0)
+    # Index 3: {song_id}.mid (File inside song folder, parent 1)
+    # Index 4: {song_id}.mogg (File inside song folder, parent 1)
     items = [
-        {"name": "songs.dta", "is_dir": False, "parent": 0xFFFF, "content": dta_parent_content},
         {"name": "songs", "is_dir": True, "parent": 0xFFFF, "content": None},
-        {"name": song_id, "is_dir": True, "parent": 1, "content": None},
-        {"name": "songs.dta", "is_dir": False, "parent": 2, "content": dta_sub_content},
-        {"name": f"{song_id}.mid", "is_dir": False, "parent": 2, "content": midi_content},
-        {"name": f"{song_id}.mogg", "is_dir": False, "parent": 2, "content": mogg_content},
+        {"name": song_id, "is_dir": True, "parent": 0, "content": None},
+        {"name": "songs.dta", "is_dir": False, "parent": 0, "content": dta_parent_content},
+        {"name": f"{song_id}.mid", "is_dir": False, "parent": 1, "content": midi_content},
+        {"name": f"{song_id}.mogg", "is_dir": False, "parent": 1, "content": mogg_content},
     ]
 
     current_block = 0
@@ -168,5 +165,5 @@ def package_con(
                 con_file.write(b"\x00" * (BLOCK_SIZE - remainder))
                 
     os.utime(con_file_path, None)
-    click.echo(f"Direct CON file successfully packaged with hierarchical layout: {con_file_path}")
+    click.echo(f"Direct CON file successfully packaged with SmellsLikeNirvana layout: {con_file_path}")
     return con_file_path
