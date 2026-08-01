@@ -17,98 +17,100 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path) -> Path:
     album = metadata.get('album', title)
 
     dta_content = f"""(
-   {song_id}
    (
-      'name'
-      "{title}"
-   )
-   (
-      'artist'
-      "{artist}"
-   )
-   ('master' 1)
-   (
-      'song'
+      {song_id}
       (
          'name'
-         "songs/{song_id}/{song_id}"
+         "{title}"
       )
       (
-         'tracks_count'
-         (2 2 2 2)
+         'artist'
+         "{artist}"
       )
+      ('master' 1)
       (
-         'tracks'
+         'song'
          (
+            'name'
+            "songs/{song_id}/{song_id}"
+         )
+         (
+            'tracks_count'
+            (2 2 2 2)
+         )
+         (
+            'tracks'
             (
-               'drum'
-               (0 1)
-            )
-            (
-               'bass'
-               (2 3)
-            )
-            (
-               'guitar'
-               (4 5)
-            )
-            (
-               'vocals'
-               (6 7)
+               (
+                  'drum'
+                  (0 1)
+               )
+               (
+                  'bass'
+                  (2 3)
+               )
+               (
+                  'guitar'
+                  (4 5)
+               )
+               (
+                  'vocals'
+                  (6 7)
+               )
             )
          )
+         (
+            'pans'
+            (-1.00 1.00 -1.00 1.00 -1.00 1.00 -1.00 1.00)
+         )
+         (
+            'vols'
+            (0.00 0.00 0.00 0.00 0.00 0.00 0.00 0.00)
+         )
+         (
+            'cores'
+            (-1 -1 -1 -1 -1 -1 -1 -1)
+         )
+         ('vocal_parts' 1)
       )
       (
-         'pans'
-         (-1.00 1.00 -1.00 1.00 -1.00 1.00 -1.00 1.00)
+         'bank'
+         "sfx/tambourine_bank.milo"
+      )
+      ('anim_tempo' 32)
+      (
+         'preview'
+         30000 60000
       )
       (
-         'vols'
-         (0.00 0.00 0.00 0.00 0.00 0.00 0.00 0.00)
+         'rank'
+         ('drum' 150)
+         ('guitar' 150)
+         ('bass' 150)
+         ('vocals' 150)
+         ('band' 150)
       )
+      ('genre' '{genre}')
+      ('vocal_gender' 'male')
+      ('version' 30)
+      ('format' 10)
+      ('album_art' 1)
+      ('year_released' {year})
+      ('rating' 1)
+      ('tuning_offset_cents' 0)
+      ('guide_pitch_volume' -3.00)
+      ('game_origin' 'ugc_plus')
+      ('encoding' 'latin1')
+      ('song_id' {song_id_num})
       (
-         'cores'
-         (-1 -1 -1 -1 -1 -1 -1 -1)
+         'album_name'
+         "{album}"
       )
-      ('vocal_parts' 1)
+      ('album_track_number' 1)
+      
+   ;DO NOT EDIT THE FOLLOWING LINES MANUALLY
+   ;Created using Magma: C3 Roks Edition v3.3.2
    )
-   (
-      'bank'
-      "sfx/tambourine_bank.milo"
-   )
-   ('anim_tempo' 32)
-   (
-      'preview'
-      30000 60000
-   )
-   (
-      'rank'
-      ('drum' 150)
-      ('guitar' 150)
-      ('bass' 150)
-      ('vocals' 150)
-      ('band' 150)
-   )
-   ('genre' '{genre}')
-   ('vocal_gender' 'male')
-   ('version' 30)
-   ('format' 10)
-   ('album_art' 1)
-   ('year_released' {year})
-   ('rating' 1)
-   ('tuning_offset_cents' 0)
-   ('guide_pitch_volume' -3.00)
-   ('game_origin' 'ugc_plus')
-   ('encoding' 'latin1')
-   ('song_id' {song_id_num})
-   (
-      'album_name'
-      "{album}"
-   )
-   ('album_track_number' 1)
-   
-;DO NOT EDIT THE FOLLOWING LINES MANUALLY
-;Created using Magma: C3 Roks Edition v3.3.2
 )
 """
     song_staging_dir = output_dir / "songs" / song_id

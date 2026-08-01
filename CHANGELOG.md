@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0022] - 2026-07-31
+- Wrapped the song definition block in an outer S-expression list `( ( song_id ... ) )` in `songs.dta` (`dta_writer.py`), satisfying the root `DataArray` structure expected by ForgeTool GUI's DTA parser.
+
 ## [0.0021] - 2026-07-31
 - Fixed song ID formatting in `songs.dta` (`dta_writer.py`) to be an unquoted bare DataSymbol rather than a quoted string, resolving ForgeTool GUI DTA parser errors (`Element at index 0 is not an Array. It is DataSymbol`).
 - Added Vocal Gender Detection to `ROADMAP.md`.
