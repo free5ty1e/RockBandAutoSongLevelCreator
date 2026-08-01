@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0027] - 2026-07-31
+- Updated GitHub Actions CI workflow (`.github/workflows/ci-cd.yml`) to install the package in editable mode (`pip install -e .`) before executing pytest.
+
 ## [0.0026] - 2026-07-31
 - Reverted to clean programmatic 12-block STFS CON generation (`con_packer.py`) with payload offset tracking (`0xD000`), passing all local `forge_simulator.py` and `stfs_validator.py` checks.
 
