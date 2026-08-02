@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0046] - 2026-07-31
+- Retained original valid `.milo_xbox` and `_keep.png_xbox` binary assets from `SmellsLikeNirvana_rb3con` template (renamed to active song ID) in `con_packer.py`, preventing `Object reference not set to an instance of an object` NullReferenceExceptions in ForgeTool GUI during graphic/milo asset resolution.
+
 ## [0.0045] - 2026-07-31
 - Updated `songs.dta` generator (`dta_writer.py`) to use standard unquoted bare symbols for keys and song IDs (e.g. `(name "...")`, `(genre alternative)`), complying with official Rock Band 3 DTA formatting and resolving symbol parsing errors in ForgeTool GUI.
 

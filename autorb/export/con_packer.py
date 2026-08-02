@@ -106,5 +106,5 @@ def package_con(
 
     con_file_path.write_bytes(con_data)
     os.utime(con_file_path, None)
-    click.echo(f"Successfully patched signed template CON with safe DTA clearing: {con_file_path}")
+    click.echo(f"Successfully patched signed template CON with valid asset retention: {con_file_path}")
     return con_file_path
