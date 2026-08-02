@@ -2,6 +2,12 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0055] - 2026-08-02
+- Fixed in-game RB4 audio: the built `.mogg` was a **plain multi-channel Ogg Vorbis file** (`OggS...`), not the proprietary Harmonix MOGG container. LibForge copies the mogg verbatim into the PS4 PKG, so RB4 could not decode it — no audio preview in the song list, and a crash (CE-34878-0) when the notes/fretboard came up (audio engine fails to start). The template's real mogg (v13) confirms the proprietary header (`version 0x0A` unencrypted for RB4 customs).
+- `mogg_builder.py`: added `wrap_ogg_as_mogg()` which prepends the v10 MOGG header (LE `version=0x0A`, `header_size`, `map_version=0x10`, `seek_interval=20000`, `entry_count`) and an OggMap of `(byte_offset, sample)` seek entries computed by parsing the Ogg pages (granulepos per page, 0x8000-byte stepping, mirroring mtolly/ogg2mogg). The Ogg payload is byte-identical after the header.
+- `mogg_builder.py`: each stem is now normalized to a stereo pair (`aformat=channel_layouts=stereo`) before `amerge`, guaranteeing the 8-channel layout songs.dta expects (drums 0-1, bass 2-3, guitar 4-5, vocals 6-7) even with mono stems.
+- Rebuilt `output/open_road_song.mogg` (v10, 8ch @ 44100) and `output/open_road_song.con`; all 5 payloads still byte-identical under the GameArchives per-block read, and the served mogg parses as a valid v10 MOGG. Validator, simulator, and pytest pass.
+
 ## [0.0054] - 2026-08-02
 - Fixed the real root cause of the ForgeTool "CON to PKG Conversion" crash. STFS hash tables are interleaved every 0xAA logical blocks, so a file's physical blocks are **not contiguous** (logical block `L` maps to `0xC000 + logical_to_physical(L) * 0x1000`, with a hash-table block between each group of 170). The previous code read/wrote payloads **contiguously** from the first physical block, which corrupted any file crossing a 170-block boundary.
 - `con_packer.py`: added `read_file_blocks()` and rewrote `write_payload()` to resolve **each logical block** through `logical_to_physical()`. Previously the milo (logical 3551-3570, crossing the boundary at 3570) had its last block written over a hash-table slot and read back from the wrong physical block (template zeros) -> no trailing `0xADDEADDE` -> `ReadBytes(-1)` overflow in `MiloFile.ParseDirectory`.

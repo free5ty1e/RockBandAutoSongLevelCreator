@@ -12,3 +12,10 @@ input/
 *.pyc
 output/
 
+# macOS filesystem artifacts
+.DS_Store
+**/.DS_Store
+.AppleDouble
+._*
+Thumbs.db
+
