@@ -34,6 +34,22 @@ The game uses it to seek (practice mode, pause rewind, preview): to reach sample
 
 This mirrors `mtolly/ogg2mogg` (`SEEK_INCREMENT 0x8000`, `FRAME_INCREMENT 20000`). Precision only affects seek granularity, never playback.
 
+## Ogg page size is critical (v0.0058)
+
+The embedded Ogg bitstream **must use small pages**. ffmpeg's default libvorbis paging emits ~1-second / ~56KB pages (granule deltas ~31000-36000 samples). Rock Band's **Milkshake** audio engine cannot reliably decode such coarse pages — on PS4 the custom song converted and installed (RB4DX + ForgeTool) but had **no audio preview in the song list** and **"completed instantly" at 0%** when played.
+
+Known-good stock moggs (e.g. "311 - Down" RB3 DLC) use ~4KB pages with ~2048-3072 sample granules (4006 pages for the full song). AutoRB now forces this via the ffmpeg Ogg muxer's `-page_duration` option:
+
+```bash
+ffmpeg ... -c:a libvorbis -q:a 5 -page_duration 40000 -f ogg out.ogg
+```
+
+`PAGE_DURATION_US = 40000` (40 ms page target) in `mogg_builder.py` yields pages of ~2048-3072 granules at 44100 Hz. The rebuilt `output/open_road_song.mogg` has 4233 pages, avg 3414 bytes/page, granule deltas 2048/2624.
+
+## song_length comes from the real audio (v0.0058)
+
+`songs.dta`'s `(song_length ...)` was previously hardcoded (230162) and did not match the actual audio. `dta_writer.py` now derives it with `read_mogg_duration_ms()`: parse the MOGG `header_size` (u32 at offset 4), read the Vorbis identification header's sample rate (LE u32 at packet offset 12), take the final audio granulepos from the Ogg pages, and return `granule * 1000 // rate` ms. `generate_songs_dta(..., song_length=...)` can still override the value explicitly; it falls back to 198089 ms with a warning only if the MOGG is missing.
+
 ## Channel layout
 
 The Ogg stream is a **single logical stream with N channels**; songs.dta's `tracks` assigns channels to instruments. AutoRB emits 8 channels = 4 stereo pairs matching `dta_writer.py`:
@@ -48,7 +64,9 @@ drums 0-1, bass 2-3, guitar 4-5, vocals 6-7
 
 `autorb/export/mogg_builder.py`:
 - Encodes each stem to a stereo pair (`aformat=channel_layouts=stereo`) then `amerge=inputs=4` -> 8ch Ogg @ source rate (44100).
+- Forces small Ogg pages with `-page_duration 40000` (`PAGE_DURATION_US`) — RB's Milkshake decoder fails on ffmpeg-default ~1s/56KB pages (see above).
 - `wrap_ogg_as_mogg()` parses the Ogg pages and prepends the v10 header + OggMap (pure Python, no external tools beyond ffmpeg).
+- `read_mogg_duration_ms()` parses the MOGG header + Vorbis id header + final granule to report the real audio duration for songs.dta's `(song_length ...)`.
 
 ## References
 

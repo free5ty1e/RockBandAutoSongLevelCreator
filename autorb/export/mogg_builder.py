@@ -14,6 +14,7 @@ MOGG_VERSION_UNENCRYPTED = 0x0A  # v10 = unencrypted (all RB4 customs use this)
 MOGG_MAP_VERSION = 0x10
 FRAME_INCREMENT = 20000          # seek-map entries every 20000 samples
 SEEK_INCREMENT = 0x8000          # raw-byte stepping used to build the map
+PAGE_DURATION_US = 40000         # ogg muxer page target (~2048-3072 sample granules, matching stock RB moggs)
 
 
 def _parse_ogg_pages(data: bytes) -> list:
@@ -42,6 +43,35 @@ def _parse_ogg_pages(data: bytes) -> list:
         pages.append((pos, granule))
         pos = pos + 27 + segs + payload
     return pages
+
+
+def read_mogg_duration_ms(mogg_path: str | Path) -> int:
+    """
+    Return the audio duration of a MOGG in milliseconds, computed from the
+    final Ogg granule position and the Vorbis sample rate. Used to populate
+    songs.dta's (song_length ...) so metadata matches the actual audio.
+    """
+    data = Path(mogg_path).read_bytes()
+    header_size = int.from_bytes(data[4:8], "little")
+    ogg = data[header_size:]
+    pos = ogg.find(b"OggS")
+    if pos < 0 or pos + 27 > len(ogg):
+        raise ValueError(f"Invalid MOGG (no OggS): {mogg_path}")
+    segs = ogg[pos + 26]
+    laces = list(ogg[pos + 27:pos + 27 + segs])
+    packet = b""
+    for l in laces:
+        packet += ogg[pos + 27 + segs:pos + 27 + segs + l]
+        if l < 255:
+            break
+    if len(packet) < 30 or packet[:7] != b"\x01vorbis":
+        raise ValueError(f"Invalid MOGG (bad Vorbis id header): {mogg_path}")
+    rate = int.from_bytes(packet[12:16], "little")
+    pages = _parse_ogg_pages(ogg)
+    granules = [g for _, g in pages if g >= 0]
+    if not granules:
+        raise ValueError(f"Invalid MOGG (no audio pages): {mogg_path}")
+    return int(granules[-1] * 1000 // rate)
 
 
 def wrap_ogg_as_mogg(ogg_bytes: bytes) -> bytes:
@@ -153,12 +183,16 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
         filter_parts = [f"[{i}:a]aformat=channel_layouts=stereo[s{i}]" for i in range(n)]
         filter_parts.append("".join(f"[s{i}]" for i in range(n)) + f"amerge=inputs={n}[aout]")
 
-        # Explicitly force the 'ogg' format muxer so ffmpeg accepts the .ogg extension
+        # Explicitly force the 'ogg' format muxer so ffmpeg accepts the .ogg extension.
+        # -page_duration forces small pages (~2048-3072 sample granules) matching
+        # stock Harmonix moggs; ffmpeg's default libvorbis paging emits ~1s/56KB
+        # pages that Rock Band's Milkshake audio engine cannot decode reliably.
         cmd.extend([
             "-filter_complex", ";".join(filter_parts),
             "-map", "[aout]",
             "-c:a", "libvorbis",
             "-q:a", "5",
+            "-page_duration", str(PAGE_DURATION_US),
             "-f", "ogg",
             str(ogg_tmp)
         ])

@@ -34,6 +34,7 @@ The crash was **not** a malformed template milo. The template's real milo termin
 ## Other things that matter in this flow
 
 - **Song name must match filenames.** The dta `(name "songs/open_road_song/open_road_song")` -> shortname `open_road_song`, matching `open_road_song.mid`, `gen/open_road_song.milo_xbox`, `gen/open_road_song_keep.png_xbox`.
+- **Mogg Ogg page size is a runtime concern, not a conversion one (v0.0058).** LibForge copies the `.mogg` byte-for-byte into the PKG, so CON→PKG succeeds regardless of Ogg page size — but in RB4 the embedded Ogg must use small ~4KB pages (`ffmpeg -page_duration 40000`) or Milkshake fails to decode (no audio preview in the song list, song "completes instantly" at 0%). See [mogg_audio_format.md](mogg_audio_format.md).
 - **MILO_D / compressed blocks are unsupported by LibForge.** The 311 reference milo (`MILO_D`, `0xCDBEDEAF`) throws `NotImplementedException("Zlib block inflation not implemented yet")` when a block lacks the `0x01000000` compressed flag — so it can't be used as a conversion source either. Only MILO_A (uncompressed) milos work end-to-end.
 - **Artwork failures are non-fatal.** A failed `TextureConverter.MiloPngToTexture` just disables album art via the `warner` callback.
 

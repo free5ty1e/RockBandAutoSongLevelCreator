@@ -3,9 +3,11 @@
 from pathlib import Path
 import logging
 
+from autorb.export.mogg_builder import read_mogg_duration_ms
+
 logger = logging.getLogger(__name__)
 
-def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path) -> Path:
+def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path, song_length: int | None = None) -> Path:
     """
     Generates the Rock Band songs.dta metadata configuration file in standard concise single-line property format.
     """
@@ -15,6 +17,14 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path) -> Path:
     title = metadata.get('title', 'Open Road Song')
     artist = metadata.get('artist', 'Eve 6')
     album = metadata.get('album', title)
+
+    if song_length is None:
+        mogg_path = output_dir / f"{song_id}.mogg"
+        if mogg_path.exists():
+            song_length = read_mogg_duration_ms(mogg_path)
+        else:
+            logger.warning("MOGG not found; defaulting song_length to 198089 ms.")
+            song_length = 198089
 
     dta_lines = [
         f"({song_id}",
@@ -41,7 +51,7 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path) -> Path:
         "   (anim_tempo kTempoSlow)",
         "   (song_scroll_speed 2300)",
         "   (preview 50000 80000)",
-        "   (song_length 230162)",
+        f"   (song_length {song_length})",
         "   (rank",
         "      (drum 150)",
         "      (guitar 150)",

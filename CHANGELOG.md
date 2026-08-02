@@ -2,6 +2,13 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0058] - 2026-08-02
+- Fixed in-game RB4 audio playback: the CON converted and installed (RB4DX + ForgeTool) but the song had **no audio preview in the song list** and **completed instantly at 0%** when played. Root cause: the MOGG's embedded Ogg stream used ffmpeg's default libvorbis paging (~1-second / ~56KB pages, granule deltas ~31000-36000 samples). Rock Band's Milkshake audio engine cannot reliably decode such coarse pages. Known-good stock moggs (e.g. "311 - Down" RB3 DLC) use ~4KB pages with ~2048-3072 sample granules (4006 pages for the full song).
+- `mogg_builder.py`: added `PAGE_DURATION_US = 40000` and passed `-page_duration str(PAGE_DURATION_US)` to the ffmpeg libvorbis encode command in `build_mogg_from_stems()`, forcing the Ogg muxer to emit small ~4KB pages (~2048-3072 sample granules) that Milkshake can decode.
+- `mogg_builder.py`: added `read_mogg_duration_ms(mogg_path)` which parses the MOGG `header_size`, locates the Vorbis identification header's sample rate and the final audio granule, and returns the integer duration in milliseconds.
+- `dta_writer.py`: `generate_songs_dta()` now accepts an optional `song_length` param; if not given, it derives the value from the MOGG at `output_dir/{song_id}.mogg` via `read_mogg_duration_ms()` (falls back to 198089 ms with a warning if the MOGG is absent). Removed the hardcoded `(song_length 230162)` line; the generator now emits `(song_length {song_length})`.
+- Rebuilt `output/open_road_song.con` (14966784 bytes) with the fixed MOGG (4233 pages, avg 3414 bytes/page, granule deltas 2048/2624) and songs.dta with `(song_length 198089)`. `stfs_validator.py` reports VALID, `forge_simulator.py` SUCCESS, `pytest` passes (1 passed).
+
 ## [0.0057] - 2026-08-02
 - Fixed ForgeTool "CON to PKG Conversion" crash (`System.NullReferenceException` at `LibForge.Midi.RBMidConverter.MidiConverter.<>c.<HandleDrumTrk>b__65_9` / `HandleGuitarBass`) introduced by v0.0056. Root cause: `RBMidConverter` builds per-difficulty `gem_tracks` as a 4-element array (Easy/Medium/Hard/Expert) that is filled lazily — only when a note for that difficulty is seen — so the v0.0056 placeholder (a single note at pitch 60) left 3 slots null and `gem_tracks.Select(g => g.ToArray()).ToArray()` (RBMidConverter.cs:606 and :975) threw the NRE.
 - `midi_generator.py`: `build_placeholder_track()` now emits one note on **each** difficulty (60/72/84/96 = EasyStart/MediumStart/HardStart/ExpertStart from RBMidConverter.cs) per track, so all four `gem_tracks` slots are non-null and ForgeTool conversion no longer NREs. Added `PLACEHOLDER_DIFFICULTY_PITCHES = (60, 72, 84, 96)` (replaces the single `PLACEHOLDER_NOTE_PITCH = 60` approach).
