@@ -22,12 +22,23 @@ def set_entry_name(con_data: bytearray, ft_offset: int, entry_idx: int, new_name
     new_flags = name_len | (0x80 if is_dir else 0x40)
     con_data[entry_addr + 0x28] = new_flags
 
+def set_entry_allocation(con_data: bytearray, ft_offset: int, entry_idx: int, start_block: int, size: int):
+    entry_addr = ft_offset + entry_idx * 0x40
+    block_count = (size + BLOCK_SIZE - 1) // BLOCK_SIZE
+    
+    # Size (big endian 4 bytes at 0x34)
+    con_data[entry_addr + 0x34 : entry_addr + 0x38] = size.to_bytes(4, 'big')
+    # Allocated blocks (little endian 3 bytes at 0x29)
+    con_data[entry_addr + 0x29 : entry_addr + 0x2C] = block_count.to_bytes(3, 'little')
+    # Real blocks (little endian 3 bytes at 0x2C)
+    con_data[entry_addr + 0x2C : entry_addr + 0x2F] = block_count.to_bytes(3, 'little')
+    # Start block (little endian 3 bytes at 0x2F)
+    con_data[entry_addr + 0x2F : entry_addr + 0x32] = start_block.to_bytes(3, 'little')
+
 def patch_stfs_header_metadata(con_data: bytearray, title: str, artist: str):
-    # Patch STFS header title at 0x43D (UTF-16-BE)
     title_encoded = title.encode('utf-16-be')
     con_data[0x43D : 0x43D + len(title_encoded)] = title_encoded
     
-    # Patch STFS header artist at 0x413 (UTF-16-BE)
     artist_encoded = artist.encode('utf-16-be')
     con_data[0x413 : 0x413 + len(artist_encoded)] = artist_encoded
 
@@ -62,7 +73,6 @@ def package_con(
         
     click.echo(f"Staged clean song folder structure at: {song_staging_dir}")
 
-    # Use SmellsLikeNirvana_rb3con as a known-good signed template CON
     template_con = Path("output/known_good_cons/SmellsLikeNirvana_rb3con")
     con_file_path = output_path / f"{song_id}.con"
     
@@ -74,7 +84,6 @@ def package_con(
 
     con_data = bytearray(con_file_path.read_bytes())
 
-    # Patch STFS header package metadata
     patch_stfs_header_metadata(con_data, title, artist)
 
     dta_content = target_dta_parent.read_bytes()
@@ -83,42 +92,47 @@ def package_con(
 
     ft_offset = 0xC000
 
-    # Update file table entry names to match active song_id
+    # Update file table entry names
     set_entry_name(con_data, ft_offset, 1, song_id)
     set_entry_name(con_data, ft_offset, 4, f"{song_id}.mid")
     set_entry_name(con_data, ft_offset, 5, f"{song_id}.mogg")
     set_entry_name(con_data, ft_offset, 6, f"{song_id}.milo_xbox")
     set_entry_name(con_data, ft_offset, 7, f"{song_id}_keep.png_xbox")
 
-    # Helper to update file table entry and write payload
-    def update_entry(entry_idx: int, new_content: bytes):
-        entry_addr = ft_offset + entry_idx * 0x40
-        entry_bytes = con_data[entry_addr : entry_addr + 0x40]
-        
-        start_block = int.from_bytes(entry_bytes[0x2F:0x32], 'little')
-        size = len(new_content)
-        block_count = (size + BLOCK_SIZE - 1) // BLOCK_SIZE
+    # Calculate contiguous block allocations starting at block 0
+    dta_size = len(dta_content)
+    dta_blocks = (dta_size + BLOCK_SIZE - 1) // BLOCK_SIZE
 
-        con_data[entry_addr + 0x34 : entry_addr + 0x38] = size.to_bytes(4, 'big')
-        con_data[entry_addr + 0x29 : entry_addr + 0x2C] = block_count.to_bytes(3, 'little')
-        con_data[entry_addr + 0x2C : entry_addr + 0x2F] = block_count.to_bytes(3, 'little')
+    mid_size = len(midi_content)
+    mid_blocks = (mid_size + BLOCK_SIZE - 1) // BLOCK_SIZE
 
+    mogg_size = len(mogg_content)
+    mogg_blocks = (mogg_size + BLOCK_SIZE - 1) // BLOCK_SIZE
+
+    dta_start = 0
+    mid_start = dta_blocks
+    mogg_start = mid_start + mid_blocks
+
+    # Update file table entries 3, 4, 5
+    set_entry_allocation(con_data, ft_offset, 3, dta_start, dta_size)
+    set_entry_allocation(con_data, ft_offset, 4, mid_start, mid_size)
+    set_entry_allocation(con_data, ft_offset, 5, mogg_start, mogg_size)
+
+    # Helper to write payload at block
+    def write_payload(start_block: int, content: bytes):
         payload_offset = 0xD000 + start_block * BLOCK_SIZE
+        size = len(content)
+        block_count = (size + BLOCK_SIZE - 1) // BLOCK_SIZE
+        total_space = block_count * BLOCK_SIZE
         
-        # If updating songs.dta (entry 3), zero out 8KB to clear any leftover template DTA text
-        if entry_idx == 3:
-            con_data[payload_offset : payload_offset + 8192] = b'\x00' * 8192
+        con_data[payload_offset : payload_offset + total_space] = b'\x00' * total_space
+        con_data[payload_offset : payload_offset + size] = content
 
-        con_data[payload_offset : payload_offset + size] = new_content
-
-    # Update entry 3 (songs.dta)
-    update_entry(3, dta_content)
-    # Update entry 4 (mid)
-    update_entry(4, midi_content)
-    # Update entry 5 (mogg)
-    update_entry(5, mogg_content)
+    write_payload(dta_start, dta_content)
+    write_payload(mid_start, midi_content)
+    write_payload(mogg_start, mogg_content)
 
     con_file_path.write_bytes(con_data)
     os.utime(con_file_path, None)
-    click.echo(f"Successfully patched signed template CON with metadata and asset retention: {con_file_path}")
+    click.echo(f"Successfully patched signed template CON with contiguous block allocation: {con_file_path}")
     return con_file_path

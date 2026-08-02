@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0048] - 2026-07-31
+- Implemented contiguous block allocation (`set_entry_allocation` and `write_payload` in `con_packer.py`) starting at block 0 for `songs.dta`, followed contiguously by `.mid` and `.mogg`, ensuring correct block start indexing and preventing misaligned file reads.
+
 ## [0.0047] - 2026-07-31
 - Added STFS header metadata patching (`patch_stfs_header_metadata` in `con_packer.py`) to dynamically update package title and artist strings in the STFS header block (UTF-16-BE at offsets `0x43D` and `0x413`), preventing NullReferenceExceptions during metadata reflection in ForgeTool GUI.
 
