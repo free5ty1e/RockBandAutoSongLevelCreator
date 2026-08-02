@@ -60,18 +60,40 @@ def build_default_album_art(size: int = 256) -> Image.Image:
         )
 
     # Title text
-    title_font = _font(_FONT_BOLD, max(14, size // 6))
-    sub_font = _font(_FONT_BOLD, max(10, size // 9))
-    tag_font = _font(_FONT_REGULAR, max(8, size // 16))
+    title_font = _font(_FONT_BOLD, max(14, size // 7))
+    sub_font = _font(_FONT_BOLD, max(10, size // 10))
+    tag_font = _font(_FONT_REGULAR, max(8, size // 18))
+    badge_font = _font(_FONT_BOLD, max(9, size // 16))
 
     def _center_text(d, text, font, y, fill):
         bbox = d.textbbox((0, 0), text, font=font)
         tw = bbox[2] - bbox[0]
         d.text(((size - tw) / 2 - bbox[0], y), text, font=font, fill=fill)
 
-    _center_text(draw, "CHRIS PRIME", title_font, int(size * 0.16), (255, 255, 255, 255))
-    _center_text(draw, "CUSTOM", sub_font, int(size * 0.30), (255, 150, 0, 255))
+    _center_text(draw, "CHRIS", title_font, int(size * 0.12), (255, 255, 255, 255))
+    _center_text(draw, "PRIME", title_font, int(size * 0.24), (255, 255, 255, 255))
+    _center_text(draw, "CUSTOM", sub_font, int(size * 0.36), (255, 150, 0, 255))
     _center_text(draw, "rock band custom song", tag_font, int(size * 0.84), (200, 200, 200, 255))
+
+    # "BOT" badge in the top-right corner so songlists show this was script-made
+    badge_w = int(size * 0.16)
+    badge_h = int(size * 0.07)
+    bx = size - m - badge_w - 4
+    by = m + 4
+    draw.rounded_rectangle(
+        [bx, by, bx + badge_w, by + badge_h],
+        radius=max(3, badge_h // 3),
+        fill=(255, 150, 0, 255),
+        outline=(255, 255, 255, 220),
+        width=1,
+    )
+    bbox = draw.textbbox((0, 0), "BOT", font=badge_font)
+    draw.text(
+        (bx + (badge_w - (bbox[2] - bbox[0])) / 2 - bbox[0], by + (badge_h - (bbox[3] - bbox[1])) / 2 - bbox[1]),
+        "BOT",
+        font=badge_font,
+        fill=(20, 20, 20, 255),
+    )
 
     # Flatten onto an opaque black canvas so the texture encodes as DXT1
     bg = Image.new("RGBA", img.size, (0, 0, 0, 255))

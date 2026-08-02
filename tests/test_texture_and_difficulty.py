@@ -79,9 +79,8 @@ def test_difficulty_ranks_use_chart_density(tmp_path):
 
     ranks = compute_ranks(midi, 10000)
     assert ranks["drum"] > ranks["vocals"]
-    assert ranks["band"] == max(
-        1, round((ranks["drum"] + ranks["guitar"] + ranks["bass"] + ranks["vocals"]) / 4)
-    )
+    # band = hardest charted instrument (drum, level 2) -> band level-2 midpoint
+    assert ranks["band"] == 188
     assert ranks["keys"] == 0
     assert ranks["real_guitar"] == 0
 
