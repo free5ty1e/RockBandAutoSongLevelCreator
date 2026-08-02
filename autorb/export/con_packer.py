@@ -54,7 +54,8 @@ def package_con(
     output_path = Path(output_dir)
     songs_root = output_path / "songs"
     song_staging_dir = songs_root / song_id
-    song_staging_dir.mkdir(parents=True, exist_ok=True)
+    gen_staging_dir = song_staging_dir / "gen"
+    gen_staging_dir.mkdir(parents=True, exist_ok=True)
     
     target_dta_parent = songs_root / "songs.dta"
     target_dta_sub = song_staging_dir / "songs.dta"
@@ -70,8 +71,6 @@ def package_con(
         shutil.copy2(mogg_path, target_mogg)
     if midi_path.resolve() != target_mid.resolve():
         shutil.copy2(midi_path, target_mid)
-        
-    click.echo(f"Staged clean song folder structure at: {song_staging_dir}")
 
     template_con = Path("output/known_good_cons/SmellsLikeNirvana_rb3con")
     con_file_path = output_path / f"{song_id}.con"
@@ -82,6 +81,32 @@ def package_con(
     else:
         raise FileNotFoundError(f"Template CON not found at {template_con}")
 
+    template_data = template_con.read_bytes()
+    ft_offset = 0xC000
+    if not (b'songs' in template_data[0xC000:0xC000+0x40]):
+        if b'songs' in template_data[0xA000:0xA000+0x40]:
+            ft_offset = 0xA000
+
+    # Extract milo and png from template if not present
+    target_milo = gen_staging_dir / f"{song_id}.milo_xbox"
+    target_png = gen_staging_dir / f"{song_id}_keep.png_xbox"
+
+    if not target_milo.exists() or not target_png.exists():
+        entry6 = template_data[ft_offset + 6*0x40 : ft_offset + 7*0x40]
+        start6 = int.from_bytes(entry6[0x2F:0x32], 'little')
+        size6 = int.from_bytes(entry6[0x34:0x38], 'big')
+        milo_bytes = template_data[0xD000 + start6 * BLOCK_SIZE : 0xD000 + start6 * BLOCK_SIZE + size6]
+        target_milo.write_bytes(milo_bytes)
+
+        entry7 = template_data[ft_offset + 7*0x40 : ft_offset + 8*0x40]
+        start7 = int.from_bytes(entry7[0x2F:0x32], 'little')
+        size7 = int.from_bytes(entry7[0x34:0x38], 'big')
+        png_bytes = template_data[0xD000 + start7 * BLOCK_SIZE : 0xD000 + start7 * BLOCK_SIZE + size7]
+        target_png.write_bytes(png_bytes)
+        click.echo("Extracted and staged valid .milo_xbox and .png_xbox assets from template.")
+
+    click.echo(f"Staged clean song folder structure at: {song_staging_dir}")
+
     con_data = bytearray(con_file_path.read_bytes())
 
     patch_stfs_header_metadata(con_data, title, artist)
@@ -89,8 +114,8 @@ def package_con(
     dta_content = target_dta_parent.read_bytes()
     midi_content = target_mid.read_bytes()
     mogg_content = target_mogg.read_bytes()
-
-    ft_offset = 0xC000
+    milo_content = target_milo.read_bytes()
+    png_content = target_png.read_bytes()
 
     # Update file table entry names
     set_entry_name(con_data, ft_offset, 1, song_id)
@@ -99,7 +124,7 @@ def package_con(
     set_entry_name(con_data, ft_offset, 6, f"{song_id}.milo_xbox")
     set_entry_name(con_data, ft_offset, 7, f"{song_id}_keep.png_xbox")
 
-    # Calculate contiguous block allocations starting at block 0
+    # Calculate contiguous block allocations for all 5 files starting at block 0
     dta_size = len(dta_content)
     dta_blocks = (dta_size + BLOCK_SIZE - 1) // BLOCK_SIZE
 
@@ -109,14 +134,24 @@ def package_con(
     mogg_size = len(mogg_content)
     mogg_blocks = (mogg_size + BLOCK_SIZE - 1) // BLOCK_SIZE
 
-    dta_start = 0
-    mid_start = dta_blocks
-    mogg_start = mid_start + mid_blocks
+    milo_size = len(milo_content)
+    milo_blocks = (milo_size + BLOCK_SIZE - 1) // BLOCK_SIZE
 
-    # Update file table entries 3, 4, 5
+    png_size = len(png_content)
+    png_blocks = (png_size + BLOCK_SIZE - 1) // BLOCK_SIZE
+
+    dta_start = 0
+    mid_start = dta_start + dta_blocks
+    mogg_start = mid_start + mid_blocks
+    milo_start = mogg_start + mogg_blocks
+    png_start = milo_start + milo_blocks
+
+    # Update file table entries 3, 4, 5, 6, 7
     set_entry_allocation(con_data, ft_offset, 3, dta_start, dta_size)
     set_entry_allocation(con_data, ft_offset, 4, mid_start, mid_size)
     set_entry_allocation(con_data, ft_offset, 5, mogg_start, mogg_size)
+    set_entry_allocation(con_data, ft_offset, 6, milo_start, milo_size)
+    set_entry_allocation(con_data, ft_offset, 7, png_start, png_size)
 
     # Helper to write payload at block
     def write_payload(start_block: int, content: bytes):
@@ -131,8 +166,10 @@ def package_con(
     write_payload(dta_start, dta_content)
     write_payload(mid_start, midi_content)
     write_payload(mogg_start, mogg_content)
+    write_payload(milo_start, milo_content)
+    write_payload(png_start, png_content)
 
     con_file_path.write_bytes(con_data)
     os.utime(con_file_path, None)
-    click.echo(f"Successfully patched signed template CON with contiguous block allocation: {con_file_path}")
+    click.echo(f"Successfully patched signed template CON with fully contiguous block allocation for all assets: {con_file_path}")
     return con_file_path

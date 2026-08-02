@@ -2,6 +2,13 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0050] - 2026-08-02
+- Implemented fully contiguous block allocation and extraction for ALL CON assets (`songs.dta`, `.mid`, `.mogg`, `.milo_xbox`, `_keep.png_xbox`) in `con_packer.py`, preventing large `.mogg` files (e.g. 14.5 MB) from overlapping and corrupting `.milo_xbox` and `.png_xbox` graphic assets.
+
+## [0.0049] - 2026-08-02
+- Fixed MIDI generator (`midi_generator.py`) to correctly extract `"synced_lyrics"` from synchronized track data instead of `"synced_words"`, producing a fully populated 4.8 KB MIDI chart with all 284 lyric/note events instead of a 113-byte stub.
+- Aligned `songs.dta` generator (`dta_writer.py`) with concise single-line property format matching known-good working CON packages (`311 - Down`), preventing DTA symbol/array parsing errors.
+
 ## [0.0048] - 2026-07-31
 - Implemented contiguous block allocation (`set_entry_allocation` and `write_payload` in `con_packer.py`) starting at block 0 for `songs.dta`, followed contiguously by `.mid` and `.mogg`, ensuring correct block start indexing and preventing misaligned file reads.
 
