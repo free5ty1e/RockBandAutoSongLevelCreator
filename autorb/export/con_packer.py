@@ -44,6 +44,64 @@ def repair_milo(milo_bytes: bytes) -> bytes:
     out.extend(ADDE_PADDING)
     return bytes(out)
 
+
+def _libforge_milo_parseable(milo_bytes: bytes) -> bool:
+    """Replicate LibForge 0.1.19 MiloFile.ReadFromStream -> ParseDirectory ->
+    CharLipSync.FromStream and return True if every ObjectDir entry terminates
+    with a 0xADDEADDE marker (i.e. FindNext never returns -1, which would make
+    ForgeTool's ReadBytes(-1) throw an OverflowException)."""
+    import struct
+
+    def read_u32be(buf, p):
+        return struct.unpack('>I', buf[p:p + 4])[0]
+
+    def read_str(buf, p):
+        length = read_u32be(buf, p)
+        return buf[p + 4: p + 4 + length].decode('utf-8', 'replace'), p + 4 + length
+
+    def find_next(buf, p):
+        start = p
+        magic = 0
+        while p < len(buf):
+            magic = ((magic << 8) | buf[p]) & 0xFFFFFFFF
+            p += 1
+            if magic == 0xADDEADDE:
+                return (p - 4) - start
+        return -1
+
+    if int.from_bytes(milo_bytes[0:4], 'little') != MILO_A_MAGIC:
+        return False
+    offset = int.from_bytes(milo_bytes[4:8], 'little')
+    block_count = int.from_bytes(milo_bytes[8:12], 'little')
+    total_size = 0
+    for i in range(block_count):
+        total_size += int.from_bytes(milo_bytes[0x10 + i * 4: 0x14 + i * 4], 'little')
+    if offset + total_size > len(milo_bytes):
+        return False
+    buf = milo_bytes[offset: offset + total_size]
+    p = 0
+    version = read_u32be(buf, p); p += 4
+    if version not in (25, 28):
+        return False
+    _, p = read_str(buf, p)
+    _, p = read_str(buf, p)
+    p += 8
+    count = read_u32be(buf, p); p += 4
+    if count > 64:
+        return False
+    for _ in range(count):
+        _, p = read_str(buf, p)
+        _, p = read_str(buf, p)
+    start = p
+    if find_next(buf, p) < 0:
+        return False
+    p += find_next(buf, p) + 4
+    for _ in range(count):
+        if find_next(buf, p) < 0:
+            return False
+        p += find_next(buf, p) + 4
+    return True
+
 # STFS CON data block addressing.  Readers interpret file-table entry "start"
 # as a *logical* block number whose physical location is:
 #     physical_offset = 0xC000 + logical_to_physical(logical) * 0x1000
@@ -156,6 +214,11 @@ def package_con(
     repaired = repair_milo(milo_bytes)
     if len(repaired) != len(milo_bytes):
         click.echo("Patched template milo: appended missing 0xADDEADDE terminator for LibForge compat.")
+    if not _libforge_milo_parseable(repaired):
+        raise RuntimeError(
+            "Staged milo is not parseable by LibForge (ForgeTool): every ObjectDir entry must "
+            "terminate with a 0xADDEADDE marker or PKG conversion crashes in MiloFile.ParseDirectory."
+        )
     target_milo.write_bytes(repaired)
 
     entry7 = template_data[ft_offset + 7*0x40 : ft_offset + 8*0x40]

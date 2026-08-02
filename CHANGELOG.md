@@ -2,6 +2,10 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0053] - 2026-08-02
+- Added `_libforge_milo_parseable()` guard in `con_packer.py`: every staged `.milo_xbox` is validated against a faithful replication of LibForge 0.1.19 `MiloFile.ReadFromStream` -> `ParseDirectory` (all `0xADDEADDE` entry terminators present) before the CON is written. An unparseable milo now raises `RuntimeError` instead of silently producing a CON that crashes ForgeTool's "CON to PKG Conversion" with `OverflowException` in `ReadBytes(-1)`.
+- Rebuilt `output/open_road_song.con`; verified via validator, forge_simulator, pytest, and byte-checks.
+
 ## [0.0052] - 2026-08-02
 - Fixed ForgeTool "CON to PKG Conversion" crash (`System.OverflowException: Array dimensions exceeded supported range` in `LibForge.Milo.MiloFile.ParseDirectory` / `StreamExtensions.ReadBytes(-1)`). The staged `gen/*.milo_xbox` (extracted from the `SmellsLikeNirvana_rb3con` template) is an RBN v28 milo whose `CharLipSync "song.lipsync"` payload runs to the end of the block region with no trailing `0xADDEADDE` padding marker, so LibForge's entry-size scan (`FindNext`) returns `-1`.
 - Added `repair_milo()` in `con_packer.py`: for MILO_A (uncompressed) milos whose final block's data does not end in the `0xADDEADDE` terminator, it appends the marker to the file and grows the last block's size field so the marker falls inside the block region LibForge copies. CharLipSync data itself is byte-identical; the marker only supplies the missing format terminator, so in-game lipsync is unchanged.
