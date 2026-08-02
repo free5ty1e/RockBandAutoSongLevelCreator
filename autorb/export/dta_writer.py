@@ -3,11 +3,13 @@
 from pathlib import Path
 import logging
 
+from autorb.export.difficulty import compute_ranks
 from autorb.export.mogg_builder import read_mogg_duration_ms
 
 logger = logging.getLogger(__name__)
 
-def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path, song_length: int | None = None) -> Path:
+def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path, song_length: int | None = None,
+                       ranks: dict | None = None) -> Path:
     """
     Generates the Rock Band songs.dta metadata configuration file in standard concise single-line property format.
     """
@@ -25,6 +27,18 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path, song_leng
         else:
             logger.warning("MOGG not found; defaulting song_length to 198089 ms.")
             song_length = 198089
+
+    if ranks is None:
+        midi_path = output_dir / f"{song_id}.mid"
+        if midi_path.exists():
+            ranks = compute_ranks(midi_path, song_length)
+        else:
+            logger.warning("MIDI not found; defaulting all ranks to 100.")
+            ranks = {"drum": 100, "guitar": 100, "bass": 100, "vocals": 100,
+                     "keys": 0, "real_guitar": 0, "real_bass": 0, "real_keys": 0, "band": 100}
+    else:
+        ranks = {k: int(ranks.get(k, 0)) for k in
+                 ("drum", "guitar", "bass", "vocals", "keys", "real_guitar", "real_bass", "real_keys", "band")}
 
     dta_lines = [
         f"({song_id}",
@@ -61,15 +75,15 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path, song_leng
         f"   (song_length {song_length})",
         "   (solo (vocal_percussion))",
         "   (rank",
-        "      (drum 150)",
-        "      (guitar 150)",
-        "      (bass 150)",
-        "      (vocals 150)",
-        "      (keys 0)",
-        "      (real_guitar 0)",
-        "      (real_bass 0)",
-        "      (real_keys 0)",
-        "      (band 150)",
+        f"      (drum {ranks['drum']})",
+        f"      (guitar {ranks['guitar']})",
+        f"      (bass {ranks['bass']})",
+        f"      (vocals {ranks['vocals']})",
+        f"      (keys {ranks['keys']})",
+        f"      (real_guitar {ranks['real_guitar']})",
+        f"      (real_bass {ranks['real_bass']})",
+        f"      (real_keys {ranks['real_keys']})",
+        f"      (band {ranks['band']})",
         "   )",
         "   (format 10)",
         "   (version 30)",

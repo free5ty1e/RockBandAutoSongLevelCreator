@@ -176,7 +176,8 @@ def package_con(
     midi_path: Path,
     dta_path: Path,
     title: str = "Open Road Song",
-    artist: str = "Eve 6"
+    artist: str = "Eve 6",
+    album_art_bytes: bytes | None = None
 ) -> Path:
     output_path = Path(output_dir)
     songs_root = output_path / "songs"
@@ -236,6 +237,11 @@ def package_con(
     start7 = int.from_bytes(entry7[0x2F:0x32], 'little')
     size7 = int.from_bytes(entry7[0x34:0x38], 'big')
     png_bytes = read_file_blocks(template_data, start7, size7)
+    if album_art_bytes is not None:
+        if not album_art_bytes.startswith(b"\x01"):
+            raise ValueError("album_art_bytes must be a Rock Band _keep.png_xbox texture")
+        png_bytes = album_art_bytes
+        click.echo("Using custom album art texture.")
     target_png.write_bytes(png_bytes)
     click.echo("Extracted and staged valid .milo_xbox and .png_xbox assets from template.")
 

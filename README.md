@@ -113,6 +113,11 @@ python -m autorb.cli \
 | `-y, --year` | Integer | Release year (Default: Current Year). |
 | `-g, --genre` | String | Genre string (Default: `"Rock"`). |
 | `-o, --output-dir` | Path | Destination folder for the compiled CON file (Default: `./output`). |
+| `--album-art` | Path | Optional. Custom album art image (PNG/JPG) for the CON's `_keep.png_xbox` texture. Defaults to a generated "Chris Prime Custom" cover. |
+| `--skip-separation` | Flag | Skip AI stem separation; requires `drums.wav`, `bass.wav`, `vocals.wav`, `other.wav` in `[output-dir]/stems`. |
+| `--skip-tempo-detection` | Flag | Skip beat tracking; loads `tempo_map.json` from the output directory. |
+| `--skip-vocals` | Flag | Skip WhisperX alignment and basic-pitch; loads `vocals_cache.json`. |
+| `--skip-mogg` | Flag | Skip MOGG building; reuses the existing `.mogg` file. |
 
 ---
 

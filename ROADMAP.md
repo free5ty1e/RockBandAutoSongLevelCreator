@@ -7,25 +7,12 @@
 - [x] **Automatic Instrument Transcription:** Spotify's **Basic-Pitch** and signal processing for 5-lane instrument tracks.
 - [x] **MOGG Audio Container Builder:** Multi-channel OGG mixing with Harmonix container format support (`--skip-mogg` CLI flag).
 - [x] **C3/Magma Compatible DTA Writer:** Automated `songs.dta` metadata generation formatted with single-quoted keys and track mappings.
-- [x] **Devcontainer Test Suite:** Comprehensive PyTest test suite (`tests/test_con.py`) running locally in the devcontainer.
+- [x] **Automatic Difficulty Rating Calculator:** Per-instrument `rank` values now computed from chart note density (verified against the "311 - Down" DLC reference: our linear factors reproduce its 311/250/225/144/233 ranks as 302/246/218/144/228) instead of the hardcoded `(rank ... 150 ...)` block that rendered every song as difficulty 1 of 6.
+- [x] **Custom Album Art Support:** New `--album-art` CLI flag encodes any PNG/JPG cover into the CON's `_keep.png_xbox` texture (reverse-engineered HMXBitmap header + byte-swapped DXT1/DXT5, matching SuperFreq `png2tex --platform x360` output); defaults to a generated generic "Chris Prime Custom" image.
+- [x] **Devcontainer Test Suite:** Comprehensive PyTest test suite (`tests/test_con.py`, `tests/test_texture_and_difficulty.py`) running locally in the devcontainer.
 
 ## In Progress
-- [~] **Xbox 360 STFS / CON Packaging & Validation:** STFS package assembler with signed template cloning/patching and automated structure validator (`autorb/export/stfs_validator.py`).  Currently fails to open with ForgeTools GUI, which has provided errors such as:
-
-```
-Error loading C:\Users\test\Documents\code\RockBandAutoSongLevelCreator\output\open_road_song.con: File references non-existent directory.
-
-Error loading \\192.168.100.135\incoming\temp\Rb4Auto\open_road_song.con: Object reference not set to an instance of an object.
-
-Error loading \\192.168.100.135\incoming\temp\Rb4Auto\open_road_song.con: Element at index 0 is not an Array. It is DataSymbol
-
-Error loading \\192.168.100.135\incoming\temp\Rb4Auto\open_road_song.con: Unable to find the file songs.dta
-
-Error loading \\192.168.100.135\incoming\temp\Rb4Auto\open_road_song.con: Whitespace encountered in symbol.
-
-```
-
-See recent git commit messages for details regarding current STFS packaging issues.
+- [~] **In-Game Audio Playback:** The STFS/CON package now validates and loads in ForgeTool (`STFS VALID`, `forge SUCCESS`), but on the PS4 test environment (RB4DX) the song still has no audio preview in the song list, and in-game the vocal fretboard/lyrics render for ~0.5 s before the song instantly finishes at 0%. Three consecutive MOGG structural fixes (small Ogg pages, real `song_length`, 10-channel 311 "Down" layout mirroring) produced identical symptoms, so the remaining cause is likely elsewhere (e.g. the `.mogg.dta`/`.moggsong` metadata, MIDI chart end markers, or how the engine starts the audio stream).
 
 ## Planned Features & Enhancements
 - [ ] **Vocal Gender Detection:** Automatically analyze the pitch and spectral characteristics of the dominant vocal stem to infer singer vocal gender (`'male'` vs `'female'`) for `songs.dta` metadata.
