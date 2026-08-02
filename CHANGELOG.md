@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0045] - 2026-07-31
+- Updated `songs.dta` generator (`dta_writer.py`) to use standard unquoted bare symbols for keys and song IDs (e.g. `(name "...")`, `(genre alternative)`), complying with official Rock Band 3 DTA formatting and resolving symbol parsing errors in ForgeTool GUI.
+
 ## [0.0044] - 2026-07-31
 - Added comprehensive zero-padding/clearing in `con_packer.py` prior to writing patched payload files (like `songs.dta`) to ensure no leftover template garbage from `SmellsLikeNirvana_rb3con` remains in allocated blocks, preventing `Whitespace encountered in symbol` parsing errors.
 
