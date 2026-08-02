@@ -90,8 +90,11 @@ def package_con(
         con_data[entry_addr + 0x2C : entry_addr + 0x2F] = block_count.to_bytes(3, 'little')
 
         payload_offset = 0xD000 + start_block * BLOCK_SIZE
-        padding_space = block_count * BLOCK_SIZE
-        con_data[payload_offset : payload_offset + padding_space] = b'\x00' * padding_space
+        
+        # If updating songs.dta (entry 3), zero out 8KB to clear any leftover template DTA text
+        if entry_idx == 3:
+            con_data[payload_offset : payload_offset + 8192] = b'\x00' * 8192
+
         con_data[payload_offset : payload_offset + size] = new_content
 
     # Update entry 3 (songs.dta)
@@ -103,5 +106,5 @@ def package_con(
 
     con_file_path.write_bytes(con_data)
     os.utime(con_file_path, None)
-    click.echo(f"Successfully patched signed template CON: {con_file_path}")
+    click.echo(f"Successfully patched signed template CON with safe DTA clearing: {con_file_path}")
     return con_file_path

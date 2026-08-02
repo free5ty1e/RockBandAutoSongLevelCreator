@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0044] - 2026-07-31
+- Added comprehensive zero-padding/clearing in `con_packer.py` prior to writing patched payload files (like `songs.dta`) to ensure no leftover template garbage from `SmellsLikeNirvana_rb3con` remains in allocated blocks, preventing `Whitespace encountered in symbol` parsing errors.
+
 ## [0.0043] - 2026-07-31
 - Re-enabled signed template CON cloning in `con_packer.py` combined with the 4-stem aligned `songs.dta` (`dta_writer.py`), satisfying both STFS cryptographic container validation and DTA S-expression parsing rules in ForgeTool GUI.
 
