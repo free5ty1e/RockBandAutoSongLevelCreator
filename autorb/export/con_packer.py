@@ -22,12 +22,23 @@ def set_entry_name(con_data: bytearray, ft_offset: int, entry_idx: int, new_name
     new_flags = name_len | (0x80 if is_dir else 0x40)
     con_data[entry_addr + 0x28] = new_flags
 
+def patch_stfs_header_metadata(con_data: bytearray, title: str, artist: str):
+    # Patch STFS header title at 0x43D (UTF-16-BE)
+    title_encoded = title.encode('utf-16-be')
+    con_data[0x43D : 0x43D + len(title_encoded)] = title_encoded
+    
+    # Patch STFS header artist at 0x413 (UTF-16-BE)
+    artist_encoded = artist.encode('utf-16-be')
+    con_data[0x413 : 0x413 + len(artist_encoded)] = artist_encoded
+
 def package_con(
     output_dir: str | Path,
     song_id: str,
     mogg_path: Path,
     midi_path: Path,
-    dta_path: Path
+    dta_path: Path,
+    title: str = "Open Road Song",
+    artist: str = "Eve 6"
 ) -> Path:
     output_path = Path(output_dir)
     songs_root = output_path / "songs"
@@ -62,6 +73,9 @@ def package_con(
         raise FileNotFoundError(f"Template CON not found at {template_con}")
 
     con_data = bytearray(con_file_path.read_bytes())
+
+    # Patch STFS header package metadata
+    patch_stfs_header_metadata(con_data, title, artist)
 
     dta_content = target_dta_parent.read_bytes()
     midi_content = target_mid.read_bytes()
@@ -106,5 +120,5 @@ def package_con(
 
     con_file_path.write_bytes(con_data)
     os.utime(con_file_path, None)
-    click.echo(f"Successfully patched signed template CON with valid asset retention: {con_file_path}")
+    click.echo(f"Successfully patched signed template CON with metadata and asset retention: {con_file_path}")
     return con_file_path

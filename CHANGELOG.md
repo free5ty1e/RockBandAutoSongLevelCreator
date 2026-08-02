@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0047] - 2026-07-31
+- Added STFS header metadata patching (`patch_stfs_header_metadata` in `con_packer.py`) to dynamically update package title and artist strings in the STFS header block (UTF-16-BE at offsets `0x43D` and `0x413`), preventing NullReferenceExceptions during metadata reflection in ForgeTool GUI.
+
 ## [0.0046] - 2026-07-31
 - Retained original valid `.milo_xbox` and `_keep.png_xbox` binary assets from `SmellsLikeNirvana_rb3con` template (renamed to active song ID) in `con_packer.py`, preventing `Object reference not set to an instance of an object` NullReferenceExceptions in ForgeTool GUI during graphic/milo asset resolution.
 
