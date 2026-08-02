@@ -5,6 +5,17 @@ import struct
 
 BLOCK_SIZE = 0x1000
 
+def logical_to_physical(logical: int) -> int:
+    """STFS CON logical->physical block mapping (see con_packer.logical_to_physical)."""
+    block_adjust = 0
+    if logical >= 0xAA:
+        block_adjust += (logical // 0xAA) + 1
+    if logical >= 0x70E4:
+        block_adjust += (logical // 0x70E4) + 1
+    if logical >= 0x4AF768:
+        block_adjust += (logical // 0x4AF768) + 1
+    return logical + block_adjust
+
 def validate_con(con_path: str | Path) -> dict:
     """
     Parses an Xbox 360 STFS CON file and validates its file table structure,
@@ -105,6 +116,22 @@ def validate_con(con_path: str | Path) -> dict:
         return "/" + "/".join(parts)
 
     virtual_paths = [get_path(e) for e in entries]
+
+    # Validate payload placement: readers resolve the logical start block to a
+    # physical offset of 0xC000 + logical_to_physical(start) * 0x1000.  If the
+    # payload does not live there (or extends past the file), the CON will not
+    # load, regardless of how clean the file table looks.
+    for entry in entries:
+        if entry["is_dir"] or entry["file_size"] == 0:
+            continue
+        payload_off = 0xC000 + logical_to_physical(entry["start_block"]) * BLOCK_SIZE
+        payload_end = payload_off + entry["file_size"]
+        if payload_end > len(data):
+            errors.append(f"Entry {entry['index']} ({entry['name']}) payload "
+                          f"(offset {hex(payload_off)}, size {entry['file_size']}) "
+                          f"extends past end of CON file ({len(data)} bytes)")
+        elif data[payload_off:payload_off + min(entry["file_size"], 16)] == b'\x00' * min(entry["file_size"], 16):
+            errors.append(f"Entry {entry['index']} ({entry['name']}) payload at {hex(payload_off)} is zeroed (block addressing likely wrong)")
 
     return {
         "valid": len(errors) == 0,

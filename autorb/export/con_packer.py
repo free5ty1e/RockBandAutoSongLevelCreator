@@ -7,6 +7,26 @@ import os
 
 BLOCK_SIZE = 0x1000
 
+# STFS CON data block addressing.  Readers interpret file-table entry "start"
+# as a *logical* block number whose physical location is:
+#     physical_offset = 0xC000 + logical_to_physical(logical) * 0x1000
+# Block 0 (physical 0x0, i.e. offset 0xC000) is the file table itself, so data
+# files must be allocated starting at logical block 1.  Hash tables are
+# interleaved every 0xAA logical blocks (plus higher-level tables), which is
+# why the physical mapping is not 1:1.
+#
+# This is the arkem/free60 "fix block numbers" formula with table_size_shift=0
+# (block separation & 1 == 1, which is the case for all reference CONs here).
+def logical_to_physical(logical: int) -> int:
+    block_adjust = 0
+    if logical >= 0xAA:
+        block_adjust += (logical // 0xAA) + 1
+    if logical >= 0x70E4:
+        block_adjust += (logical // 0x70E4) + 1
+    if logical >= 0x4AF768:
+        block_adjust += (logical // 0x4AF768) + 1
+    return logical + block_adjust
+
 def set_entry_name(con_data: bytearray, ft_offset: int, entry_idx: int, new_name: str):
     entry_addr = ft_offset + entry_idx * 0x40
     entry_bytes = con_data[entry_addr : entry_addr + 0x40]
@@ -91,19 +111,20 @@ def package_con(
     target_milo = gen_staging_dir / f"{song_id}.milo_xbox"
     target_png = gen_staging_dir / f"{song_id}_keep.png_xbox"
 
-    if not target_milo.exists() or not target_png.exists():
-        entry6 = template_data[ft_offset + 6*0x40 : ft_offset + 7*0x40]
-        start6 = int.from_bytes(entry6[0x2F:0x32], 'little')
-        size6 = int.from_bytes(entry6[0x34:0x38], 'big')
-        milo_bytes = template_data[0xD000 + start6 * BLOCK_SIZE : 0xD000 + start6 * BLOCK_SIZE + size6]
-        target_milo.write_bytes(milo_bytes)
+    entry6 = template_data[ft_offset + 6*0x40 : ft_offset + 7*0x40]
+    start6 = int.from_bytes(entry6[0x2F:0x32], 'little')
+    size6 = int.from_bytes(entry6[0x34:0x38], 'big')
+    milo_offset = 0xC000 + logical_to_physical(start6) * BLOCK_SIZE
+    milo_bytes = template_data[milo_offset : milo_offset + size6]
+    target_milo.write_bytes(milo_bytes)
 
-        entry7 = template_data[ft_offset + 7*0x40 : ft_offset + 8*0x40]
-        start7 = int.from_bytes(entry7[0x2F:0x32], 'little')
-        size7 = int.from_bytes(entry7[0x34:0x38], 'big')
-        png_bytes = template_data[0xD000 + start7 * BLOCK_SIZE : 0xD000 + start7 * BLOCK_SIZE + size7]
-        target_png.write_bytes(png_bytes)
-        click.echo("Extracted and staged valid .milo_xbox and .png_xbox assets from template.")
+    entry7 = template_data[ft_offset + 7*0x40 : ft_offset + 8*0x40]
+    start7 = int.from_bytes(entry7[0x2F:0x32], 'little')
+    size7 = int.from_bytes(entry7[0x34:0x38], 'big')
+    png_offset = 0xC000 + logical_to_physical(start7) * BLOCK_SIZE
+    png_bytes = template_data[png_offset : png_offset + size7]
+    target_png.write_bytes(png_bytes)
+    click.echo("Extracted and staged valid .milo_xbox and .png_xbox assets from template.")
 
     click.echo(f"Staged clean song folder structure at: {song_staging_dir}")
 
@@ -124,7 +145,8 @@ def package_con(
     set_entry_name(con_data, ft_offset, 6, f"{song_id}.milo_xbox")
     set_entry_name(con_data, ft_offset, 7, f"{song_id}_keep.png_xbox")
 
-    # Calculate contiguous block allocations for all 5 files starting at block 0
+    # Calculate contiguous logical block allocations for all 5 files.
+    # Logical block 0 is the file table, so data starts at block 1.
     dta_size = len(dta_content)
     dta_blocks = (dta_size + BLOCK_SIZE - 1) // BLOCK_SIZE
 
@@ -140,7 +162,7 @@ def package_con(
     png_size = len(png_content)
     png_blocks = (png_size + BLOCK_SIZE - 1) // BLOCK_SIZE
 
-    dta_start = 0
+    dta_start = 1
     mid_start = dta_start + dta_blocks
     mogg_start = mid_start + mid_blocks
     milo_start = mogg_start + mogg_blocks
@@ -153,14 +175,22 @@ def package_con(
     set_entry_allocation(con_data, ft_offset, 6, milo_start, milo_size)
     set_entry_allocation(con_data, ft_offset, 7, png_start, png_size)
 
-    # Helper to write payload at block
+    # Total Allocated Block Count (be32 at 0x395) = file table (1) + data blocks.
+    total_allocated = 1 + dta_blocks + mid_blocks + mogg_blocks + milo_blocks + png_blocks
+    con_data[0x395 : 0x399] = total_allocated.to_bytes(4, 'big')
+    con_data[0x399 : 0x39D] = (0).to_bytes(4, 'big')
+
+    # Helper to write payload at the physical offset readers resolve from the
+    # logical start block (hash tables are interleaved every 0xAA logical blocks).
     def write_payload(start_block: int, content: bytes):
-        payload_offset = 0xD000 + start_block * BLOCK_SIZE
+        payload_offset = 0xC000 + logical_to_physical(start_block) * BLOCK_SIZE
         size = len(content)
         block_count = (size + BLOCK_SIZE - 1) // BLOCK_SIZE
         total_space = block_count * BLOCK_SIZE
-        
-        con_data[payload_offset : payload_offset + total_space] = b'\x00' * total_space
+        end = payload_offset + total_space
+        if len(con_data) < end:
+            con_data.extend(b'\x00' * (end - len(con_data)))
+        con_data[payload_offset : end] = b'\x00' * total_space
         con_data[payload_offset : payload_offset + size] = content
 
     write_payload(dta_start, dta_content)

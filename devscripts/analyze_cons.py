@@ -4,6 +4,17 @@ import sys
 
 BLOCK_SIZE = 0x1000
 
+def logical_to_physical(logical):
+    """STFS CON logical->physical block mapping (see con_packer.logical_to_physical)."""
+    block_adjust = 0
+    if logical >= 0xAA:
+        block_adjust += (logical // 0xAA) + 1
+    if logical >= 0x70E4:
+        block_adjust += (logical // 0x70E4) + 1
+    if logical >= 0x4AF768:
+        block_adjust += (logical // 0x4AF768) + 1
+    return logical + block_adjust
+
 def analyze_con(filepath):
     data = open(filepath, 'rb').read()
     print(f'\n{"="*60}')
@@ -88,7 +99,7 @@ def analyze_con(filepath):
         
         # Show payload sample for files
         if not isd and fs > 0:
-            payload_off = 0xD000 + sb * BLOCK_SIZE
+            payload_off = 0xC000 + logical_to_physical(sb) * BLOCK_SIZE
             if payload_off + min(fs, 100) <= len(data):
                 sample = data[payload_off:payload_off + min(fs, 100)]
                 print(f'     payload@{hex(payload_off)}: {sample[:60]!r}')
@@ -111,7 +122,7 @@ def analyze_con(filepath):
     # Check for songs.dta content
     for entry in entries:
         if entry['name'] == 'songs.dta' and entry['size'] > 0:
-            payload_off = 0xD000 + entry['start_block'] * BLOCK_SIZE
+            payload_off = 0xC000 + logical_to_physical(entry['start_block']) * BLOCK_SIZE
             if payload_off + entry['size'] <= len(data):
                 dta_data = data[payload_off:payload_off + entry['size']]
                 print(f'\n--- songs.dta content (entry [{entry["index"]}], {entry["size"]} bytes) ---')

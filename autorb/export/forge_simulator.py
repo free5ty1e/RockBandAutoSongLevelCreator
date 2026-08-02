@@ -3,6 +3,8 @@
 from pathlib import Path
 import struct
 
+from autorb.export.con_packer import logical_to_physical
+
 def simulate_forge_load(con_path: str | Path) -> bool:
     path = Path(con_path)
     if not path.exists():
@@ -47,8 +49,9 @@ def simulate_forge_load(con_path: str | Path) -> bool:
     for e in entries:
         print(f"  - {'[DIR]' if e['is_dir'] else '[FILE]'} {e['name']} (start_block={e['start_block']}, size={e['file_size']})")
         if not e['is_dir'] and e['file_size'] > 0:
-            # Payload starts at 0xD000 (Block 13), so block 0 is at 0xD000
-            payload_off = 0xD000 + e['start_block'] * 4096
+            # Block 0 is the file table at 0xC000; data payloads live at the
+            # physical block readers resolve from the logical start block.
+            payload_off = 0xC000 + logical_to_physical(e['start_block']) * 4096
             if payload_off + e['file_size'] > len(data):
                 raise ValueError(f"File {e['name']} extends beyond file bounds (offset {hex(payload_off)}, size {e['file_size']})")
             content_slice = data[payload_off : payload_off + min(e['file_size'], 100)]

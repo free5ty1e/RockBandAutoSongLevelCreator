@@ -2,6 +2,12 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0051] - 2026-08-02
+- Fixed STFS CON block addressing in `con_packer.py`: readers resolve file-table `start` as a *logical* block whose physical offset is `0xC000 + logical_to_physical(start) * 0x1000`, where `logical_to_physical` uses the arkem/free60 formula (hash tables interleaved every 0xAA logical blocks). Previously payloads were written at `0xD000 + start * 0x1000`, so ForgeTool read `songs.dta` from the file-table block itself, producing `Element at index 0 is not an Array. It is DataSymbol`. Data is now allocated starting at logical block 1 (block 0 is the file table).
+- Corrected `.milo_xbox` / `_keep.png_xbox` extraction from the `SmellsLikeNirvana_rb3con` template to use the physical mapping (0x4AD000 / 0x4C2000) instead of `0xD000 + start * 0x1000`, fixing bogus graphic assets in the staged `gen/` folder.
+- Patched STFS volume descriptor `Total Allocated Block Count` (be32 at `0x395` = file table + data blocks) and `Total Unallocated Block Count` (be32 at `0x399`) to match the rebuilt package size.
+- Updated `stfs_validator.py`, `forge_simulator.py`, and `devscripts/analyze_cons.py` to use the correct logical-to-physical mapping, and added payload placement checks to the validator (out-of-bounds / zeroed payload detection).
+
 ## [0.0050] - 2026-08-02
 - Implemented fully contiguous block allocation and extraction for ALL CON assets (`songs.dta`, `.mid`, `.mogg`, `.milo_xbox`, `_keep.png_xbox`) in `con_packer.py`, preventing large `.mogg` files (e.g. 14.5 MB) from overlapping and corrupting `.milo_xbox` and `.png_xbox` graphic assets.
 
