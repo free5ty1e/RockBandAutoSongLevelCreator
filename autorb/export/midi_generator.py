@@ -26,6 +26,7 @@ def encode_varlen(value: int) -> bytes:
     return bytes(res)
 
 PLACEHOLDER_NOTE_PITCH = 60
+PLACEHOLDER_DIFFICULTY_PITCHES = (60, 72, 84, 96)
 
 def build_track(name: str, events_bytes: bytes) -> bytes:
     """Wraps MIDI events into a single named MTrk chunk."""
@@ -33,13 +34,15 @@ def build_track(name: str, events_bytes: bytes) -> bytes:
     content = name_chunk + events_bytes + b"\x00\xFF\x2F\x00"
     return b"MTrk" + struct.pack(">I", len(content)) + content
 
-def build_placeholder_track(name: str, pitch: int = PLACEHOLDER_NOTE_PITCH) -> bytes:
-    """Builds a minimal valid instrument track containing a single note."""
+def build_placeholder_track(name: str, pitches: tuple = PLACEHOLDER_DIFFICULTY_PITCHES) -> bytes:
+    """Builds a minimal valid instrument track with one note per difficulty."""
     events = bytearray()
-    events.extend(encode_varlen(0))
-    events.extend(b"\x90" + bytes([pitch, 100]))
-    events.extend(encode_varlen(120))
-    events.extend(b"\x80" + bytes([pitch, 0]))
+    for pitch in pitches:
+        events.extend(encode_varlen(0))
+        events.extend(b"\x90" + bytes([pitch, 100]))
+    for pitch in pitches:
+        events.extend(encode_varlen(120 if pitch == pitches[0] else 0))
+        events.extend(b"\x80" + bytes([pitch, 0]))
     return build_track(name, bytes(events))
 
 def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id: str) -> Path:

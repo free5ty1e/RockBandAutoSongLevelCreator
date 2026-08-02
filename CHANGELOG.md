@@ -2,6 +2,11 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0057] - 2026-08-02
+- Fixed ForgeTool "CON to PKG Conversion" crash (`System.NullReferenceException` at `LibForge.Midi.RBMidConverter.MidiConverter.<>c.<HandleDrumTrk>b__65_9` / `HandleGuitarBass`) introduced by v0.0056. Root cause: `RBMidConverter` builds per-difficulty `gem_tracks` as a 4-element array (Easy/Medium/Hard/Expert) that is filled lazily — only when a note for that difficulty is seen — so the v0.0056 placeholder (a single note at pitch 60) left 3 slots null and `gem_tracks.Select(g => g.ToArray()).ToArray()` (RBMidConverter.cs:606 and :975) threw the NRE.
+- `midi_generator.py`: `build_placeholder_track()` now emits one note on **each** difficulty (60/72/84/96 = EasyStart/MediumStart/HardStart/ExpertStart from RBMidConverter.cs) per track, so all four `gem_tracks` slots are non-null and ForgeTool conversion no longer NREs. Added `PLACEHOLDER_DIFFICULTY_PITCHES = (60, 72, 84, 96)` (replaces the single `PLACEHOLDER_NOTE_PITCH = 60` approach).
+- Rebuilt `output/open_road_song.con` (14860288 bytes) with the regenerated 6-track MIDI (staged at `output/songs/open_road_song/open_road_song.mid`, 5030 bytes; PART DRUMS/GUITAR/BASS each contain notes at keys [60, 72, 84, 96], PART VOCALS unchanged at 284 notes). `stfs_validator.py` reports VALID, `forge_simulator.py` SUCCESS, `pytest` passes (1 passed).
+
 ## [0.0056] - 2026-08-02
 - Fixed RB4 (via ForgeTool PKG conversion) crashing when the vocal fretboard loaded. Working hypothesis: `songs.dta` advertises drums/guitar/bass at rank 150 but the chart contained only `PART VOCALS`, so RB4 had no MIDI track to load for the advertised parts.
 - `midi_generator.py`: `generate_vocal_midi()` now emits placeholder `PART DRUMS`, `PART GUITAR`, and `PART BASS` MIDI tracks (one note each at pitch 60) in addition to the existing `BEAT`, `EVENTS`, and `PART VOCALS` tracks, so every instrument advertised in `songs.dta` has a corresponding chart track. Header track count bumped from 3 to 6.

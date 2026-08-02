@@ -36,3 +36,26 @@ The crash was **not** a malformed template milo. The template's real milo termin
 - **Song name must match filenames.** The dta `(name "songs/open_road_song/open_road_song")` -> shortname `open_road_song`, matching `open_road_song.mid`, `gen/open_road_song.milo_xbox`, `gen/open_road_song_keep.png_xbox`.
 - **MILO_D / compressed blocks are unsupported by LibForge.** The 311 reference milo (`MILO_D`, `0xCDBEDEAF`) throws `NotImplementedException("Zlib block inflation not implemented yet")` when a block lacks the `0x01000000` compressed flag — so it can't be used as a conversion source either. Only MILO_A (uncompressed) milos work end-to-end.
 - **Artwork failures are non-fatal.** A failed `TextureConverter.MiloPngToTexture` just disables album art via the `warner` callback.
+
+## RBMidConverter: every advertised part needs a non-null gem track per difficulty (v0.0057)
+
+After the v0.0056 placeholder-track fix, the CON again refused to convert in ForgeTool GUI, this time with:
+
+```
+System.NullReferenceException: Object reference not set to an instance of an object.
+   at LibForge.Midi.RBMidConverter.MidiConverter.<>c.<HandleDrumTrk>b__65_9(List`1 g)
+   at System.Linq.Enumerable.WhereSelectArrayIterator`2.MoveNext()
+   at System.Linq.Enumerable.Buffer`1..ctor(IEnumerable`1 source)
+   at System.Linq.Enumerable.ToArray[TSource](IEnumerable`1 source)
+   at LibForge.Midi.RBMidConverter.MidiConverter.HandleDrumTrk(MidiTrackProcessed track)
+   at LibForge.Midi.RBMidConverter.MidiConverter.ToRBMid()
+   at LibForge.Util.PkgCreator.ConvertDLCSong(...)
+```
+
+**Root cause:** `RBMidConverter` maps MIDI pitch to difficulty as follows: `EasyStart = 60`, `MediumStart = 72`, `HardStart = 84`, `ExpertStart = 96` (also `GemOffset = 0`), and builds `gem_tracks` as a **4-element difficulty array that is filled lazily** — a slot only becomes non-null when a note in that difficulty's pitch range is seen. `HandleDrumTrk` / `HandleGuitarBass` then run `gem_tracks.Select(g => g.ToArray()).ToArray()` (RBMidConverter.cs:606 and :975), which throws `NullReferenceException` the moment any difficulty slot was never populated.
+
+**Why v0.0056 crashed:** the placeholder tracks contained a single note at pitch 60, which only populates the Easy slot (`gem_tracks[0]`). Medium/Hard/Expert stayed null, so `.ToArray()` threw for every one of PART DRUMS, PART GUITAR, and PART BASS.
+
+**The fix (v0.0057):** `midi_generator.py` `build_placeholder_track()` now emits one note per difficulty — keys `[60, 72, 84, 96]` (`PLACEHOLDER_DIFFICULTY_PITCHES`, matching EasyStart/MediumStart/HardStart/ExpertStart). Every difficulty slot is therefore non-null and `ToRBMid()` completes. The regenerated MIDI has PART DRUMS/GUITAR/BASS each with notes at keys `[60, 72, 84, 96]`; PART VOCALS unchanged (284 notes). Verified: `stfs_validator.py` VALID, `forge_simulator.py` SUCCESS, `pytest` 1 passed, CON rebuilt at 14860288 bytes.
+
+**Rule for future charting work:** any track name with a handler in `RBMidConverter` (`PART DRUMS`, `PART GUITAR`, `PART BASS`, `PART VOCALS`, ...) must contain at least one note in **every** difficulty's pitch range (60/72/84/96 ladder) before the CON is written, or ForgeTool's CON → PKG conversion will NRE.

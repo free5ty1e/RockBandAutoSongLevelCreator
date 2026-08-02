@@ -209,7 +209,7 @@ python3 autorb/export/stfs_validator.py output/open_road_song.con
 ### STFS Packaging & Multi-track DTA Generation
 Step 5 automatically generates a fully compliant Xbox 360 STFS CON package with hierarchical directory structures (`songs/{song_id}/`) and maps all 4 Demucs stems (drums `0-1`, bass `2-3`, guitar `4-5`, vocals `6-7`) in `songs.dta`. All packaging and metadata are dynamically generated via pipeline scripts (never manually edited).
 
-The generated MIDI chart always includes `BEAT`, `EVENTS`, `PART VOCALS`, and placeholder `PART DRUMS` / `PART GUITAR` / `PART BASS` tracks (one note each at pitch 60) so that every instrument advertised in `songs.dta` has a loadable chart track. This prevents RB4 crashes (via ForgeTool PKG conversion) that occur when the vocal fretboard loads but an advertised part has no corresponding MIDI track.
+The generated MIDI chart always includes `BEAT`, `EVENTS`, `PART VOCALS`, and placeholder `PART DRUMS` / `PART GUITAR` / `PART BASS` tracks so that every instrument advertised in `songs.dta` has a loadable chart track. Each placeholder track emits one note per difficulty (keys 60/72/84/96 for Easy/Medium/Hard/Expert) so LibForge's `RBMidConverter` (`HandleDrumTrk` / `HandleGuitarBass`) finds a non-null gem track for all four difficulty slots — a single-note placeholder (pitch 60 only) left 3 of the 4 slots null and crashed ForgeTool's CON → PKG conversion with a `System.NullReferenceException`. This prevents RB4 crashes (via ForgeTool PKG conversion) that occur when the vocal fretboard loads but an advertised part has no corresponding MIDI track.
 
 ### CI/CD Pipeline
 This repository uses GitHub Actions (`.github/workflows/ci-cd.yml`) to:
