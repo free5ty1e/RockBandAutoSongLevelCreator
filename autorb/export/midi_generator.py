@@ -32,7 +32,7 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     json_path = Path(synced_json_path)
     midi_path = output_dir / f"{song_id}.mid"
     
-    track_data = []
+    track_data = {}
     if json_path.exists():
         with open(json_path, "r", encoding="utf-8") as f:
             track_data = json.load(f)
@@ -57,9 +57,11 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     # Track 2: PART VOCALS
     vocal_events = bytearray()
     
-    items = track_data.get("synced_words", track_data) if isinstance(track_data, dict) else track_data
-    if not isinstance(items, list):
-        items = []
+    items = []
+    if isinstance(track_data, dict):
+        items = track_data.get("synced_lyrics", track_data.get("synced_words", []))
+    elif isinstance(track_data, list):
+        items = track_data
 
     try:
         items = sorted(items, key=lambda x: x.get("start", 0.0))
