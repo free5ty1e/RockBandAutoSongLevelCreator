@@ -145,10 +145,20 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
     """
     Combines stem WAV files into a multi-channel Harmonix MOGG audio container.
 
-    Each stem becomes a stereo pair (mono stems are duplicated to L/R, larger
-    channel layouts are downmixed), producing a single multi-channel Ogg Vorbis
-    bitstream that is then wrapped with the proprietary MOGG header. The channel
-    order matches songs.dta: drums 0-1, bass 2-3, guitar 4-5, vocals 6-7.
+    The 10-channel layout mirrors the proven-working "311 - Down" DLC so the
+    track/channel structure is identical to a stock song (verified against
+    LibForge#30, where mismatched track layouts make songs stop early in-game):
+
+        ch0   kick track      (silent; kit lives on ch2-3)
+        ch1   snare track     (silent)
+        ch2-3 stereo drum kit
+        ch4   mono bass
+        ch5-6 stereo guitar/backing (the 'other' stem)
+        ch7-8 stereo vocals
+        ch9   fake/crowd track (silent; engine falls back to procedural crowd)
+
+    songs.dta must declare: ((drum (0 1 2 3)) (bass (4)) (guitar (5 6))
+    (vocals (7 8))) with 10-entry pans/vols/cores, matching the 311 reference.
     """
     stems_path = Path(stems_dir)
     mogg_path = output_dir / f"{song_id}.mogg"
@@ -171,17 +181,36 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
     if not input_files:
         input_files = sorted(list(stems_path.glob("*.wav")))
 
-    if input_files:
-        logger.info(f"Combining {len(input_files)} stems into multi-channel MOGG container via ffmpeg.")
+    if len(input_files) == 4:
+        logger.info("Combining 4 stems into 10-channel MOGG container via ffmpeg (311 - Down layout).")
         ogg_tmp = output_dir / f"{song_id}.tmp.ogg"
         cmd = ["ffmpeg", "-y"]
         for f in input_files:
             cmd.extend(["-i", str(f)])
 
-        n = len(input_files)
-        # Normalize every input to stereo, then merge into a single multi-channel stream.
-        filter_parts = [f"[{i}:a]aformat=channel_layouts=stereo[s{i}]" for i in range(n)]
-        filter_parts.append("".join(f"[s{i}]" for i in range(n)) + f"amerge=inputs={n}[aout]")
+        # [0] drums, [1] bass, [2] other (guitar/backing), [3] vocals.
+        # Every branch is normalized to stereo first, then panned to a mono
+        # channel so amerge yields exactly 10 channels in order.
+        filter_parts = [
+            # ch0/ch1: mix1 kick/snare tracks left silent so the whole kit is
+            # carried by ch2-3 (avoids partial muting when notes are missed).
+            "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FL,volume=0[s0]",
+            "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FL,volume=0[s1]",
+            # ch2-3: stereo drum kit.
+            "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FL[s2]",
+            "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FR[s3]",
+            # ch4: mono bass.
+            "[1:a]aformat=channel_layouts=stereo,pan=mono|c0=0.5*FL+0.5*FR[s4]",
+            # ch5-6: stereo guitar/backing (the 'other' stem).
+            "[2:a]aformat=channel_layouts=stereo,pan=mono|c0=FL[s5]",
+            "[2:a]aformat=channel_layouts=stereo,pan=mono|c0=FR[s6]",
+            # ch7-8: stereo vocals.
+            "[3:a]aformat=channel_layouts=stereo,pan=mono|c0=FL[s7]",
+            "[3:a]aformat=channel_layouts=stereo,pan=mono|c0=FR[s8]",
+            # ch9: fake/crowd track left silent (engine uses procedural crowd).
+            "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FL,volume=0[s9]",
+            "[s0][s1][s2][s3][s4][s5][s6][s7][s8][s9]amerge=inputs=10[aout]",
+        ]
 
         # Explicitly force the 'ogg' format muxer so ffmpeg accepts the .ogg extension.
         # -page_duration forces small pages (~2048-3072 sample granules) matching
@@ -210,6 +239,39 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
         if not ogg_bytes:
             raise RuntimeError("FFmpeg produced an empty Ogg file.")
 
+        mogg_bytes = wrap_ogg_as_mogg(ogg_bytes)
+        mogg_path.write_bytes(mogg_bytes)
+        logger.info(f"Built MOGG (v{MOGG_VERSION_UNENCRYPTED}, {len(mogg_bytes)} bytes) at {mogg_path}")
+    elif input_files:
+        # Generic fallback: merge however many stems exist, one stereo pair each.
+        logger.warning(f"Expected 4 standard stems (drums/bass/other/vocals); got {len(input_files)}. "
+                       "Falling back to per-stem stereo merge.")
+        ogg_tmp = output_dir / f"{song_id}.tmp.ogg"
+        cmd = ["ffmpeg", "-y"]
+        for f in input_files:
+            cmd.extend(["-i", str(f)])
+        n = len(input_files)
+        filter_parts = [f"[{i}:a]aformat=channel_layouts=stereo[s{i}]" for i in range(n)]
+        filter_parts.append("".join(f"[s{i}]" for i in range(n)) + f"amerge=inputs={n}[aout]")
+        cmd.extend([
+            "-filter_complex", ";".join(filter_parts),
+            "-map", "[aout]",
+            "-c:a", "libvorbis",
+            "-q:a", "5",
+            "-page_duration", str(PAGE_DURATION_US),
+            "-f", "ogg",
+            str(ogg_tmp)
+        ])
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode != 0:
+            logger.error(f"FFmpeg multi-channel merge failed: {result.stderr}")
+            raise RuntimeError(f"FFmpeg failed to build MOGG container: {result.stderr}")
+        try:
+            ogg_bytes = ogg_tmp.read_bytes()
+        finally:
+            ogg_tmp.unlink(missing_ok=True)
+        if not ogg_bytes:
+            raise RuntimeError("FFmpeg produced an empty Ogg file.")
         mogg_bytes = wrap_ogg_as_mogg(ogg_bytes)
         mogg_path.write_bytes(mogg_bytes)
         logger.info(f"Built MOGG (v{MOGG_VERSION_UNENCRYPTED}, {len(mogg_bytes)} bytes) at {mogg_path}")

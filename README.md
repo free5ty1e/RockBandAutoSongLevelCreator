@@ -207,7 +207,7 @@ python3 autorb/export/stfs_validator.py output/open_road_song.con
 ```
 
 ### STFS Packaging & Multi-track DTA Generation
-Step 5 automatically generates a fully compliant Xbox 360 STFS CON package with hierarchical directory structures (`songs/{song_id}/`) and maps all 4 Demucs stems (drums `0-1`, bass `2-3`, guitar `4-5`, vocals `6-7`) in `songs.dta`. All packaging and metadata are dynamically generated via pipeline scripts (never manually edited).
+Step 5 automatically generates a fully compliant Xbox 360 STFS CON package with hierarchical directory structures (`songs/{song_id}/`) and maps the 4 Demucs stems to a **10-channel** MOGG in `songs.dta`, mirroring the proven-working "311 - Down" DLC layout (ch0-1 silent kick/snare, ch2-3 stereo drums, ch4 mono bass, ch5-6 stereo guitar, ch7-8 stereo vocals, ch9 fake/crowd). All packaging and metadata are dynamically generated via pipeline scripts (never manually edited).
 
 The embedded MOGG must use **small Ogg pages**. ffmpeg's default libvorbis paging emits ~1-second / ~56KB pages that Rock Band's Milkshake audio engine cannot reliably decode — the symptom is no audio preview in the song list and the song "completing instantly" at 0%. `mogg_builder.py` forces small ~4KB pages (~2048-3072 sample granules) via ffmpeg's `-page_duration 40000` option, matching stock moggs (e.g. "311 - Down" RB3 DLC). `songs.dta`'s `(song_length ...)` is no longer hardcoded — it is derived from the actual MOGG audio duration via `read_mogg_duration_ms()`.
 

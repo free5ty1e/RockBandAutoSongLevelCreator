@@ -52,20 +52,26 @@ ffmpeg ... -c:a libvorbis -q:a 5 -page_duration 40000 -f ogg out.ogg
 
 ## Channel layout
 
-The Ogg stream is a **single logical stream with N channels**; songs.dta's `tracks` assigns channels to instruments. AutoRB emits 8 channels = 4 stereo pairs matching `dta_writer.py`:
+The Ogg stream is a **single logical stream with N channels**; songs.dta's `tracks` assigns channels to instruments. AutoRB emits **10 channels** mirroring the proven-working "311 - Down" DLC layout (which maps cleanly through ForgeTool's `MakeMoggDta` to `drum (0) drum (1) drum (2 3) bass (4) guitar (5 6) vocals (7 8) fake (9)`):
 
 ```
-drums 0-1, bass 2-3, guitar 4-5, vocals 6-7
+ch0  kick track    (silent; the kit lives on ch2-3)
+ch1  snare track   (silent)
+ch2-3 stereo drum kit
+ch4  mono bass
+ch5-6 stereo guitar/backing (the 'other' stem)
+ch7-8 stereo vocals
+ch9  fake/crowd    (silent; engine falls back to procedural crowd)
 ```
 
-`pans`/`vols`/`cores` arrays in songs.dta must have one value per channel (8 entries).
+`pans`/`vols`/`cores` arrays in songs.dta must have one value per channel (10 entries, guitar channels cored). The 8-channel layout used before v0.0059 (`drum 0-1, bass 2-3, guitar 4-5, vocals 6-7`) left the track/channel structure different from every stock/311 song; `maxton/LibForge#30` documents that a track layout that does not match the physical MOGG makes songs start but stop playing prematurely in-game — the failure family of the persistent "no preview + instant 0%" bug.
 
 ## Implementation
 
 `autorb/export/mogg_builder.py`:
-- Encodes each stem to a stereo pair (`aformat=channel_layouts=stereo`) then `amerge=inputs=4` -> 8ch Ogg @ source rate (44100).
+- With the 4 standard stems present, pans each stem into mono/stereo channels (`pan`/`aformat` filters) and `amerge=inputs=10` -> 10ch Ogg @ source rate (44100). Channels 0, 1, and 9 are derived from the drums input with `volume=0` so their duration matches. A generic per-stem stereo merge fallback handles non-standard stem counts.
 - Forces small Ogg pages with `-page_duration 40000` (`PAGE_DURATION_US`) — RB's Milkshake decoder fails on ffmpeg-default ~1s/56KB pages (see above).
-- `wrap_ogg_as_mogg()` parses the Ogg pages and prepends the v10 header + OggMap (pure Python, no external tools beyond ffmpeg).
+- `wrap_ogg_as_mogg()` parses the Ogg pages and prepends the v10 header + OggMap (pure Python, no external tools beyond ffmpeg). The OggMap's per-entry sample values track page granules (about 1024 samples lower than the reference `ogg2mogg` tool's `ov_raw_seek`+`ov_pcm_tell` values at each 0x8000-byte row, which only affects seek precision, not forward playback; byte offsets are identical).
 - `read_mogg_duration_ms()` parses the MOGG header + Vorbis id header + final granule to report the real audio duration for songs.dta's `(song_length ...)`.
 
 ## References
