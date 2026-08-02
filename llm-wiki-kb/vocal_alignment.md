@@ -12,3 +12,6 @@ To solve this:
 2. The pipeline extracts the `vocals.wav` stem.
 3. A forced-alignment model (like WhisperX) listens to the vocal stem and maps precise start/end timings to the words provided in the Standard LRC.
 4. This data is mapped to MIDI pitch notes on the `PART VOCALS` track.
+
+## Placeholder Instrument Tracks (required for RB4)
+The `.mid` chart emitted by `generate_vocal_midi()` also includes placeholder `PART DRUMS`, `PART GUITAR`, and `PART BASS` tracks (one note each at pitch 60, `PLACEHOLDER_NOTE_PITCH = 60`) even though the vocals pipeline does not chart real instruments. Rationale: `songs.dta` advertises drums/guitar/bass at rank 150, and RB4 (via ForgeTool PKG conversion) crashed when the vocal fretboard loaded if an advertised part had no corresponding MIDI track. Every instrument advertised in `songs.dta` must have a loadable chart track, even if it is just a placeholder. The MIDI header track count is 6: `BEAT`, `EVENTS`, `PART DRUMS`, `PART GUITAR`, `PART BASS`, `PART VOCALS`.

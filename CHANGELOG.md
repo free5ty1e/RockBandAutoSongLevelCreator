@@ -2,6 +2,12 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0056] - 2026-08-02
+- Fixed RB4 (via ForgeTool PKG conversion) crashing when the vocal fretboard loaded. Working hypothesis: `songs.dta` advertises drums/guitar/bass at rank 150 but the chart contained only `PART VOCALS`, so RB4 had no MIDI track to load for the advertised parts.
+- `midi_generator.py`: `generate_vocal_midi()` now emits placeholder `PART DRUMS`, `PART GUITAR`, and `PART BASS` MIDI tracks (one note each at pitch 60) in addition to the existing `BEAT`, `EVENTS`, and `PART VOCALS` tracks, so every instrument advertised in `songs.dta` has a corresponding chart track. Header track count bumped from 3 to 6.
+- `midi_generator.py`: added module-level `build_track()` (moved out of the closure) and `build_placeholder_track()` helpers, plus `PLACEHOLDER_NOTE_PITCH = 60`.
+- Rebuilt `output/open_road_song.con` (14860288 bytes) with the new 6-track MIDI (staged at `output/songs/open_road_song/open_road_song.mid`, 4958 bytes, verified: BEAT, EVENTS, PART DRUMS=1 note, PART GUITAR=1 note, PART BASS=1 note, PART VOCALS=284 notes). `stfs_validator.py` reports VALID, `forge_simulator.py` SUCCESS, `pytest` passes (1 passed).
+
 ## [0.0055] - 2026-08-02
 - Fixed in-game RB4 audio: the built `.mogg` was a **plain multi-channel Ogg Vorbis file** (`OggS...`), not the proprietary Harmonix MOGG container. LibForge copies the mogg verbatim into the PS4 PKG, so RB4 could not decode it — no audio preview in the song list, and a crash (CE-34878-0) when the notes/fretboard came up (audio engine fails to start). The template's real mogg (v13) confirms the proprietary header (`version 0x0A` unencrypted for RB4 customs).
 - `mogg_builder.py`: added `wrap_ogg_as_mogg()` which prepends the v10 MOGG header (LE `version=0x0A`, `header_size`, `map_version=0x10`, `seek_interval=20000`, `entry_count`) and an OggMap of `(byte_offset, sample)` seek entries computed by parsing the Ogg pages (granulepos per page, 0x8000-byte stepping, mirroring mtolly/ogg2mogg). The Ogg payload is byte-identical after the header.

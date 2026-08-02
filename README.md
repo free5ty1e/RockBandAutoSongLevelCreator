@@ -209,6 +209,8 @@ python3 autorb/export/stfs_validator.py output/open_road_song.con
 ### STFS Packaging & Multi-track DTA Generation
 Step 5 automatically generates a fully compliant Xbox 360 STFS CON package with hierarchical directory structures (`songs/{song_id}/`) and maps all 4 Demucs stems (drums `0-1`, bass `2-3`, guitar `4-5`, vocals `6-7`) in `songs.dta`. All packaging and metadata are dynamically generated via pipeline scripts (never manually edited).
 
+The generated MIDI chart always includes `BEAT`, `EVENTS`, `PART VOCALS`, and placeholder `PART DRUMS` / `PART GUITAR` / `PART BASS` tracks (one note each at pitch 60) so that every instrument advertised in `songs.dta` has a loadable chart track. This prevents RB4 crashes (via ForgeTool PKG conversion) that occur when the vocal fretboard loads but an advertised part has no corresponding MIDI track.
+
 ### CI/CD Pipeline
 This repository uses GitHub Actions (`.github/workflows/ci-cd.yml`) to:
 * Automatically run test suites on every `push` and `pull_request` to `main`.

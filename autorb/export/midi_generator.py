@@ -25,9 +25,28 @@ def encode_varlen(value: int) -> bytes:
     res.reverse()
     return bytes(res)
 
+PLACEHOLDER_NOTE_PITCH = 60
+
+def build_track(name: str, events_bytes: bytes) -> bytes:
+    """Wraps MIDI events into a single named MTrk chunk."""
+    name_chunk = b"\x00\xFF\x03" + bytes([len(name)]) + name.encode('ascii')
+    content = name_chunk + events_bytes + b"\x00\xFF\x2F\x00"
+    return b"MTrk" + struct.pack(">I", len(content)) + content
+
+def build_placeholder_track(name: str, pitch: int = PLACEHOLDER_NOTE_PITCH) -> bytes:
+    """Builds a minimal valid instrument track containing a single note."""
+    events = bytearray()
+    events.extend(encode_varlen(0))
+    events.extend(b"\x90" + bytes([pitch, 100]))
+    events.extend(encode_varlen(120))
+    events.extend(b"\x80" + bytes([pitch, 0]))
+    return build_track(name, bytes(events))
+
 def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id: str) -> Path:
     """
     Generates a fully compliant Rock Band PART VOCALS MIDI chart from synchronized JSON data.
+    Includes placeholder PART DRUMS, PART GUITAR, and PART BASS tracks (one note each) so that
+    every instrument advertised in songs.dta has a corresponding chart track.
     """
     json_path = Path(synced_json_path)
     midi_path = output_dir / f"{song_id}.mid"
@@ -37,12 +56,7 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
         with open(json_path, "r", encoding="utf-8") as f:
             track_data = json.load(f)
 
-    header = b"MThd" + struct.pack(">IHHH", 6, 1, 3, 480)
-
-    def build_track(name: str, events_bytes: bytes) -> bytes:
-        name_chunk = b"\x00\xFF\x03" + bytes([len(name)]) + name.encode('ascii')
-        content = name_chunk + events_bytes + b"\x00\xFF\x2F\x00"
-        return b"MTrk" + struct.pack(">I", len(content)) + content
+    header = b"MThd" + struct.pack(">IHHH", 6, 1, 6, 480)
 
     # Track 0: Tempo & Time Signature
     track0_data = (
@@ -101,13 +115,19 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
             b"\x83\x60\x80\x3C\x00"
         )
 
-    t2 = build_track("PART VOCALS", bytes(vocal_events))
+    t2 = build_placeholder_track("PART DRUMS")
+    t3 = build_placeholder_track("PART GUITAR")
+    t4 = build_placeholder_track("PART BASS")
+    t5 = build_track("PART VOCALS", bytes(vocal_events))
 
     with open(midi_path, "wb") as f:
         f.write(header)
         f.write(t0)
         f.write(t1)
         f.write(t2)
+        f.write(t3)
+        f.write(t4)
+        f.write(t5)
 
     logger.info(f"Generated complete vocal MIDI chart at {midi_path}")
     return midi_path
