@@ -50,10 +50,14 @@ def simulate_forge_load(con_path: str | Path) -> bool:
         print(f"  - {'[DIR]' if e['is_dir'] else '[FILE]'} {e['name']} (start_block={e['start_block']}, size={e['file_size']})")
         if not e['is_dir'] and e['file_size'] > 0:
             # Block 0 is the file table at 0xC000; data payloads live at the
-            # physical block readers resolve from the logical start block.
+            # physical blocks readers resolve per logical block (non-contiguous
+            # because hash tables are interleaved every 0xAA logical blocks).
+            block_count = (e['file_size'] + 4095) // 4096
+            last_off = 0xC000 + logical_to_physical(e['start_block'] + block_count - 1) * 4096
+            last_used = e['file_size'] % 4096 if e['file_size'] % 4096 else 4096
+            if last_off + last_used > len(data):
+                raise ValueError(f"File {e['name']} extends beyond file bounds (last block {hex(last_off)}, size {e['file_size']})")
             payload_off = 0xC000 + logical_to_physical(e['start_block']) * 4096
-            if payload_off + e['file_size'] > len(data):
-                raise ValueError(f"File {e['name']} extends beyond file bounds (offset {hex(payload_off)}, size {e['file_size']})")
             content_slice = data[payload_off : payload_off + min(e['file_size'], 100)]
             print(f"    Sample content: {content_slice[:30]!r}")
 

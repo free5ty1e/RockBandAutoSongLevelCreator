@@ -122,6 +122,18 @@ def logical_to_physical(logical: int) -> int:
         block_adjust += (logical // 0x4AF768) + 1
     return logical + block_adjust
 
+
+def read_file_blocks(con_data: bytes, start_logical: int, size: int) -> bytes:
+    """Read a file from a CON by resolving EVERY logical block through the
+    interleave (hash-table blocks sit between groups of 0xAA logical blocks, so
+    the physical layout is NOT contiguous)."""
+    block_count = (size + BLOCK_SIZE - 1) // BLOCK_SIZE
+    out = bytearray()
+    for i in range(block_count):
+        offset = 0xC000 + logical_to_physical(start_logical + i) * BLOCK_SIZE
+        out += con_data[offset: offset + BLOCK_SIZE]
+    return bytes(out[:size])
+
 def set_entry_name(con_data: bytearray, ft_offset: int, entry_idx: int, new_name: str):
     entry_addr = ft_offset + entry_idx * 0x40
     entry_bytes = con_data[entry_addr : entry_addr + 0x40]
@@ -209,8 +221,7 @@ def package_con(
     entry6 = template_data[ft_offset + 6*0x40 : ft_offset + 7*0x40]
     start6 = int.from_bytes(entry6[0x2F:0x32], 'little')
     size6 = int.from_bytes(entry6[0x34:0x38], 'big')
-    milo_offset = 0xC000 + logical_to_physical(start6) * BLOCK_SIZE
-    milo_bytes = template_data[milo_offset : milo_offset + size6]
+    milo_bytes = read_file_blocks(template_data, start6, size6)
     repaired = repair_milo(milo_bytes)
     if len(repaired) != len(milo_bytes):
         click.echo("Patched template milo: appended missing 0xADDEADDE terminator for LibForge compat.")
@@ -224,8 +235,7 @@ def package_con(
     entry7 = template_data[ft_offset + 7*0x40 : ft_offset + 8*0x40]
     start7 = int.from_bytes(entry7[0x2F:0x32], 'little')
     size7 = int.from_bytes(entry7[0x34:0x38], 'big')
-    png_offset = 0xC000 + logical_to_physical(start7) * BLOCK_SIZE
-    png_bytes = template_data[png_offset : png_offset + size7]
+    png_bytes = read_file_blocks(template_data, start7, size7)
     target_png.write_bytes(png_bytes)
     click.echo("Extracted and staged valid .milo_xbox and .png_xbox assets from template.")
 
@@ -248,7 +258,7 @@ def package_con(
     set_entry_name(con_data, ft_offset, 6, f"{song_id}.milo_xbox")
     set_entry_name(con_data, ft_offset, 7, f"{song_id}_keep.png_xbox")
 
-    # Calculate contiguous logical block allocations for all 5 files.
+    # Calculate contiguous LOGICAL block allocations for all 5 files.
     # Logical block 0 is the file table, so data starts at block 1.
     dta_size = len(dta_content)
     dta_blocks = (dta_size + BLOCK_SIZE - 1) // BLOCK_SIZE
@@ -283,18 +293,22 @@ def package_con(
     con_data[0x395 : 0x399] = total_allocated.to_bytes(4, 'big')
     con_data[0x399 : 0x39D] = (0).to_bytes(4, 'big')
 
-    # Helper to write payload at the physical offset readers resolve from the
-    # logical start block (hash tables are interleaved every 0xAA logical blocks).
+    # Helper to write payload data block-by-block.  Hash tables are interleaved
+    # every 0xAA logical blocks, so a payload's physical blocks are NOT
+    # contiguous (logical block L maps to 0xC000 + logical_to_physical(L)).  Each
+    # logical block must be written to its own physical location so readers that
+    # resolve per-block (GameArchives STFSFileStream) get the exact bytes.
     def write_payload(start_block: int, content: bytes):
-        payload_offset = 0xC000 + logical_to_physical(start_block) * BLOCK_SIZE
         size = len(content)
         block_count = (size + BLOCK_SIZE - 1) // BLOCK_SIZE
-        total_space = block_count * BLOCK_SIZE
-        end = payload_offset + total_space
-        if len(con_data) < end:
-            con_data.extend(b'\x00' * (end - len(con_data)))
-        con_data[payload_offset : end] = b'\x00' * total_space
-        con_data[payload_offset : payload_offset + size] = content
+        for i in range(block_count):
+            payload_offset = 0xC000 + logical_to_physical(start_block + i) * BLOCK_SIZE
+            chunk = content[i * BLOCK_SIZE: (i + 1) * BLOCK_SIZE]
+            chunk = chunk + b'\x00' * (BLOCK_SIZE - len(chunk))
+            end = payload_offset + BLOCK_SIZE
+            if len(con_data) < end:
+                con_data.extend(b'\x00' * (end - len(con_data)))
+            con_data[payload_offset: end] = chunk
 
     write_payload(dta_start, dta_content)
     write_payload(mid_start, midi_content)
@@ -304,5 +318,5 @@ def package_con(
 
     con_file_path.write_bytes(con_data)
     os.utime(con_file_path, None)
-    click.echo(f"Successfully patched signed template CON with fully contiguous block allocation for all assets: {con_file_path}")
+    click.echo(f"Successfully patched signed template CON with interleave-aware block allocation for all assets: {con_file_path}")
     return con_file_path

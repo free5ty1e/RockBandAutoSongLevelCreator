@@ -2,6 +2,13 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0054] - 2026-08-02
+- Fixed the real root cause of the ForgeTool "CON to PKG Conversion" crash. STFS hash tables are interleaved every 0xAA logical blocks, so a file's physical blocks are **not contiguous** (logical block `L` maps to `0xC000 + logical_to_physical(L) * 0x1000`, with a hash-table block between each group of 170). The previous code read/wrote payloads **contiguously** from the first physical block, which corrupted any file crossing a 170-block boundary.
+- `con_packer.py`: added `read_file_blocks()` and rewrote `write_payload()` to resolve **each logical block** through `logical_to_physical()`. Previously the milo (logical 3551-3570, crossing the boundary at 3570) had its last block written over a hash-table slot and read back from the wrong physical block (template zeros) -> no trailing `0xADDEADDE` -> `ReadBytes(-1)` overflow in `MiloFile.ParseDirectory`.
+- Fixed template `.milo_xbox` / `_keep.png_xbox` extraction to read block-by-block: the contiguous read was pulling the template's interleaved hash-table block into milo block 12 (and misplacing the last block). The extracted milo is now the true, unmodified template milo (81894 bytes), which already terminates entries correctly.
+- Updated `stfs_validator.py` and `forge_simulator.py` bounds checks to use the last logical block's physical offset (interleave-aware).
+- Verified: a faithful replication of GameArchives `STFSFileStream.Read` (per-block `BlockToOffset`) now serves **all 5 payloads byte-identical** to the staged files, and the served milo parses under a replication of LibForge 0.1.19 `ReadFromStream` -> `ParseDirectory` (all `0xADDEADDE` markers found). Validator, simulator, and pytest pass.
+
 ## [0.0053] - 2026-08-02
 - Added `_libforge_milo_parseable()` guard in `con_packer.py`: every staged `.milo_xbox` is validated against a faithful replication of LibForge 0.1.19 `MiloFile.ReadFromStream` -> `ParseDirectory` (all `0xADDEADDE` entry terminators present) before the CON is written. An unparseable milo now raises `RuntimeError` instead of silently producing a CON that crashes ForgeTool's "CON to PKG Conversion" with `OverflowException` in `ReadBytes(-1)`.
 - Rebuilt `output/open_road_song.con`; verified via validator, forge_simulator, pytest, and byte-checks.

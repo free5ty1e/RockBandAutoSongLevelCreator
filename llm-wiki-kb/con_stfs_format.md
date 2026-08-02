@@ -14,7 +14,7 @@ Everything below was derived from reading GameArchives (`STFSPackage.cs`) and fr
 
 ## Logical -> physical mapping (the fix)
 
-Readers interpret a file-table `start` field as a **logical** block number and compute the physical offset as:
+Readers interpret a file-table `start` field as a **logical** block number and compute each block's physical offset as:
 
 ```
 physical_offset = 0xC000 + logical_to_physical(logical) * 0x1000
@@ -27,7 +27,16 @@ def logical_to_physical(logical):
     return logical + adj
 ```
 
-This is the arkem/free60 "fix block numbers" formula with `table_size_shift = 0` (valid because `block separation & 1 == 1` for all reference CONs here, `entry_id@0x340 = 0x0000AD0E`). GameArchives uses the same formula (`fixBlockNumber`), which is why its reads matched ours. **Data files must be allocated starting at logical block 1** (block 0 is the file table itself).
+This is the arkem/free60 "fix block numbers" formula with `table_size_shift = 0` (valid because `block separation & 1 == 1` for all reference CONs here, `entry_id@0x340 = 0x0000AD0E`). GameArchives uses the same formula (`fixBlockNumber`), which is why its reads matched ours.
+
+### CRITICAL: physical blocks are NOT contiguous
+
+A level-0 hash-table block sits between every group of **0xAA logical blocks**. So a file that spans a boundary (e.g. logical 169 -> 170 -> 171 maps to physical 170 -> 172 -> 173, skipping the hash-table block at physical 171) does **not** occupy consecutive physical blocks. This is why:
+
+- **Writing**: a payload must be written block-by-block (`logical_to_physical(start + i) * 0x1000` for each block `i`). Writing contiguously from the first physical block overwrites hash-table slots and misplaces the tail of any file crossing a boundary.
+- **Reading**: the same per-block resolution must be used. A contiguous read picks up hash-table bytes and drops the file's real last block.
+
+Both bugs hit together: the template's milo (logical 1178-1197 in the template) crossed the 1190 boundary; a contiguous read injected the hash-table block into milo block 12 and lost the real final block (and its trailing `0xADDEADDE` terminator), which made ForgeTool's `ParseDirectory` fail. Data files must be allocated starting at logical block 1 (block 0 is the file table itself).
 
 Forget the old `0xD000 + start * 0x1000` assumption — it silently reads the file-table block as `songs.dta` and makes ForgeTool throw `Element at index 0 is not an Array. It is DataSymbol`.
 
@@ -59,7 +68,7 @@ When rebuilding a CON that grew, recompute the `0x395`/`0x399` fields or readers
 
 ## Reference payload offsets in the SmellsLikeNirvana template
 
-- `.milo_xbox` at physical `0x4AD000` (logical 3551 in the rebuilt CON)
-- `_keep.png_xbox` at physical `0x4C2000` (logical 3571)
+- `.milo_xbox` at physical `0x4AD000` (logical 1178)
+- `_keep.png_xbox` at physical `0x4C2000` (logical 1198)
 
-AutoRB extracts these from the template, patches them (see [ForgeTool/LibForge compatibility](forgetool_compat.md)), then re-packs them contiguously after `.mogg`. All 5 payloads in the rebuilt `output/open_road_song.con` byte-match the staged files.
+AutoRB extracts these from the template block-by-block, then re-packs them interleave-aware after `.mogg`. A faithful replication of GameArchives' per-block read of the rebuilt `output/open_road_song.con` serves all 5 payloads byte-identical to the staged files.

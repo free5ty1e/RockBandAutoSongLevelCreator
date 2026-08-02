@@ -10,7 +10,7 @@ System.OverflowException: Array dimensions exceeded supported range.
    at LibForge.Util.PkgCreator.ConvertDLCSong(...)
 ```
 
-## Root cause: missing 0xADDEADDE terminator in the template milo
+## Root cause: contiguous payload I/O across STFS interleave boundaries
 
 `PkgCreator.ConvertDLCSong` derives the song "shortname" from the dta (`songs/<name>/<name>` -> `open_road_song`) and reads `gen/{shortname}.milo_xbox` purely for lipsync (`LipsyncConverter.FromMilo`). The artwork conversion is wrapped in try/catch, so it is never the crash.
 
@@ -19,16 +19,13 @@ System.OverflowException: Array dimensions exceeded supported range.
 - For MILO_A it reads `offset`(LE, at 0x04), `blockCount`(LE, at 0x08), sums the `blockCount` LE u32 sizes at `0x10`, seeks to `offset`, and copies exactly `sum(sizes)` bytes into a buffer.
 - `ParseDirectory` on that buffer: BE u32 version (25/28 supported), length-prefixed `dirType`, `dirName`, skip 8, BE u32 entry count, then for each entry a length-prefixed `(type, name)`. It then **sizes every entry by scanning for a big-endian `0xADDEADDE` padding marker** (`FindNext`). If none is found, `FindNext` returns `-1` and `ReadBytes(-1)` throws the OverflowException.
 
-The staged `SmellsLikeNirvana` template milo (81894 bytes) is an RBN **v28** milo: `ObjectDir "lipsync"` containing a single `CharLipSync "song.lipsync"` whose payload runs to the end of the block region **with no trailing `0xADDEADDE`**. The only marker in the whole file is the one after the entry headers.
+The crash was **not** a malformed template milo. The template's real milo terminates every entry with `0xADDEADDE` correctly. The bug was AutoRB's contiguous I/O: STFS interleaves a hash-table block every 0xAA logical blocks (see [con_stfs_format.md](con_stfs_format.md)), so a file that crosses a boundary is non-contiguous in physical space. A contiguous read of the template's milo injected the interleaved hash-table block into milo block 12 and dropped the real final block (along with the trailing `0xADDEADDE`), and the contiguous re-pack then placed the milo's last block over a hash-table slot — so GameArchives served the last block from template zeros. Both removed the final marker, producing the `ReadBytes(-1)` overflow.
 
-## The fix: `repair_milo()` in `autorb/export/con_packer.py`
+## The fix: interleave-aware (block-by-block) I/O
 
-Because `ReadFromStream` copies exactly the summed block sizes, appending a marker *at the end of the file* is not enough — it must land **inside** the copied block region. `repair_milo()` therefore:
-1. Only touches MILO_A milos.
-2. Grows the **last block's size field** by 4 (so `total_size` includes the marker).
-3. Appends the 4-byte marker `\xad\xde\xad\xde` to the file.
+`autorb/export/con_packer.py` now reads/writes every logical block through `logical_to_physical()` (`read_file_blocks()` and a per-block `write_payload()`). The extracted/staged milo is the true template milo (81894 bytes) with valid entry terminators, and GameArchives' per-block read of the rebuilt CON serves it byte-identical.
 
-The `CharLipSync` data is byte-identical; the marker is just the missing format terminator, so in-game lipsync is unchanged. Verified by replicating LibForge in Python: `ReadFromStream -> ParseDirectory -> CharLipSync.FromStream` now parses the rebuilt CON's milo (version 1/2, 36 visemes, 6749 keyframes).
+`repair_milo()` remains as a safety net: if a MILO_A milo's final block's data does not end in `0xADDEADDE`, it appends the marker and grows the last block-size field so the marker lands inside the block region LibForge copies. The staged milo is also verified by `_libforge_milo_parseable()` (a replication of LibForge's parse) and the build fails loudly if it can't parse.
 
 ## CharLipSync layout (for reference)
 

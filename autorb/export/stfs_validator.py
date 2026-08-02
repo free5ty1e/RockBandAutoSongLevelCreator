@@ -117,20 +117,26 @@ def validate_con(con_path: str | Path) -> dict:
 
     virtual_paths = [get_path(e) for e in entries]
 
-    # Validate payload placement: readers resolve the logical start block to a
-    # physical offset of 0xC000 + logical_to_physical(start) * 0x1000.  If the
-    # payload does not live there (or extends past the file), the CON will not
-    # load, regardless of how clean the file table looks.
+    # Validate payload placement: readers resolve each logical block through the
+    # interleave to 0xC000 + logical_to_physical(block) * 0x1000 (hash tables are
+    # interleaved every 0xAA logical blocks, so physical layout is non-contiguous).
+    # If the payload does not live there (or extends past the file), the CON will
+    # not load, regardless of how clean the file table looks.
     for entry in entries:
         if entry["is_dir"] or entry["file_size"] == 0:
             continue
-        payload_off = 0xC000 + logical_to_physical(entry["start_block"]) * BLOCK_SIZE
-        payload_end = payload_off + entry["file_size"]
+        start_block = entry["start_block"]
+        file_size = entry["file_size"]
+        block_count = (file_size + BLOCK_SIZE - 1) // BLOCK_SIZE
+        payload_off = 0xC000 + logical_to_physical(start_block) * BLOCK_SIZE
+        last_block_off = 0xC000 + logical_to_physical(start_block + block_count - 1) * BLOCK_SIZE
+        last_block_used = file_size % BLOCK_SIZE if file_size % BLOCK_SIZE else BLOCK_SIZE
+        payload_end = last_block_off + last_block_used
         if payload_end > len(data):
             errors.append(f"Entry {entry['index']} ({entry['name']}) payload "
-                          f"(offset {hex(payload_off)}, size {entry['file_size']}) "
+                          f"(last block offset {hex(last_block_off)}, size {file_size}) "
                           f"extends past end of CON file ({len(data)} bytes)")
-        elif data[payload_off:payload_off + min(entry["file_size"], 16)] == b'\x00' * min(entry["file_size"], 16):
+        elif data[payload_off:payload_off + min(file_size, 16)] == b'\x00' * min(file_size, 16):
             errors.append(f"Entry {entry['index']} ({entry['name']}) payload at {hex(payload_off)} is zeroed (block addressing likely wrong)")
 
     return {
