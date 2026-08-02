@@ -9,3 +9,5 @@ We are following the llm-wiki guide shared here https://gist.github.com/karpathy
 - [Architecture & Pipeline](architecture.md)
 - [Rock Band Customs Domain Knowledge](rock_band_customs_domain.md)
 - [Vocal Alignment & LRC Processing](vocal_alignment.md)
+- [Xbox 360 CON / STFS Format](con_stfs_format.md)
+- [ForgeTool / LibForge Compatibility](forgetool_compat.md)

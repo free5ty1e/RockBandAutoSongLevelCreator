@@ -7,6 +7,43 @@ import os
 
 BLOCK_SIZE = 0x1000
 
+# LibForge (ForgeTool) MiloFile constants.  MILO_A = uncompressed block layout.
+MILO_A_MAGIC = 0xCABEDEAF
+MILO_D_MAGIC = 0xCDBEDEAF
+ADDE_PADDING = b'\xad\xde\xad\xde'
+
+
+def repair_milo(milo_bytes: bytes) -> bytes:
+    """Ensure a MILO_A (uncompressed) milo is parseable by LibForge.
+
+    LibForge's MiloFile.ParseDirectory sizes every ObjectDir entry by scanning
+    for the 0xADDEADDE padding marker that terminates it.  The
+    SmellsLikeNirvana template's CharLipSync payload runs to the end of the
+    block region with no trailing marker, so FindNext returns -1 and ForgeTool
+    throws an OverflowException in ReadBytes.  If the final block's data does
+    not already end with the marker, append it to the file and grow the last
+    block's size field so the marker falls inside the block region LibForge
+    copies (ReadFromStream copies exactly the summed block sizes)."""
+    magic = int.from_bytes(milo_bytes[0:4], 'little')
+    if magic != MILO_A_MAGIC:
+        return milo_bytes
+    offset = int.from_bytes(milo_bytes[4:8], 'little')
+    block_count = int.from_bytes(milo_bytes[8:12], 'little')
+    if block_count == 0:
+        return milo_bytes
+    total_size = 0
+    for i in range(block_count):
+        total_size += int.from_bytes(milo_bytes[0x10 + i * 4: 0x14 + i * 4], 'little')
+    data_region = milo_bytes[offset: offset + total_size]
+    if len(data_region) >= 4 and data_region[-4:] == ADDE_PADDING:
+        return milo_bytes
+    out = bytearray(milo_bytes)
+    last_field = 0x10 + (block_count - 1) * 4
+    cur = int.from_bytes(milo_bytes[last_field:last_field + 4], 'little')
+    out[last_field:last_field + 4] = (cur + 4).to_bytes(4, 'little')
+    out.extend(ADDE_PADDING)
+    return bytes(out)
+
 # STFS CON data block addressing.  Readers interpret file-table entry "start"
 # as a *logical* block number whose physical location is:
 #     physical_offset = 0xC000 + logical_to_physical(logical) * 0x1000
@@ -116,7 +153,10 @@ def package_con(
     size6 = int.from_bytes(entry6[0x34:0x38], 'big')
     milo_offset = 0xC000 + logical_to_physical(start6) * BLOCK_SIZE
     milo_bytes = template_data[milo_offset : milo_offset + size6]
-    target_milo.write_bytes(milo_bytes)
+    repaired = repair_milo(milo_bytes)
+    if len(repaired) != len(milo_bytes):
+        click.echo("Patched template milo: appended missing 0xADDEADDE terminator for LibForge compat.")
+    target_milo.write_bytes(repaired)
 
     entry7 = template_data[ft_offset + 7*0x40 : ft_offset + 8*0x40]
     start7 = int.from_bytes(entry7[0x2F:0x32], 'little')

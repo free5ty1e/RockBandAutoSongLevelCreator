@@ -2,6 +2,11 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0052] - 2026-08-02
+- Fixed ForgeTool "CON to PKG Conversion" crash (`System.OverflowException: Array dimensions exceeded supported range` in `LibForge.Milo.MiloFile.ParseDirectory` / `StreamExtensions.ReadBytes(-1)`). The staged `gen/*.milo_xbox` (extracted from the `SmellsLikeNirvana_rb3con` template) is an RBN v28 milo whose `CharLipSync "song.lipsync"` payload runs to the end of the block region with no trailing `0xADDEADDE` padding marker, so LibForge's entry-size scan (`FindNext`) returns `-1`.
+- Added `repair_milo()` in `con_packer.py`: for MILO_A (uncompressed) milos whose final block's data does not end in the `0xADDEADDE` terminator, it appends the marker to the file and grows the last block's size field so the marker falls inside the block region LibForge copies. CharLipSync data itself is byte-identical; the marker only supplies the missing format terminator, so in-game lipsync is unchanged.
+- Verified end-to-end: a Python replication of LibForge's `MiloFile.ReadFromStream` -> `ParseDirectory` -> `CharLipSync.FromStream` now parses the rebuilt CON's milo (version 1/2, 36 visemes, 6749 keyframes); `stfs_validator.py`, `forge_simulator.py`, and all 5 payload byte-checks pass.
+
 ## [0.0051] - 2026-08-02
 - Fixed STFS CON block addressing in `con_packer.py`: readers resolve file-table `start` as a *logical* block whose physical offset is `0xC000 + logical_to_physical(start) * 0x1000`, where `logical_to_physical` uses the arkem/free60 formula (hash tables interleaved every 0xAA logical blocks). Previously payloads were written at `0xD000 + start * 0x1000`, so ForgeTool read `songs.dta` from the file-table block itself, producing `Element at index 0 is not an Array. It is DataSymbol`. Data is now allocated starting at logical block 1 (block 0 is the file table).
 - Corrected `.milo_xbox` / `_keep.png_xbox` extraction from the `SmellsLikeNirvana_rb3con` template to use the physical mapping (0x4AD000 / 0x4C2000) instead of `0xD000 + start * 0x1000`, fixing bogus graphic assets in the staged `gen/` folder.
