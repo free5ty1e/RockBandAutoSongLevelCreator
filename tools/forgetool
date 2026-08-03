@@ -1,0 +1,4 @@
+#!/bin/bash
+# tools/forgetool
+# Wrapper to run the built ForgeTool.exe with mono
+exec mono "$(dirname "$0")/libforge/LibForge/ForgeTool/bin/Release/ForgeTool.exe" "$@"

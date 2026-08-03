@@ -11,6 +11,8 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     git \
     wget \
     unzip \
+    curl \
+    mono-devel \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Fetch and install Mackiloha tools for your export toolchain

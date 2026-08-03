@@ -212,6 +212,13 @@ pytest
 python3 autorb/export/stfs_validator.py output/open_road_song.con
 ```
 
+### ForgeTool Verification (PS4)
+We include a vendored, buildable version of `ForgeTool` to verify CON-to-PKG conversion on Linux:
+```bash
+# Verify the build/conversion path
+tools/forgetool con2gp4 --id 0000000000000001 --desc "Test" output/open_road_song.con ./temp_gp4
+```
+
 ### STFS Packaging & Multi-track DTA Generation
 Step 5 automatically generates a fully compliant Xbox 360 STFS CON package with hierarchical directory structures (`songs/{song_id}/`) and maps the 4 Demucs stems to a **10-channel** MOGG in `songs.dta`, mirroring the proven-working "311 - Down" DLC layout (ch0-1 silent kick/snare, ch2-3 stereo drums, ch4 mono bass, ch5-6 stereo guitar, ch7-8 stereo vocals, ch9 fake/crowd). All packaging and metadata are dynamically generated via pipeline scripts (never manually edited).
 

@@ -19,3 +19,7 @@ output/
 ._*
 Thumbs.db
 
+
+# ForgeTool build artifacts
+tools/libforge/**/bin/
+tools/libforge/**/obj/
