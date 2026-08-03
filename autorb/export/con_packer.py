@@ -1,9 +1,10 @@
 #!/usr/bin/env python
-
 from pathlib import Path
 import shutil
 import click
 import os
+import struct
+import subprocess
 
 BLOCK_SIZE = 0x1000
 
@@ -12,18 +13,8 @@ MILO_A_MAGIC = 0xCABEDEAF
 MILO_D_MAGIC = 0xCDBEDEAF
 ADDE_PADDING = b'\xad\xde\xad\xde'
 
-
 def repair_milo(milo_bytes: bytes) -> bytes:
-    """Ensure a MILO_A (uncompressed) milo is parseable by LibForge.
-
-    LibForge's MiloFile.ParseDirectory sizes every ObjectDir entry by scanning
-    for the 0xADDEADDE padding marker that terminates it.  The
-    SmellsLikeNirvana template's CharLipSync payload runs to the end of the
-    block region with no trailing marker, so FindNext returns -1 and ForgeTool
-    throws an OverflowException in ReadBytes.  If the final block's data does
-    not already end with the marker, append it to the file and grow the last
-    block's size field so the marker falls inside the block region LibForge
-    copies (ReadFromStream copies exactly the summed block sizes)."""
+    """Ensure a MILO_A (uncompressed) milo is parseable by LibForge."""
     magic = int.from_bytes(milo_bytes[0:4], 'little')
     if magic != MILO_A_MAGIC:
         return milo_bytes
@@ -44,21 +35,16 @@ def repair_milo(milo_bytes: bytes) -> bytes:
     out.extend(ADDE_PADDING)
     return bytes(out)
 
-
 def _libforge_milo_parseable(milo_bytes: bytes) -> bool:
     """Replicate LibForge 0.1.19 MiloFile.ReadFromStream -> ParseDirectory ->
     CharLipSync.FromStream and return True if every ObjectDir entry terminates
-    with a 0xADDEADDE marker (i.e. FindNext never returns -1, which would make
-    ForgeTool's ReadBytes(-1) throw an OverflowException)."""
+    with a 0xADDEADDE marker."""
     import struct
-
     def read_u32be(buf, p):
         return struct.unpack('>I', buf[p:p + 4])[0]
-
     def read_str(buf, p):
         length = read_u32be(buf, p)
         return buf[p + 4: p + 4 + length].decode('utf-8', 'replace'), p + 4 + length
-
     def find_next(buf, p):
         start = p
         magic = 0
@@ -68,7 +54,6 @@ def _libforge_milo_parseable(milo_bytes: bytes) -> bool:
             if magic == 0xADDEADDE:
                 return (p - 4) - start
         return -1
-
     if int.from_bytes(milo_bytes[0:4], 'little') != MILO_A_MAGIC:
         return False
     offset = int.from_bytes(milo_bytes[4:8], 'little')
@@ -102,16 +87,6 @@ def _libforge_milo_parseable(milo_bytes: bytes) -> bool:
         p += find_next(buf, p) + 4
     return True
 
-# STFS CON data block addressing.  Readers interpret file-table entry "start"
-# as a *logical* block number whose physical location is:
-#     physical_offset = 0xC000 + logical_to_physical(logical) * 0x1000
-# Block 0 (physical 0x0, i.e. offset 0xC000) is the file table itself, so data
-# files must be allocated starting at logical block 1.  Hash tables are
-# interleaved every 0xAA logical blocks (plus higher-level tables), which is
-# why the physical mapping is not 1:1.
-#
-# This is the arkem/free60 "fix block numbers" formula with table_size_shift=0
-# (block separation & 1 == 1, which is the case for all reference CONs here).
 def logical_to_physical(logical: int) -> int:
     block_adjust = 0
     if logical >= 0xAA:
@@ -121,7 +96,6 @@ def logical_to_physical(logical: int) -> int:
     if logical >= 0x4AF768:
         block_adjust += (logical // 0x4AF768) + 1
     return logical + block_adjust
-
 
 def read_file_blocks(con_data: bytes, start_logical: int, size: int) -> bytes:
     """Read a file from a CON by resolving EVERY logical block through the
@@ -184,32 +158,29 @@ def package_con(
     song_staging_dir = songs_root / song_id
     gen_staging_dir = song_staging_dir / "gen"
     gen_staging_dir.mkdir(parents=True, exist_ok=True)
-    
+
     target_dta_parent = songs_root / "songs.dta"
     target_dta_sub = song_staging_dir / "songs.dta"
-    
+
     if dta_path.resolve() != target_dta_parent.resolve():
         shutil.copy2(dta_path, target_dta_parent)
     shutil.copy2(target_dta_parent, target_dta_sub)
 
     target_mogg = song_staging_dir / f"{song_id}.mogg"
     target_mid = song_staging_dir / f"{song_id}.mid"
-    
+
     if mogg_path.resolve() != target_mogg.resolve():
         shutil.copy2(mogg_path, target_mogg)
     if midi_path.resolve() != target_mid.resolve():
         shutil.copy2(midi_path, target_mid)
 
-    # Path to template CON
     template_con = Path(__file__).parent / "data/template.con"
-    
     con_file_path = output_path / f"{song_id}.con"
-    
+
     if template_con.exists():
         shutil.copy2(template_con, con_file_path)
         click.echo(f"Cloned signed template CON from {template_con}")
     else:
-        # Fallback to local output/ path (for backward compatibility if needed)
         fallback_con = Path("output/known_good_cons/SmellsLikeNirvana_rb3con")
         if fallback_con.exists():
             shutil.copy2(fallback_con, con_file_path)
@@ -223,7 +194,6 @@ def package_con(
         if b'songs' in template_data[0xA000:0xA000+0x40]:
             ft_offset = 0xA000
 
-    # Extract milo and png from template if not present
     target_milo = gen_staging_dir / f"{song_id}.milo_xbox"
     target_png = gen_staging_dir / f"{song_id}_keep.png_xbox"
 
@@ -232,16 +202,15 @@ def package_con(
     size6 = int.from_bytes(entry6[0x34:0x38], 'big')
     milo_bytes = read_file_blocks(template_data, start6, size6)
     repaired = repair_milo(milo_bytes)
-        if len(repaired) != len(milo_bytes):
-            click.echo("Patched template milo: appended missing 0xADDEADDE terminator for LibForge compat.")
-        if not _libforge_milo_parseable(repaired):
-            click.echo(
-                "WARNING: Staged milo might not be fully parseable by LibForge. "
-                "PKG conversion may fail if the MiloFile cannot be processed.",
-                err=True
-            )
-        target_milo.write_bytes(repaired)
-
+    if len(repaired) != len(milo_bytes):
+        click.echo("Patched template milo: appended missing 0xADDEADDE terminator for LibForge compat.")
+    if not _libforge_milo_parseable(repaired):
+        click.echo(
+            "WARNING: Staged milo might not be fully parseable by LibForge. "
+            "PKG conversion may fail if the MiloFile cannot be processed.",
+            err=True
+        )
+    target_milo.write_bytes(repaired)
 
     entry7 = template_data[ft_offset + 7*0x40 : ft_offset + 8*0x40]
     start7 = int.from_bytes(entry7[0x2F:0x32], 'little')
@@ -255,65 +224,47 @@ def package_con(
     target_png.write_bytes(png_bytes)
     click.echo("Extracted and staged valid .milo_xbox and .png_xbox assets from template.")
 
-    click.echo(f"Staged clean song folder structure at: {song_staging_dir}")
-
     con_data = bytearray(con_file_path.read_bytes())
-
     patch_stfs_header_metadata(con_data, title, artist)
-
     dta_content = target_dta_parent.read_bytes()
     midi_content = target_mid.read_bytes()
     mogg_content = target_mogg.read_bytes()
     milo_content = target_milo.read_bytes()
     png_content = target_png.read_bytes()
 
-    # Update file table entry names
     set_entry_name(con_data, ft_offset, 1, song_id)
     set_entry_name(con_data, ft_offset, 4, f"{song_id}.mid")
     set_entry_name(con_data, ft_offset, 5, f"{song_id}.mogg")
     set_entry_name(con_data, ft_offset, 6, f"{song_id}.milo_xbox")
     set_entry_name(con_data, ft_offset, 7, f"{song_id}_keep.png_xbox")
 
-    # Calculate contiguous LOGICAL block allocations for all 5 files.
-    # Logical block 0 is the file table, so data starts at block 1.
     dta_size = len(dta_content)
     dta_blocks = (dta_size + BLOCK_SIZE - 1) // BLOCK_SIZE
-
     mid_size = len(midi_content)
     mid_blocks = (mid_size + BLOCK_SIZE - 1) // BLOCK_SIZE
-
     mogg_size = len(mogg_content)
     mogg_blocks = (mogg_size + BLOCK_SIZE - 1) // BLOCK_SIZE
-
     milo_size = len(milo_content)
     milo_blocks = (milo_size + BLOCK_SIZE - 1) // BLOCK_SIZE
-
     png_size = len(png_content)
     png_blocks = (png_size + BLOCK_SIZE - 1) // BLOCK_SIZE
-
+    
     dta_start = 1
     mid_start = dta_start + dta_blocks
     mogg_start = mid_start + mid_blocks
     milo_start = mogg_start + mogg_blocks
     png_start = milo_start + milo_blocks
 
-    # Update file table entries 3, 4, 5, 6, 7
     set_entry_allocation(con_data, ft_offset, 3, dta_start, dta_size)
     set_entry_allocation(con_data, ft_offset, 4, mid_start, mid_size)
     set_entry_allocation(con_data, ft_offset, 5, mogg_start, mogg_size)
     set_entry_allocation(con_data, ft_offset, 6, milo_start, milo_size)
     set_entry_allocation(con_data, ft_offset, 7, png_start, png_size)
 
-    # Total Allocated Block Count (be32 at 0x395) = file table (1) + data blocks.
     total_allocated = 1 + dta_blocks + mid_blocks + mogg_blocks + milo_blocks + png_blocks
     con_data[0x395 : 0x399] = total_allocated.to_bytes(4, 'big')
     con_data[0x399 : 0x39D] = (0).to_bytes(4, 'big')
 
-    # Helper to write payload data block-by-block.  Hash tables are interleaved
-    # every 0xAA logical blocks, so a payload's physical blocks are NOT
-    # contiguous (logical block L maps to 0xC000 + logical_to_physical(L)).  Each
-    # logical block must be written to its own physical location so readers that
-    # resolve per-block (GameArchives STFSFileStream) get the exact bytes.
     def write_payload(start_block: int, content: bytes):
         size = len(content)
         block_count = (size + BLOCK_SIZE - 1) // BLOCK_SIZE
@@ -331,19 +282,14 @@ def package_con(
     write_payload(mogg_start, mogg_content)
     write_payload(milo_start, milo_content)
     write_payload(png_start, png_content)
-
     con_file_path.write_bytes(con_data)
     os.utime(con_file_path, None)
-    click.echo(f"Successfully patched signed template CON with interleave-aware block allocation for all assets: {con_file_path}")
+    click.echo(f"Successfully patched CON: {con_file_path}")
     return con_file_path
 
 def build_ps4_pkg(con_path: Path, output_dir: Path, song_id: str) -> Path:
-    """Invokes the vendored ForgeTool (via wrapper) to convert CON to PKG."""
-    import subprocess
     pkg_dir = output_dir / "pkg"
     pkg_dir.mkdir(parents=True, exist_ok=True)
-    
-    # tools/forgetool expects arguments: con2pkg <con> <out_dir>
     cmd = [
         "tools/forgetool",
         "con2pkg",
@@ -352,14 +298,10 @@ def build_ps4_pkg(con_path: Path, output_dir: Path, song_id: str) -> Path:
         str(con_path),
         str(pkg_dir)
     ]
-    
     click.echo(f"Running ForgeTool: {' '.join(cmd)}")
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    
     if result.returncode != 0:
         click.echo(f"Error during PKG conversion: {result.stderr}", err=True)
         raise RuntimeError(f"ForgeTool failed to build PKG: {result.stderr}")
-        
     pkg_file = pkg_dir / f"{song_id}.pkg"
-    click.echo(f"PKG conversion output: {result.stdout}")
     return pkg_file
