@@ -2,6 +2,11 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0062] - 2026-08-03
+- Pipeline: Added `--build-pkg` flag to CLI for automated PS4 PKG generation via vendored `ForgeTool`.
+- Pipeline: Integrated vendored `ForgeTool` (LibForge) for reliable CON-to-PKG conversion on Linux.
+- Devcontainer: Baked in Mono + .NET SDK 8 build environment for reproducible toolchain.
+
 ## [0.0061] - 2026-08-02
 - **Fixed the vocal chart timeline (root cause of "fretboard flashes then instant 0%")**. `autorb/audio/step4_sync.py` wrote synced word entries under `time`/`beat_time` but without `start`/`end`/`pitch`, so `generate_vocal_midi()` fell back to `start=0.0`, `pitch=60` for every word — the entire 284-note PART VOCALS chart was a blob at tick 0. `step4_sync.py` now emits real `start`/`end` (from `word_segments`) and a `pitch` (from the Basic-Pitch `note_events` in `vocals_cache.json` via nearest/containing-note lookup). The rebuilt chart spans 0.61s → 190.2s with pitches 50-83.
 - **Added the mandatory Rock Band EVENTS markers** to the chart MIDI. `midi_generator.py` now emits `[prc_intro]`, `[music_start]`, `[prc_verse_1]`, `[preview]` (tick 48000 / 50s), `[prc_chorus_1]`, `[prc_outro]`, `[music_end]`, and `[end]` (the final event) in the EVENTS track, mirroring the proven-good "311 - Down" reference (which has `[music_start]` at 5280, `[preview]` at 22800, `[music_end]` at 123360, `[end]` at 125759). The missing `[preview]` marker explains the absent song-list preview; missing `[music_end]`/`[end]` makes the game finish the song instantly at 0%.

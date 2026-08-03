@@ -326,3 +326,30 @@ def package_con(
     os.utime(con_file_path, None)
     click.echo(f"Successfully patched signed template CON with interleave-aware block allocation for all assets: {con_file_path}")
     return con_file_path
+
+def build_ps4_pkg(con_path: Path, output_dir: Path, song_id: str) -> Path:
+    """Invokes the vendored ForgeTool (via wrapper) to convert CON to PKG."""
+    import subprocess
+    pkg_dir = output_dir / "pkg"
+    pkg_dir.mkdir(parents=True, exist_ok=True)
+    
+    # tools/forgetool expects arguments: con2pkg <con> <out_dir>
+    cmd = [
+        "tools/forgetool",
+        "con2pkg",
+        "--id", "0000000000000001",
+        "--desc", f"Custom Song - {song_id}",
+        str(con_path),
+        str(pkg_dir)
+    ]
+    
+    click.echo(f"Running ForgeTool: {' '.join(cmd)}")
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    
+    if result.returncode != 0:
+        click.echo(f"Error during PKG conversion: {result.stderr}", err=True)
+        raise RuntimeError(f"ForgeTool failed to build PKG: {result.stderr}")
+        
+    pkg_file = pkg_dir / f"{song_id}.pkg"
+    click.echo(f"PKG conversion output: {result.stdout}")
+    return pkg_file

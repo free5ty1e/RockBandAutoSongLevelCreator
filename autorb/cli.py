@@ -17,7 +17,8 @@ import torch
 @click.option('--skip-vocals', is_flag=True, help='Skip vocal alignment and pitch extraction (uses cached data)')
 @click.option('--skip-mogg', is_flag=True, help='Skip MOGG building and use existing .mogg file')
 @click.option('--album-art', type=click.Path(exists=True), default=None, help='Path to a custom album art image (PNG/JPG); defaults to the generated "Chris Prime Custom" art')
-def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, skip_tempo_detection, skip_vocals, skip_mogg, album_art):
+@click.option('--build-pkg', is_flag=True, help='Build PS4 PKG installer from the generated CON')
+def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg):
     click.echo(f"Starting AutoRB Pipeline for: {artist} - {title}")
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -143,7 +144,7 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         else:
             click.echo("Generating default 'Chris Prime Custom' album art...")
             album_art_bytes = default_album_art_bytes()
-        con_output_path = package_con(
+         con_output_path = package_con(
             output_dir=out_path,
             song_id=song_id,
             mogg_path=mogg_file,
@@ -152,7 +153,15 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             album_art_bytes=album_art_bytes
         )
         click.echo(f"CON file successfully packaged: {con_output_path}")
+
+        if build_pkg:
+            click.echo("\n[6/5] Building PS4 PKG installer...")
+            from autorb.export.con_packer import build_ps4_pkg
+            pkg_path = build_ps4_pkg(con_output_path, out_path, song_id)
+            click.echo(f"PS4 PKG installer successfully built: {pkg_path}")
+
     except Exception as e:
+
         click.echo(f"Error during asset building or CON packaging: {e}", err=True)
         return
 
