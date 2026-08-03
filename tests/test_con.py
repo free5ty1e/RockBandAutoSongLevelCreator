@@ -14,6 +14,7 @@ def test_con_packaging_and_validation(tmp_path):
     template_con = data_dir / "template.con"
     if not template_con.exists():
         d = bytearray(0xD000)
+        d[0:4] = b'CON '  # Add magic bytes
         d[0xC000:0xC000+5] = b'songs'
         template_con.write_bytes(d)
     
