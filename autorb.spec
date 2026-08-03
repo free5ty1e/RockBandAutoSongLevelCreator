@@ -17,7 +17,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['output', 'tests', 'input', '.devcontainer', '.github', 'venv'],
+    excludes=['output', 'tests', 'input', '.devcontainer', '.github', 'venv', 'stems'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -45,4 +45,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    contents_directory='.'
 )
