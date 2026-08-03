@@ -95,8 +95,7 @@ def wrap_ogg_as_mogg(ogg_bytes: bytes) -> bytes:
     total_bytes = len(ogg_bytes)
 
     # For every 0x8000-byte increment of the file, record the granule position
-    # of the page containing it. Header pages (-1) are kept as 0xFFFFFFFF so
-    # they never satisfy the `<= desired sample` selection below.
+    # of the FIRST page starting at-or-after it (mirrors ogg2mogg's semantics).
     seek_bytes = []
     seek_samples = []
     i = 0
@@ -104,9 +103,8 @@ def wrap_ogg_as_mogg(ogg_bytes: bytes) -> bytes:
         x = i * SEEK_INCREMENT
         sample = 0xFFFFFFFF
         for offset, granule in pages:
-            if offset <= x:
+            if offset >= x:
                 sample = granule if granule >= 0 else 0xFFFFFFFF
-            else:
                 break
         seek_bytes.append(i * SEEK_INCREMENT)
         seek_samples.append(sample)

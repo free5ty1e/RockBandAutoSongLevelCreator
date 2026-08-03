@@ -144,7 +144,7 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         else:
             click.echo("Generating default 'Chris Prime Custom' album art...")
             album_art_bytes = default_album_art_bytes()
-         con_output_path = package_con(
+        con_output_path = package_con(
             output_dir=out_path,
             song_id=song_id,
             mogg_path=mogg_file,
