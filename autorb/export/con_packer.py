@@ -176,17 +176,12 @@ def package_con(
 
     template_con = Path(__file__).parent / "data/template.con"
     con_file_path = output_path / f"{song_id}.con"
+    
+    if not template_con.exists() or template_con.stat().st_size < 0x1000:
+        raise FileNotFoundError(f"Valid Template CON not found at {template_con} (size: {template_con.stat().st_size if template_con.exists() else 'N/A'})")
 
-    if template_con.exists():
-        shutil.copy2(template_con, con_file_path)
-        click.echo(f"Cloned signed template CON from {template_con}")
-    else:
-        fallback_con = Path("output/known_good_cons/SmellsLikeNirvana_rb3con")
-        if fallback_con.exists():
-            shutil.copy2(fallback_con, con_file_path)
-            click.echo(f"Cloned signed template CON from {fallback_con}")
-        else:
-            raise FileNotFoundError(f"Template CON not found at {template_con} or {fallback_con}")
+    shutil.copy2(template_con, con_file_path)
+    click.echo(f"Cloned signed template CON from {template_con}")
 
     template_data = template_con.read_bytes()
     ft_offset = 0xC000
