@@ -8,6 +8,15 @@ def test_con_packaging_and_validation(tmp_path):
     output_dir = tmp_path / "output"
     output_dir.mkdir()
     
+    # Create the fixture for the template
+    data_dir = Path("autorb/export/data")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    template_con = data_dir / "template.con"
+    if not template_con.exists():
+        d = bytearray(0xD000)
+        d[0xC000:0xC000+5] = b'songs'
+        template_con.write_bytes(d)
+    
     songs_dir = output_dir / "songs"
     song_id = "test_song"
     song_staging = songs_dir / song_id

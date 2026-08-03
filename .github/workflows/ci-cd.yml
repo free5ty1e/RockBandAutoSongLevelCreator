@@ -43,16 +43,25 @@ jobs:
         python-version: '3.11'
     - name: Install Dependencies
       run: |
-        sudo apt-get install -y ffmpeg
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg mono-devel curl
+        # Install .NET SDK
+        curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 8.0 --install-dir /tmp/dotnet
+        export PATH=/tmp/dotnet:$PATH
         pip install -r requirements.txt pyinstaller
+    - name: Build ForgeTool
+      run: |
+        export PATH=/tmp/dotnet:$PATH
+        bash tools/build_forgetool.sh
     - name: Build Executable
       run: |
         pyinstaller --onefile --name autorb autorb/cli.py
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
-        files: dist/autorb
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        files: |
+          dist/autorb
+          tools/libforge/LibForge/ForgeTool/bin/Release/ForgeTool.exe
+          tools/libforge/LibForge/ForgeTool/bin/Release/*.dll
 
         

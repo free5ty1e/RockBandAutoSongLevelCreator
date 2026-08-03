@@ -200,14 +200,22 @@ def package_con(
     if midi_path.resolve() != target_mid.resolve():
         shutil.copy2(midi_path, target_mid)
 
-    template_con = Path("output/known_good_cons/SmellsLikeNirvana_rb3con")
+    # Path to template CON
+    template_con = Path(__file__).parent / "data/template.con"
+    
     con_file_path = output_path / f"{song_id}.con"
     
     if template_con.exists():
         shutil.copy2(template_con, con_file_path)
         click.echo(f"Cloned signed template CON from {template_con}")
     else:
-        raise FileNotFoundError(f"Template CON not found at {template_con}")
+        # Fallback to local output/ path (for backward compatibility if needed)
+        fallback_con = Path("output/known_good_cons/SmellsLikeNirvana_rb3con")
+        if fallback_con.exists():
+            shutil.copy2(fallback_con, con_file_path)
+            click.echo(f"Cloned signed template CON from {fallback_con}")
+        else:
+            raise FileNotFoundError(f"Template CON not found at {template_con} or {fallback_con}")
 
     template_data = template_con.read_bytes()
     ft_offset = 0xC000
