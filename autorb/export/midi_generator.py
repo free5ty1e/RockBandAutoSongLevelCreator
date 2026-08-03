@@ -124,7 +124,16 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     last_note_end_tick = 0
 
     vocal_events = bytearray()
-    for item in items:
+    # Vocal phrase marker: pitch 105, velocity 100
+    # Add phrase start at every 8 beats or lyric group, for now start with a simple phrase-per-phrase
+    # To keep it simple, let's just mark phrases by detecting pauses > 1 second (2 beats)
+    
+    # Updated vocal_events generation
+    last_tick = 0
+    in_phrase = False
+    phrase_start_tick = 0
+    
+    for i, item in enumerate(items):
         start_sec = item.get("start", item.get("time", item.get("beat_time", 0.0)))
         end_sec = item.get("end", start_sec + 0.5)
         lyric = item.get("word", item.get("lyric", "la"))
@@ -133,7 +142,26 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
         target_start_tick = int(start_sec * ticks_per_second)
         target_end_tick = int(end_sec * ticks_per_second)
         
-        delta_on = max(0, target_start_tick - last_event_tick)
+        # Check for phrase break (pause > 1.5 seconds)
+        if i > 0:
+            prev_end = int(items[i-1].get("end", 0) * ticks_per_second)
+            if target_start_tick - prev_end > 720: # 1.5 seconds at 120bpm
+                if in_phrase:
+                    # End phrase
+                    vocal_events.extend(encode_varlen(prev_end - last_tick))
+                    vocal_events.extend(b"\x90\x69\x00") # phrase end
+                    last_tick = prev_end
+                    in_phrase = False
+        
+        if not in_phrase:
+            # Start phrase
+            vocal_events.extend(encode_varlen(target_start_tick - last_tick))
+            vocal_events.extend(b"\x90\x69\x64") # phrase start
+            last_tick = target_start_tick
+            in_phrase = True
+        
+        # Note
+        delta_on = max(0, target_start_tick - last_tick)
         duration = max(48, target_end_tick - target_start_tick)
         
         vocal_events.extend(encode_varlen(delta_on))
@@ -145,10 +173,10 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
         vocal_events.extend(encode_varlen(duration))
         vocal_events.extend(b"\x80" + bytes([pitch, 0]))
         
-        last_event_tick = target_start_tick + duration
+        last_tick = target_start_tick + duration
         if first_note_tick is None:
             first_note_tick = target_start_tick
-        last_note_end_tick = max(last_note_end_tick, target_start_tick + duration)
+        last_note_end_tick = max(last_note_end_tick, last_tick)
 
     if not items:
         vocal_events.extend(

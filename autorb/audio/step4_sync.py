@@ -2,6 +2,7 @@
 
 import json
 import os
+import numpy as np
 
 def load_json(filepath):
     """Utility to load a JSON file."""
@@ -19,15 +20,19 @@ def sync_lyrics_to_beats(beats_data, lyrics_data):
     synced_track = []
     
     def pitch_at(time_sec):
-        """Returns the Basic-Pitch note (midi pitch, end time) active at time_sec."""
-        best = None
+        """Returns the most frequent note pitch found within the word's duration."""
+        pitches_in_range = []
         for note in note_events:
             note_start, note_end, note_pitch = note[0], note[1], note[2]
-            if note_start <= time_sec <= note_end:
-                return note_pitch
-            if best is None or abs(note_start - time_sec) < best[0]:
-                best = (abs(note_start - time_sec), note_pitch, note_end)
-        return best[1] if best else None
+            # Check if the note overlaps the word segment
+            if note_start < (time_sec + 0.3) and note_end > (time_sec):
+                pitches_in_range.append(note_pitch)
+        
+        if not pitches_in_range:
+            return None
+        
+        # Return the median pitch to reduce noise/jitter
+        return int(np.median(pitches_in_range))
     
     for i, segment in enumerate(word_segments):
         word = segment["word"]

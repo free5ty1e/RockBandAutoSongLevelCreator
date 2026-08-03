@@ -40,6 +40,8 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path, song_leng
         ranks = {k: int(ranks.get(k, 0)) for k in
                  ("drum", "guitar", "bass", "vocals", "keys", "real_guitar", "real_bass", "real_keys", "band")}
 
+    preview_start = max(0, int(song_length * 0.25))
+    preview_end = min(song_length, preview_start + 30000)
     dta_lines = [
         f"({song_id}",
         f'   (name "{title}")',
@@ -71,7 +73,7 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path, song_leng
         "   (anim_tempo kTempoSlow)",
         "   (band_fail_cue band_fail_heavy.cue)",
         "   (song_scroll_speed 2300)",
-        "   (preview 50000 80000)",
+        f"   (preview {preview_start} {preview_end})",
         f"   (song_length {song_length})",
         "   (solo (vocal_percussion))",
         "   (rank",
