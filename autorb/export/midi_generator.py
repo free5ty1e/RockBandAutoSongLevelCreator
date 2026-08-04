@@ -84,11 +84,18 @@ def build_placeholder_track(name: str, pitches: tuple = PLACEHOLDER_DIFFICULTY_P
     return build_track(name, bytes(events))
 
 def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id: str,
-                        preview_start_ms: int = 50000, song_length_ms: int | None = None) -> Path:
+                        preview_start_ms: int = 50000, song_length_ms: int | None = None,
+                        phrase_measures: int = 2) -> Path:
     """
     Generates a fully compliant Rock Band PART VOCALS MIDI chart from synchronized JSON data.
     Includes placeholder PART DRUMS, PART GUITAR, and PART BASS tracks (one note each) so that
     every instrument advertised in songs.dta has a corresponding chart track.
+
+    Vocal phrase markers (pitch 105) group the lyrics into fixed-length phrases of
+    ``phrase_measures`` measures (Rock Band convention is 2 or 4 bars per phrase).
+    Measure boundaries are derived from the beat grid (4/4 at 120 BPM, 480 ticks/beat
+    => 1920 ticks/measure), so phrases are anchored to the song's meter rather than
+    to pauses in the lyrics.
     """
     json_path = Path(synced_json_path)
     midi_path = output_dir / f"{song_id}.mid"
@@ -124,59 +131,68 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     last_note_end_tick = 0
 
     vocal_events = bytearray()
-    # Vocal phrase marker: pitch 105, velocity 100
-    # Add phrase start at every 8 beats or lyric group, for now start with a simple phrase-per-phrase
-    # To keep it simple, let's just mark phrases by detecting pauses > 1 second (2 beats)
-    
-    # Updated vocal_events generation
+
+    # Vocal phrase markers (pitch 105) group lyrics into fixed-length phrases.
+    # The beat grid is 4/4 at 120 BPM with 480 ticks/beat, so one measure is
+    # 4 * 480 = 1920 ticks. Phrases span `phrase_measures` measures (default 2),
+    # and each note is assigned to the phrase window its start tick falls in.
+    ticks_per_beat = 480
+    beats_per_measure = 4
+    phrase_ticks = phrase_measures * beats_per_measure * ticks_per_beat
+
     last_tick = 0
-    in_phrase = False
-    phrase_start_tick = 0
-    
-    for i, item in enumerate(items):
+    current_phrase_idx = None
+
+    for item in items:
         start_sec = item.get("start", item.get("time", item.get("beat_time", 0.0)))
         end_sec = item.get("end", start_sec + 0.5)
         lyric = item.get("word", item.get("lyric", "la"))
         pitch = item.get("pitch", 60)
-        
+
         target_start_tick = int(start_sec * ticks_per_second)
-        target_end_tick = int(end_sec * ticks_per_second)
-        
-        # Check for phrase break (pause > 1.5 seconds)
-        if i > 0:
-            prev_end = int(items[i-1].get("end", 0) * ticks_per_second)
-            if target_start_tick - prev_end > 720: # 1.5 seconds at 120bpm
-                if in_phrase:
-                    # End phrase
-                    vocal_events.extend(encode_varlen(prev_end - last_tick))
-                    vocal_events.extend(b"\x90\x69\x00") # phrase end
-                    last_tick = prev_end
-                    in_phrase = False
-        
-        if not in_phrase:
-            # Start phrase
-            vocal_events.extend(encode_varlen(target_start_tick - last_tick))
-            vocal_events.extend(b"\x90\x69\x64") # phrase start
+        target_end_tick = max(target_start_tick + 48, int(end_sec * ticks_per_second))
+
+        phrase_idx = target_start_tick // phrase_ticks
+
+        if current_phrase_idx is None:
+            # Open the first phrase at the first note.
+            vocal_events.extend(encode_varlen(max(0, target_start_tick - last_tick)))
+            vocal_events.extend(b"\x90\x69\x64")  # phrase start: pitch 105, vel 100
             last_tick = target_start_tick
-            in_phrase = True
-        
+            current_phrase_idx = phrase_idx
+        elif phrase_idx != current_phrase_idx:
+            # The phrase window rolled over: close the previous phrase at the end
+            # of its last note and open the next one at this note's start.
+            vocal_events.extend(encode_varlen(0))
+            vocal_events.extend(b"\x80\x69\x00")  # phrase end: pitch 105, vel 0
+            vocal_events.extend(encode_varlen(max(0, target_start_tick - last_tick)))
+            vocal_events.extend(b"\x90\x69\x64")
+            last_tick = target_start_tick
+            current_phrase_idx = phrase_idx
+
         # Note
         delta_on = max(0, target_start_tick - last_tick)
         duration = max(48, target_end_tick - target_start_tick)
-        
+
         vocal_events.extend(encode_varlen(delta_on))
         vocal_events.extend(b"\x90" + bytes([pitch, 100]))
-        
+
         lyric_bytes = lyric.encode('utf-8')
         vocal_events.extend(b"\x00\xFF\x05" + bytes([len(lyric_bytes)]) + lyric_bytes)
-        
+
         vocal_events.extend(encode_varlen(duration))
         vocal_events.extend(b"\x80" + bytes([pitch, 0]))
-        
+
         last_tick = target_start_tick + duration
+
         if first_note_tick is None:
             first_note_tick = target_start_tick
         last_note_end_tick = max(last_note_end_tick, last_tick)
+
+    # Close the final phrase at the end of the last note.
+    if current_phrase_idx is not None:
+        vocal_events.extend(encode_varlen(0))
+        vocal_events.extend(b"\x80\x69\x00")
 
     if not items:
         vocal_events.extend(

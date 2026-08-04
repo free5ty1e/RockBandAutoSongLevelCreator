@@ -1,4 +1,23 @@
 #!/bin/bash
 # tools/forgetool
-# Wrapper to run the built ForgeTool.exe with mono
-exec mono "$(dirname "$0")/libforge/LibForge/ForgeTool/bin/Release/ForgeTool.exe" "$@"
+# Wrapper to run the built ForgeTool.exe with mono.
+# Handles two layouts:
+#   - Git clone / sdist: DLLs are in libforge/LibForge/ForgeTool/bin/Release/
+#   - pip wheel install: DLLs are in libforge/ (flat, installed by setuptools data-files)
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+TOOL_EXE=""
+for candidate in \
+  "$SCRIPT_DIR/libforge/ForgeTool.exe" \
+  "$SCRIPT_DIR/libforge/LibForge/ForgeTool/bin/Release/ForgeTool.exe"; do
+  if [ -f "$candidate" ]; then
+    TOOL_EXE="$candidate"
+    break
+  fi
+done
+if [ -z "$TOOL_EXE" ]; then
+  echo "ForgeTool.exe not found under $SCRIPT_DIR/libforge/." >&2
+  echo "  Git clone: ensure the repo was fully cloned." >&2
+  echo "  pip install: the wheel must include tools/libforge data files." >&2
+  exit 1
+fi
+exec mono "$TOOL_EXE" "$@"

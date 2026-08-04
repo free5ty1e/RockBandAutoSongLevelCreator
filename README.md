@@ -270,12 +270,13 @@ The generated MIDI chart always includes `BEAT`, `EVENTS`, `PART VOCALS`, and pl
 ### CI/CD Pipeline
 This repository uses GitHub Actions (`.github/workflows/ci-cd.yml`) to:
 * Automatically run test suites on every `push` and `pull_request` to `main`.
-* Build a standalone, cross-platform executable via PyInstaller and automatically draft a **GitHub Release** whenever a tag matching `v*.*.*` is pushed.
+* Build a Python source distribution and wheel (`python -m build`) and automatically draft a **GitHub Release** whenever a tag matching `v*.*.*` is pushed.
 
 ```bash
-# Trigger a build release
-git tag v0.1.0
-git push origin v0.1.0
+# Trigger a build release (tag MUST match the version in autorb/version.py,
+# pyproject.toml, and CHANGELOG.md — currently 0.0062)
+git tag v0.0062
+git push origin v0.0062
 ```
 
 ---

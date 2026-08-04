@@ -2,7 +2,13 @@
 
 All notable changes to AutoRB will be documented in this file.
 
-## [0.0062] - 2026-08-03
+## [0.0062] - 2026-08-04
+- **Vocal phrase markers now align to 2-measure windows on the beat grid.** `midi_generator.py` groups words by their position in the song's meter (4/4 at 120 BPM, 480 ticks/beat => 1920 ticks/measure, 3840 ticks/phrase) rather than by detecting pauses > 1.5 s in the lyrics. This matches Rock Band's convention: every phrase is a fixed 2 bars of the beat grid, so the in-game vocal HUD shows phrase boundaries at musically correct positions. The function accepts `phrase_measures` (default 2) for 2-bar or 4-bar phrasing.
+- **Version and packaging consistency fix (v0.1.0 → 0.0062).** The wheel filename was previously `autorb-0.1.0-...` because pyproject.toml had `version = "0.1.0"` while the source code and changelog used `0.00XX` — the two never matched. `pyproject.toml` now declares `version = "0.0062"` (setuptools normalizes the wheel filename to `autorb-0.62-py3-none-any.whl` per PEP 440). The README's `git tag` example now points to `v0.0062` and documents the tag-version link. `autorb/version.py` and `CHANGELOG.md` are kept in sync at `0.0062`.
+- **Wheel now ships template assets (`template.con`, `template_milo.bin`, `template_png.bin`).** `[tool.setuptools.package-data]` was added so `autorb/export/data/*.{con,bin}` are included in the wheel — without them `con_packer.py` raises `FileNotFoundError` on every run. A `MANIFEST.in` ensures the sdist also includes these files and the vendored ForgeTool source.
+- **Wheel now ships the ForgeTool binary + all runtime DLLs** so `--build-pkg` works from a pip install without needing to clone the repo. `pyproject.toml` data-files install `tools/forgetool` + `tools/libforge/*.dll` to `{sys.prefix}/tools/`. `con_packer.py:build_ps4_pkg()` now resolves ForgeTool via `_find_forgetool()` (checks CWD, `sys.prefix`, `sys.base_prefix`), and the `forgetool` wrapper script handles both the flat wheel layout (`libforge/ForgeTool.exe`) and the git-clone layout (`libforge/LibForge/ForgeTool/bin/Release/ForgeTool.exe`).
+- **Revised CI/CD release body and README installation instructions.** Release notes now recommend `git clone` as the primary path and clearly document what the pip wheel install requires (Python 3.11+, FFmpeg, mono for `--build-pkg`). Fixed the stale "PyInstaller executable" reference in README CI/CD section to say "source distribution and wheel."
+- **New tests for vocal phrase markers** (`tests/test_vocal_midi.py`): verifies phrase starts (pitch 105) appear once per 3840-tick window and that phrase ends precede each new phrase start. Full suite: 8 passed.
 - Pipeline: Added `--build-pkg` flag to CLI for automated PS4 PKG generation via vendored `ForgeTool`.
 - Pipeline: Integrated vendored `ForgeTool` (LibForge) for reliable CON-to-PKG conversion on Linux.
 - Devcontainer: Baked in Mono + .NET SDK 8 build environment for reproducible toolchain.

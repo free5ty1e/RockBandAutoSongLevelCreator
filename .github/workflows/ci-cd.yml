@@ -68,29 +68,52 @@ jobs:
         files: |
           autorb-source-dist/*
         body: |
-          # 🎸 AutoRB Release
+          # AutoRB v${{ github.ref_name }}
 
           Automated Rock Band 3 CON & PS4 PKG Generator using Machine Learning & Signal Processing.
 
-          ## 📥 Quick Start (macOS, Windows, Linux)
+          ## Prerequisites
 
-          1. **Prerequisites:** Make sure you have **Python 3.11+** and **FFmpeg** installed on your system.
-          2. **Download & Extract:** Download the source package (`.tar.gz` or `.whl`) or clone the repository.
-          3. **Install:**
+          * **Python 3.11+** (3.13 is not yet supported by WhisperX)
+          * **FFmpeg** — install via Homebrew (`brew install ffmpeg`), apt (`sudo apt install ffmpeg libsndfile1`), or Chocolatey (`choco install ffmpeg`)
+          * **mono-devel** (Linux/macOS) or **Mono** (Windows) — only needed for `--build-pkg`
+
+          ## Quick Start (Recommended: git clone)
+
+          ```bash
+          git clone https://github.com/chrispaiano/RockBandAutoSongLevelCreator.git
+          cd RockBandAutoSongLevelCreator
+          python -m venv venv && source venv/bin/activate
+          pip install -r requirements.txt
+          pip install -e .
+          python -m autorb.cli input/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics input/song.lrc --output-dir ./output --build-pkg
+          ```
+
+          ## Installing from this release
+
+          1. Download the `.whl` file below (`autorb-*.whl`).
+          2. Create a venv and install:
              ```bash
-             pip install autorb-*.whl
+             python -m venv venv && source venv/bin/activate
+             pip install ./autorb-*.whl
              ```
-          4. **Prepare Lyrics (`.lrc` Files):**
-             AutoRB relies on Enhanced LRC (`.lrc`) lyric files for precise timing. You can download synced LRC files from sites like [LRC LIB](https://lrclib.net/) or create them with tools like [LRC Generator](https://www.lrcgenerator.com/).
-             Example `.lrc` format:
-             ```lrc
-             [00.12.34]Tonight, the night
-             [00.15.80]When the world was young
-             [00.18.45]And we were free
-             ```
-          5. **Run:**
+             Note: this installs ML dependencies (PyTorch, WhisperX, Demucs) — first install takes a few minutes.
+          3. Run:
              ```bash
-             python -m autorb.cli path/to/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics path/to/lyrics.lrc --output-dir ./output --build-pkg
+             python -m autorb.cli path/to/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics path/to/lyrics.lrc --output-dir ./output
              ```
 
-        
+          The `--build-pkg` flag generates a PS4 PKG installer via the vendored ForgeTool (requires `mono`; the toolchain is included in the wheel).
+          If you get a "ForgeTool not found" error, ensure you are running from the repository root or installed via the `.whl`.
+
+          ## Finding Lyrics
+
+          AutoRB uses Enhanced LRC files (`.lrc`) for word-level vocal timing:
+          * **lrclib.net** — search by song/artist, download timestamped LRC files
+          * **lrcgenerator.com** — create your own synced lyrics
+
+          Example format:
+          ```lrc
+          [00:12.34]Tonight, the night
+          [00:15.80]When the world was young
+          ```

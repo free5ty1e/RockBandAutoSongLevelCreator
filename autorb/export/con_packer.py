@@ -5,6 +5,7 @@ import click
 import os
 import struct
 import subprocess
+import sys
 
 BLOCK_SIZE = 0x1000
 MILO_A_MAGIC = 0xCABEDEAF
@@ -172,11 +173,32 @@ def package_con(
     click.echo(f"Successfully patched CON: {con_file_path}")
     return con_file_path
 
+def _find_forgetool() -> Path:
+    """Locates the `tools/forgetool` wrapper, searching the repo root (source
+    installs / git clones) and then the wheel's data-files location
+    (``{sys.prefix}/tools``) for pip-installed users."""
+    candidates = [
+        Path.cwd() / "tools" / "forgetool",
+        Path(sys.prefix) / "tools" / "forgetool",
+        Path(sys.base_prefix) / "tools" / "forgetool",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise RuntimeError(
+        "ForgeTool not found. `--build-pkg` requires the vendored ForgeTool toolchain:\n"
+        "  - Source installs: run from the repository root (tools/forgetool).\n"
+        "  - pip installs: the wheel ships it under {sys.prefix}/tools.\n"
+        "  - mono is required: `sudo apt install mono-devel` (or `brew install mono` on macOS)."
+    )
+
+
 def build_ps4_pkg(con_path: Path, output_dir: Path, song_id: str) -> Path:
     pkg_dir = output_dir / "pkg"
     pkg_dir.mkdir(parents=True, exist_ok=True)
+    forgetool = _find_forgetool()
     cmd = [
-        "tools/forgetool",
+        str(forgetool),
         "con2pkg",
         "--id", "0000000000000001",
         "--desc", f"Custom Song - {song_id}",
