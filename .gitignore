@@ -9,8 +9,14 @@
 !.opencode/commands/
 .opencode/node_modules/
 input/
-*.pyc
 output/
+
+# Python build artifacts
+*.egg-info/
+build/
+dist/
+__pycache__/
+*.pyc
 
 # macOS filesystem artifacts
 .DS_Store

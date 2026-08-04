@@ -31,12 +31,9 @@ jobs:
       run: |
         pytest tests/
 
-  release:
+  build:
     needs: test
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -50,34 +47,50 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-    - name: Build Source Package
+    - name: Build Source Package and Wheel
       run: |
         python -m pip install --upgrade pip build
         python -m build --sdist --wheel
-    - name: Upload Artifacts
+    - name: Verify wheel contains template assets
+      run: |
+        python -c "
+        import zipfile, sys, glob
+        whl = glob.glob('dist/*.whl')[0]
+        with zipfile.ZipFile(whl) as z:
+            names = z.namelist()
+            for required in ['template.con', 'template_milo.bin', 'template_png.bin']:
+                matches = [n for n in names if required in n]
+                if not matches:
+                    print(f'FAIL: {required} not found in wheel', file=sys.stderr)
+                    sys.exit(1)
+                print(f'OK: {matches[0]}')
+        "
+    - name: Upload dist artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: autorb-source-dist
+        name: dist
         path: dist/*
 
-  publish:
-    needs: release
+  release:
+    needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-    - name: Download all artifacts
+    - name: Download dist artifacts
       uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name }}
-        name: "AutoRB ${{ needs.release.outputs.version }}"
-        files: |
-          autorb-source-dist/*
+        name: "AutoRB ${{ needs.build.outputs.version }}"
+        files: dist/*
         body: |
-          # AutoRB ${{ needs.release.outputs.version }}
+          # AutoRB ${{ needs.build.outputs.version }}
 
           Automated Rock Band 3 CON & PS4 PKG Generator using Machine Learning & Signal Processing.
 
@@ -96,6 +109,34 @@ jobs:
           pip install -r requirements.txt
           pip install -e .
           python -m autorb.cli input/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics input/song.lrc --output-dir ./output --build-pkg
+          ```
+
+          ## Installing from this release
+
+          1. Download the `.whl` file below (`autorb-*.whl`).
+          2. Create a venv and install:
+             ```bash
+             python -m venv venv && source venv/bin/activate
+             pip install ./autorb-*.whl
+             ```
+             Note: this installs ML dependencies (PyTorch, WhisperX, Demucs) — first install takes a few minutes.
+          3. Run:
+             ```bash
+             python -m autorb.cli path/to/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics path/to/lyrics.lrc --output-dir ./output
+             ```
+
+          The `--build-pkg` flag generates a PS4 PKG installer via the vendored ForgeTool (requires `mono`; run from a git clone).
+
+          ## Finding Lyrics
+
+          AutoRB uses Enhanced LRC files (`.lrc`) for word-level vocal timing:
+          * **lrclib.net** — search by song/artist, download timestamped LRC files
+          * **lrcgenerator.com** — create your own synced lyrics
+
+          Example format:
+          ```lrc
+          [00:12.34]Tonight, the night
+          [00:15.80]When the world was young
           ```
 
           ## Installing from this release
