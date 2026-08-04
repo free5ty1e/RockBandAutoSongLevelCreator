@@ -72,10 +72,12 @@ jobs:
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
+        tag_name: ${{ github.ref_name }}
+        name: "AutoRB ${{ needs.release.outputs.version }}"
         files: |
           autorb-source-dist/*
         body: |
-          # AutoRB v${{ github.ref_name }}
+          # AutoRB ${{ needs.release.outputs.version }}
 
           Automated Rock Band 3 CON & PS4 PKG Generator using Machine Learning & Signal Processing.
 
