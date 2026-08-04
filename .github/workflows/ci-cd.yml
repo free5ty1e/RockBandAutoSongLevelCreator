@@ -112,7 +112,7 @@ jobs:
              python -m autorb.cli path/to/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics path/to/lyrics.lrc --output-dir ./output
              ```
 
-          The `--build-pkg` flag generates a PS4 PKG installer via the vendored ForgeTool (requires `mono`; the toolchain is included in the wheel).
+          The `--build-pkg` flag generates a PS4 PKG installer via the vendored ForgeTool (requires `mono`; run from a git clone).
           If you get a "ForgeTool not found" error, ensure you are running from the repository root or installed via the `.whl`.
 
           ## Finding Lyrics

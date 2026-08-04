@@ -29,14 +29,4 @@ packages = ["autorb", "autorb.audio", "autorb.export"]
 [tool.setuptools.package-data]
 autorb = ["export/data/*.con", "export/data/*.bin"]
 
-[tool.setuptools.data-files]
-"tools" = ["tools/forgetool"]
-"tools/libforge" = [
-    "tools/libforge/LibForge/ForgeTool/bin/Release/ForgeTool.exe",
-    "tools/libforge/LibForge/ForgeTool/bin/Release/ForgeTool.exe.config",
-    "tools/libforge/LibForge/ForgeTool/bin/Release/LibForge.dll",
-    "tools/libforge/LibForge/ForgeTool/bin/Release/GameArchives.dll",
-    "tools/libforge/LibForge/ForgeTool/bin/Release/LibOrbisPkg.dll",
-    "tools/libforge/LibForge/ForgeTool/bin/Release/MidiCS.dll",
-    "tools/libforge/LibForge/ForgeTool/bin/Release/DtxCS.dll",
-]
+
