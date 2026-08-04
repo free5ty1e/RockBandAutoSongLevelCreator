@@ -34,10 +34,7 @@ jobs:
   release:
     needs: test
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
@@ -46,25 +43,15 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-    - name: Install Dependencies
+    - name: Build Source Package
       run: |
-        pip install -r requirements.txt pyinstaller
-    - name: Build Executable
-      run: |
-        pyinstaller autorb.spec
-    - name: Zip Artifacts (Windows)
-      if: matrix.os == 'windows-latest'
-      run: Compress-Archive -Path dist/autorb -DestinationPath autorb-windows-latest.zip
-    - name: Zip Artifacts (Linux/macOS)
-      if: matrix.os != 'windows-latest'
-      shell: bash
-      run: |
-        zip -r autorb-${{ matrix.os }}.zip dist/autorb
+        python -m pip install --upgrade pip build
+        python -m build --sdist --wheel
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: autorb-${{ matrix.os }}
-        path: autorb-${{ matrix.os }}.zip
+        name: autorb-source-dist
+        path: dist/*
 
   publish:
     needs: release
@@ -79,6 +66,6 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          autorb-*/*
+          autorb-source-dist/*
 
         
