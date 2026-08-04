@@ -45,35 +45,54 @@ NOTE: Under development.  No release is available to share just yet.
 
 ---
 
-## 🛠️ Requirements & Setup
+## 📥 Installation & Getting Started (Fresh Users)
 
-### Option A: VS Code Devcontainer (Recommended)
-This repository includes a fully configured Docker Devcontainer equipped with CUDA/CPU PyTorch dependencies, `ffmpeg`, and C++ build tools.
+AutoRB runs on **macOS, Windows, and Linux**. Because AutoRB leverages heavy machine learning frameworks (PyTorch, Demucs, WhisperX, Basic-Pitch), it is distributed as a standard Python package (`autorb`) which you install via `pip`.
 
-1. Clone this repository.
-2. Open the project in **VS Code**.
-3. When prompted, click **"Reopen in Container"** (or run `Dev Containers: Reopen in Container` from the Command Palette).
-4. All system and Python dependencies will be automatically installed.
+### 1. Prerequisites (All Operating Systems)
+* **Python 3.11+** installed on your system.
+* **FFmpeg** installed and available on your system PATH (`ffmpeg -version` should succeed).
+  * **Windows:** Download FFmpeg from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) or install via Chocolatey (`choco install ffmpeg`).
+  * **macOS:** Install via Homebrew (`brew install ffmpeg`).
+  * **Linux (Ubuntu/Debian):** Install via apt (`sudo apt install ffmpeg libsndfile1`).
 
-### Option B: Local Installation
+### 2. Installing AutoRB
+Open your terminal (Command Prompt/PowerShell on Windows, Terminal on macOS/Linux) and run:
 
-**Prerequisites:**
-* Python 3.11+
-* `ffmpeg` and `libsndfile1` installed on system path.
-
-**Installation:**
 ```bash
-# Clone repository
-git clone https://github.com/your-username/autorb.git
-cd autorb
+# Clone the repository
+git clone https://github.com/chrispaiano/RockBandAutoSongLevelCreator.git
+cd RockBandAutoSongLevelCreator
 
-# Set up virtual environment
+# Create and activate a virtual environment (Recommended)
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# On macOS / Linux:
+source venv/bin/activate
+# On Windows (PowerShell):
+# .\venv\Scripts\Activate.ps1
 
-# Install dependencies
+# Install AutoRB and all ML dependencies
+pip install --upgrade pip
 pip install -r requirements.txt
+pip install -e .
 ```
+
+### 3. Running the Pipeline & Converting CON to PS4 PKG
+Once installed, convert any MP3 and lyric file into an Xbox 360 CON file and an optional PS4 PKG installer:
+
+```bash
+python -m autorb.cli \
+  path/to/song.mp3 \
+  --artist "Artist Name" \
+  --title "Song Title" \
+  --year 2024 \
+  --genre "Alternative" \
+  --lyrics path/to/lyrics.lrc \
+  --output-dir ./output \
+  --build-pkg
+```
+
+Your outputs will be generated in `./output/` (the `.con` file) and `./output/pkg/` (the PS4 `.pkg` file).
 
 ---
 

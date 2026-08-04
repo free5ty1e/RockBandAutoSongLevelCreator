@@ -67,5 +67,22 @@ jobs:
       with:
         files: |
           autorb-source-dist/*
+        body: |
+          # 🎸 AutoRB Release
+
+          Automated Rock Band 3 CON & PS4 PKG Generator using Machine Learning & Signal Processing.
+
+          ## 📥 Quick Start (macOS, Windows, Linux)
+
+          1. **Prerequisites:** Make sure you have **Python 3.11+** and **FFmpeg** installed on your system.
+          2. **Download & Extract:** Download the source package (`.tar.gz` or `.whl`) or clone the repository.
+          3. **Install:**
+             ```bash
+             pip install autorb-*.whl
+             ```
+          4. **Run:**
+             ```bash
+             python -m autorb.cli path/to/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics path/to/lyrics.lrc --output-dir ./output --build-pkg
+             ```
 
         
