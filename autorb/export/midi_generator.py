@@ -85,7 +85,7 @@ def build_placeholder_track(name: str, pitches: tuple = PLACEHOLDER_DIFFICULTY_P
 
 def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id: str,
                         preview_start_ms: int = 50000, song_length_ms: int | None = None,
-                        phrase_measures: int = 2) -> Path:
+                        phrase_measures: int = 2, bpm: float = 120.0) -> Path:
     """
     Generates a fully compliant Rock Band PART VOCALS MIDI chart from synchronized JSON data.
     Includes placeholder PART DRUMS, PART GUITAR, and PART BASS tracks (one note each) so that
@@ -93,7 +93,7 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
 
     Vocal phrase markers (pitch 105) group the lyrics into fixed-length phrases of
     ``phrase_measures`` measures (Rock Band convention is 2 or 4 bars per phrase).
-    Measure boundaries are derived from the beat grid (4/4 at 120 BPM, 480 ticks/beat
+    Measure boundaries are derived from the beat grid (4/4 at ``bpm`` BPM, 480 ticks/beat
     => 1920 ticks/measure), so phrases are anchored to the song's meter rather than
     to pauses in the lyrics.
     """
@@ -107,12 +107,17 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
 
     header = b"MThd" + struct.pack(">IHHH", 6, 1, 7, 480)
 
-    ticks_per_second = 480 * (120 / 60)
+    # Use the actual detected BPM for the MIDI tempo map so that note ticks
+    # land at musically correct positions.  Rock Band reads this tempo map,
+    # so the game's clock matches the audio exactly.
+    ticks_per_second = 480 * (bpm / 60.0)
+    tempo_us_per_beat = int(60_000_000 / bpm)
+    tempo_bytes = tempo_us_per_beat.to_bytes(3, "big")
 
-    # Track 0: BEAT (tempo map + quarter-note markers, matching stock RB3 charts)
+    # Track 0: tempo map (name = song id, matching stock RB3 charts)
     track0_data = (
         b"\x00\xFF\x58\x04\x04\x02\x18\x08" +  # 4/4 Time Signature
-        b"\x00\xFF\x51\x03\x07\xA1\x20"      # 120 BPM (480 ticks/quarter)
+        b"\x00\xFF\x51\x03" + tempo_bytes        # Actual detected BPM
     )
 
     items = []
@@ -210,7 +215,7 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     # Track 0: tempo map (name = song id, mirroring stock RB3 charts like 311 - Down)
     tempo_data = (
         b"\x00\xFF\x58\x04\x04\x02\x18\x08" +  # 4/4 Time Signature
-        b"\x00\xFF\x51\x03\x07\xA1\x20"      # 120 BPM (480 ticks/quarter)
+        b"\x00\xFF\x51\x03" + tempo_bytes        # Actual detected BPM
     )
     t0 = build_track(song_id, tempo_data)
 

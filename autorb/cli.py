@@ -121,7 +121,8 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
 
         # 2. Generate the PART VOCALS .mid chart from synced_track.json
         click.echo("Generating vocal MIDI chart...")
-        midi_file = generate_vocal_midi(synced_output_json, out_path, song_id)
+        avg_bpm = sum(dynamic_bpms) / len(dynamic_bpms) if dynamic_bpms else 120.0
+        midi_file = generate_vocal_midi(synced_output_json, out_path, song_id, bpm=avg_bpm)
 
         # 3. Generate songs.dta configuration metadata
         click.echo("Generating songs.dta metadata...")

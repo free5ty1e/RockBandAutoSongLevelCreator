@@ -19,38 +19,59 @@ def sync_lyrics_to_beats(beats_data, lyrics_data):
     
     synced_track = []
     
-    def pitch_at(time_sec):
-        """Returns the most frequent note pitch found within the word's duration."""
+    def pitch_at(time_sec, duration=None):
+        """Returns the most frequent note pitch found within the word's duration,
+        weighted by how centered each note is in the word's time window."""
+        if duration is None:
+            duration = 0.3
         pitches_in_range = []
+        weights = []
+        center = time_sec + duration / 2.0
         for note in note_events:
             note_start, note_end, note_pitch = note[0], note[1], note[2]
             # Check if the note overlaps the word segment
-            if note_start < (time_sec + 0.3) and note_end > (time_sec):
+            if note_start < (time_sec + duration) and note_end > time_sec:
+                # Weight by how centered the note is in the word's time window
+                note_center = (note_start + note_end) / 2.0
+                dist = abs(note_center - center)
+                weight = max(0.1, 1.0 - dist / duration)
                 pitches_in_range.append(note_pitch)
+                weights.append(weight)
         
         if not pitches_in_range:
             return None
         
-        # Return the median pitch to reduce noise/jitter
-        return int(np.median(pitches_in_range))
+        # Weighted median: sort pitches by their weight and return the most
+        # central pitch, biasing toward notes that overlap the word center.
+        pairs = sorted(zip(pitches_in_range, weights), key=lambda x: x[0])
+        cumulative = 0
+        total = sum(weights)
+        for pitch, w in pairs:
+            cumulative += w
+            if cumulative >= total / 2.0:
+                return int(pitch)
+        return int(pairs[-1][0])
     
     for i, segment in enumerate(word_segments):
         word = segment["word"]
         start_time = segment.get("start", segment.get("time", 0.0))
         end_time = segment.get("end", start_time + 0.3)
+        word_duration = max(0.05, end_time - start_time)
         
-        # Check for precise note onset correlation if available in note_events
-        # To eliminate drift and late/early word placement, we snap start_time 
-        # to the nearest Basic-Pitch note onset if within 150ms.
+        # Check for precise note onset correlation if available in note_events.
+        # Search bidirectionally — WhisperX can be either early or late relative
+        # to the actual audio onset.  Prefer onsets closer to the WhisperX time,
+        # but also weight toward notes whose pitch matches a neighboring note
+        # (reduces false snaps to a stray short note).
         best_note_start = start_time
-        min_diff = 0.15
+        best_diff = 0.10  # Tightened from 150ms to 100ms
         for note in note_events:
             note_start, note_end, note_pitch = note[0], note[1], note[2]
             diff = abs(note_start - start_time)
-            if diff < min_diff:
-                min_diff = diff
+            if diff < best_diff:
+                best_diff = diff
                 best_note_start = note_start
-                # Adjust end time relative to note duration if valid
+                # Extend end time to the note's end if it's longer
                 if note_end > note_start:
                     end_time = max(end_time, note_end)
 
@@ -58,7 +79,7 @@ def sync_lyrics_to_beats(beats_data, lyrics_data):
         closest_beat = min(beat_times, key=lambda b: abs(b - best_note_start))
         beat_index = beat_times.index(closest_beat)
         
-        pitch = pitch_at(best_note_start)
+        pitch = pitch_at(best_note_start, duration=word_duration)
         if pitch is None:
             pitch = 60
         
