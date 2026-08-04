@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autorb"
-version = "0.0062"
+dynamic = ["version"]
 description = "Automated Rock Band 3 CON File Generator"
 requires-python = ">=3.11"
 dependencies = [
@@ -19,6 +19,9 @@ dependencies = [
     "pydub",
     "soundfile"
 ]
+
+[tool.setuptools.dynamic]
+version = {attr = "autorb.version.__version__"}
 
 [tool.setuptools]
 packages = ["autorb", "autorb.audio", "autorb.export"]

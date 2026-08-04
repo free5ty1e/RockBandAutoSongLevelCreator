@@ -37,8 +37,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
     - uses: actions/checkout@v4
+    - name: Extract version from autorb/version.py
+      id: version
+      run: |
+        VERSION=$(python -c "exec(open('autorb/version.py').read()); print(__version__)")
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
