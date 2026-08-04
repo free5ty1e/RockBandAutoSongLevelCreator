@@ -58,7 +58,7 @@ SHORTNAMES
       var fileSb = new StringBuilder();
       foreach(var f in files)
       {
-        fileSb.AppendLine($"    <file targ_path=\"{f}\" orig_path=\"{f.Replace('/', '\\')}\"/>");
+        fileSb.AppendLine($"    <file targ_path=\"{f}\" orig_path=\"{f}\"/>");
       }
       var shortname_dirs = new StringBuilder();
       foreach(var shortname in shortnames)
