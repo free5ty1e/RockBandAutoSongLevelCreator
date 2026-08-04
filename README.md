@@ -77,7 +77,19 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-### 3. Running the Pipeline & Converting CON to PS4 PKG
+*Note on `--build-pkg`:* The `--build-pkg` flag requires the `ForgeTool` C#/.NET binary toolchain vendored in `tools/forgetool`. If you are running outside of the devcontainer or CI environment, ensure `.NET SDK 8` and `mono-devel` are installed so `tools/build_forgetool.sh` can build the helper binaries if needed. Standard CON file generation does not require `.NET` or `mono`.
+
+### 3. Preparing Lyrics (`.lrc` Files)
+AutoRB relies on Enhanced LRC (`.lrc`) lyric files for precise word and syllable timing. 
+* **Where to find `.lrc` files:** You can find or download synced LRC files from community lyric sites (such as [LRC LIB](https://lrclib.net/) or NetEase/QQ Music repositories), or create them manually using tools like [LRC Generator](https://www.lrcgenerator.com/).
+* **Example Format:** Your `.lrc` file should include timestamp tags formatted as `[mm:ss.xx]` preceding each lyric line or word:
+  ```lrc
+  [00.12.34]Tonight, the night
+  [00.15.80]When the world was young
+  [00.18.45]And we were free
+  ```
+
+### 4. Running the Pipeline & Converting CON to PS4 PKG
 Once installed, convert any MP3 and lyric file into an Xbox 360 CON file and an optional PS4 PKG installer:
 
 ```bash

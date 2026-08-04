@@ -80,7 +80,15 @@ jobs:
              ```bash
              pip install autorb-*.whl
              ```
-          4. **Run:**
+          4. **Prepare Lyrics (`.lrc` Files):**
+             AutoRB relies on Enhanced LRC (`.lrc`) lyric files for precise timing. You can download synced LRC files from sites like [LRC LIB](https://lrclib.net/) or create them with tools like [LRC Generator](https://www.lrcgenerator.com/).
+             Example `.lrc` format:
+             ```lrc
+             [00.12.34]Tonight, the night
+             [00.15.80]When the world was young
+             [00.18.45]And we were free
+             ```
+          5. **Run:**
              ```bash
              python -m autorb.cli path/to/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics path/to/lyrics.lrc --output-dir ./output --build-pkg
              ```

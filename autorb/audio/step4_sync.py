@@ -36,21 +36,36 @@ def sync_lyrics_to_beats(beats_data, lyrics_data):
     
     for i, segment in enumerate(word_segments):
         word = segment["word"]
-        start_time = segment["start"]
-        end_time = segment.get("end", start_time + 0.5)
+        start_time = segment.get("start", segment.get("time", 0.0))
+        end_time = segment.get("end", start_time + 0.3)
         
-        # Find the closest beat to the start time of the word
-        closest_beat = min(beat_times, key=lambda b: abs(b - start_time))
+        # Check for precise note onset correlation if available in note_events
+        # To eliminate drift and late/early word placement, we snap start_time 
+        # to the nearest Basic-Pitch note onset if within 150ms.
+        best_note_start = start_time
+        min_diff = 0.15
+        for note in note_events:
+            note_start, note_end, note_pitch = note[0], note[1], note[2]
+            diff = abs(note_start - start_time)
+            if diff < min_diff:
+                min_diff = diff
+                best_note_start = note_start
+                # Adjust end time relative to note duration if valid
+                if note_end > note_start:
+                    end_time = max(end_time, note_end)
+
+        # Find the closest beat to the refined start time
+        closest_beat = min(beat_times, key=lambda b: abs(b - best_note_start))
         beat_index = beat_times.index(closest_beat)
         
-        pitch = pitch_at(start_time)
+        pitch = pitch_at(best_note_start)
         if pitch is None:
             pitch = 60
         
         synced_track.append({
             "word": word,
-            "time": start_time,
-            "start": start_time,
+            "time": best_note_start,
+            "start": best_note_start,
             "end": end_time,
             "pitch": int(pitch),
             "beat_time": closest_beat,
