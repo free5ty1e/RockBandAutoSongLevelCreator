@@ -70,9 +70,10 @@ ch9  fake/crowd    (silent; engine falls back to procedural crowd)
 
 `autorb/export/mogg_builder.py`:
 - With the 4 standard stems present, pans each stem into mono/stereo channels (`pan`/`aformat` filters) and `amerge=inputs=10` -> 10ch Ogg @ source rate (44100). Channels 0, 1, and 9 are derived from the drums input with `volume=0` so their duration matches. A generic per-stem stereo merge fallback handles non-standard stem counts.
+- Preprends the mandatory count-in silence with `adelay={count_in_ms}:all=1` on the merged output when `count_in_ms > 0` (v0.0064) — the game expects a silent pre-roll (stock 311 - Down has ~5s of MOGG lead-in); the chart is shifted to match via `midi_generator.generate_vocal_midi(count_in_ticks=...)`.
 - Forces small Ogg pages with `-page_duration 40000` (`PAGE_DURATION_US`) — RB's Milkshake decoder fails on ffmpeg-default ~1s/56KB pages (see above).
 - `wrap_ogg_as_mogg()` parses the Ogg pages and prepends the v10 header + OggMap (pure Python, no external tools beyond ffmpeg). The OggMap's per-entry sample values track page granules (about 1024 samples lower than the reference `ogg2mogg` tool's `ov_raw_seek`+`ov_pcm_tell` values at each 0x8000-byte row, which only affects seek precision, not forward playback; byte offsets are identical).
-- `read_mogg_duration_ms()` parses the MOGG header + Vorbis id header + final granule to report the real audio duration for songs.dta's `(song_length ...)`.
+- `read_mogg_duration_ms()` parses the MOGG header + Vorbis id header + final granule to report the real audio duration for songs.dta's `(song_length ...)` — after the count-in is added this includes the lead-in silence (e.g. 198089 -> 202547 ms).
 
 ## References
 

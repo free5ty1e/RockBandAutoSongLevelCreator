@@ -28,6 +28,28 @@ def encode_varlen(value: int) -> bytes:
 PLACEHOLDER_NOTE_PITCH = 60
 PLACEHOLDER_DIFFICULTY_PITCHES = (60, 72, 84, 96)
 
+# Mandatory count-in, per the C3 authoring guide: very fast songs (>=160 BPM)
+# need a 3-measure count-in. Sized at runtime from the song's opening tempo
+# (first beat-grid interval), mirroring stock RB3 DLC (311 - Down bakes ~5s of
+# lead-in silence into its MOGG).
+COUNT_IN_BEATS = 12  # 3 measures * 4 beats
+
+
+def count_in_params(beat_times, ticks_per_beat: int = 480) -> tuple[int, int]:
+    """Return ``(count_in_ticks, count_in_ms)`` for the mandatory lead-in.
+
+    Uses the song's opening tempo (first beat-grid interval) to size a
+    3-measure count-in. Returns ``(0, 0)`` when no usable beat grid exists,
+    which disables the count-in entirely.
+    """
+    beats = [float(b) for b in (beat_times or []) if b is not None]
+    if len(beats) < 2:
+        return 0, 0
+    opening_sec = beats[1] - beats[0]
+    count_in_ticks = COUNT_IN_BEATS * ticks_per_beat
+    count_in_ms = int(round(COUNT_IN_BEATS * opening_sec * 1000))
+    return count_in_ticks, count_in_ms
+
 def build_track(name: str, events_bytes: bytes) -> bytes:
     """Wraps MIDI events into a single named MTrk chunk."""
     name_chunk = b"\x00\xFF\x03" + bytes([len(name)]) + name.encode('ascii')
@@ -39,6 +61,7 @@ def build_events_track(
     first_note_tick: int,
     last_note_end_tick: int,
     preview_start_tick: int,
+    count_in_ticks: int = 0,
 ) -> bytes:
     """Builds the EVENTS track with the required Rock Band text markers.
 
@@ -48,13 +71,18 @@ def build_events_track(
     marker kills the song-list preview while a missing ``[music_end]``/``[end]``
     makes the song finish instantly at 0% (with a full-combo jingle) because
     the game believes the chart ends immediately.
+
+    ``[prc_intro]`` and ``[music_start]`` are placed at ``count_in_ticks`` (the
+    end of the count-in) rather than tick 0, mirroring stock charts where the
+    intro markers sit after the silent lead-in (311 - Down: ``[music_start]``
+    at 5280).
     """
     events = bytearray()
 
     # Assign a tick to each marker (text events carry deltas too).
     markers = [
-        (0, "[prc_intro]"),
-        (0, "[music_start]"),
+        (count_in_ticks, "[prc_intro]"),
+        (count_in_ticks, "[music_start]"),
         (first_note_tick, "[prc_verse_1]"),
         (preview_start_tick, "[preview]"),
         ((first_note_tick + last_note_end_tick) // 2, "[prc_chorus_1]"),
@@ -72,11 +100,17 @@ def build_events_track(
     return build_track("EVENTS", bytes(events))
 
 
-def build_placeholder_track(name: str, pitches: tuple = PLACEHOLDER_DIFFICULTY_PITCHES) -> bytes:
-    """Builds a minimal valid instrument track with one note per difficulty."""
+def build_placeholder_track(name: str, pitches: tuple = PLACEHOLDER_DIFFICULTY_PITCHES,
+                            start_tick: int = 0) -> bytes:
+    """Builds a minimal valid instrument track with one note per difficulty.
+
+    ``start_tick`` offsets the gem cluster past the count-in (tick 0 is the
+    start of the lead-in silence, so notes must land after it).
+    """
     events = bytearray()
-    for pitch in pitches:
-        events.extend(encode_varlen(0))
+    for i, pitch in enumerate(pitches):
+        delta = max(0, start_tick) if i == 0 else 0
+        events.extend(encode_varlen(delta))
         events.extend(b"\x90" + bytes([pitch, 100]))
     for pitch in pitches:
         events.extend(encode_varlen(120 if pitch == pitches[0] else 0))
@@ -86,11 +120,21 @@ def build_placeholder_track(name: str, pitches: tuple = PLACEHOLDER_DIFFICULTY_P
 def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id: str,
                         preview_start_ms: int = 50000, song_length_ms: int | None = None,
                         phrase_measures: int = 2, bpm: float = 120.0,
-                        beat_times: list | None = None, dynamic_bpms: list | None = None) -> Path:
+                        beat_times: list | None = None, dynamic_bpms: list | None = None,
+                        count_in_ticks: int = 0, count_in_ms: int = 0) -> Path:
     """
     Generates a fully compliant Rock Band PART VOCALS MIDI chart from synchronized JSON data.
     Includes placeholder PART DRUMS, PART GUITAR, and PART BASS tracks (one note each) so that
     every instrument advertised in songs.dta has a corresponding chart track.
+
+    ``count_in_ticks`` shifts the whole chart so tick 0 is the start of the
+    MOGG's count-in silence and the first musical event lands at
+    ``count_in_ticks``. This mirrors stock RB3 DLC where the MOGG bakes in a
+    silent lead-in (311 - Down has ~5s before its first note) and keeps the
+    first vocal phrase well past ForgeTool's 640-tick ``StartTicks - 640``
+    offset, which underflows to ~4294966967 when a chart starts its first
+    phrase at tick < 640 (making the first phrase StartMillis land at end of
+    song and the vocal guide broken).
 
     Vocal phrase markers (pitch 105) group the lyrics into fixed-length phrases of
     ``phrase_measures`` measures (Rock Band convention is 2 or 4 bars per phrase).
@@ -123,6 +167,21 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
         ticks_per_beat=ticks_per_beat,
     )
 
+    # The audio pipeline prepends count_in_ms of silence to the MOGG; shift every
+    # chart event by the equivalent ticks so tick 0 == start of that silence.
+    def shifted_time_to_tick(sec: float) -> int:
+        return time_to_tick(sec) + count_in_ticks
+
+    if count_in_ticks > 0 and tempo_events:
+        # The count-in clicks at the song's opening tempo (first real beat
+        # interval, tempo_events[1]); tick 0 must carry it so the game's clock
+        # runs at the right BPM through the lead-in silence. All source-grid
+        # tempo events then shift past the count-in.
+        opening_us = tempo_events[1][1] if len(tempo_events) > 1 else tempo_events[0][1]
+        tempo_events = [(0, opening_us)] + [
+            (t + count_in_ticks, us) for t, us in tempo_events
+        ]
+
     items = []
     if isinstance(track_data, dict):
         items = track_data.get("synced_lyrics", track_data.get("synced_words", []))
@@ -149,8 +208,8 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
         lyric = item.get("word", item.get("lyric", "la"))
         pitch = item.get("pitch", 60)
 
-        target_start_tick = time_to_tick(start_sec)
-        target_end_tick = max(target_start_tick + 48, time_to_tick(end_sec))
+        target_start_tick = shifted_time_to_tick(start_sec)
+        target_end_tick = max(target_start_tick + 48, shifted_time_to_tick(end_sec))
 
         phrase_idx = target_start_tick // phrase_ticks
 
@@ -205,7 +264,12 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
 
     if song_length_ms is None:
         song_length_ms = int(last_note_end_tick / 480 * 60_000 / (bpm if bpm and bpm > 0 else 120.0)) + 1000
-    song_end_tick = time_to_tick(song_length_ms / 1000.0)
+    # song_length_ms is the full MOGG duration, which now includes the count-in
+    # silence prepended by the audio pipeline. The chart content lives past the
+    # count-in, so map only the source portion through the beat grid, then add
+    # the count-in tick offset back on.
+    source_len_ms = max(0, song_length_ms - count_in_ms)
+    song_end_tick = shifted_time_to_tick(source_len_ms / 1000.0)
     # The BEAT track must cover the whole song, so base its length on the tempo map,
     # not on a hardcoded 120 BPM (which left the grid short at faster tempos).
     total_beats = max(1, song_end_tick // ticks_per_beat + 2)
@@ -220,16 +284,17 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     t0 = build_track(song_id, tempo_data)
 
     # Track 1-4: instrument charts
-    t1 = build_placeholder_track("PART DRUMS")
-    t2 = build_placeholder_track("PART BASS")
-    t3 = build_placeholder_track("PART GUITAR")
+    t1 = build_placeholder_track("PART DRUMS", start_tick=count_in_ticks)
+    t2 = build_placeholder_track("PART BASS", start_tick=count_in_ticks)
+    t3 = build_placeholder_track("PART GUITAR", start_tick=count_in_ticks)
     t4 = build_track("PART VOCALS", bytes(vocal_events))
 
     # Track 5: EVENTS with the required [music_start]/[preview]/[music_end]/[end] markers
     t5 = build_events_track(
-        first_note_tick=first_note_tick or 0,
+        first_note_tick=first_note_tick or count_in_ticks,
         last_note_end_tick=max(last_note_end_tick, song_end_tick),
-        preview_start_tick=time_to_tick(preview_start_ms / 1000.0),
+        preview_start_tick=shifted_time_to_tick(preview_start_ms / 1000.0),
+        count_in_ticks=count_in_ticks,
     )
 
     # Track 6: BEAT - one quarter-note marker per beat (downbeat pitch 12 vel 101,

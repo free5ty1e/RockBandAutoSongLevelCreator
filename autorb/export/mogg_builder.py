@@ -139,9 +139,16 @@ def wrap_ogg_as_mogg(ogg_bytes: bytes) -> bytes:
     return header + ogg_bytes
 
 
-def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str, skip_mogg: bool = False) -> Path:
+def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
+                          skip_mogg: bool = False, count_in_ms: int = 0) -> Path:
     """
     Combines stem WAV files into a multi-channel Harmonix MOGG audio container.
+
+    ``count_in_ms`` > 0 prepends that many milliseconds of silence to all 10
+    channels via ffmpeg's ``adelay``, producing the mandatory Rock Band count-in
+    (a silent lead-in baked into the audio, mirroring stock RB3 DLC like "311 -
+    Down" which has ~5s before its first note). The matching chart shift is
+    applied by ``midi_generator.generate_vocal_midi(count_in_ticks=...)``.
 
     The 10-channel layout mirrors the proven-working "311 - Down" DLC so the
     track/channel structure is identical to a stock song (verified against
@@ -209,6 +216,11 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
             "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FL,volume=0[s9]",
             "[s0][s1][s2][s3][s4][s5][s6][s7][s8][s9]amerge=inputs=10[aout]",
         ]
+        if count_in_ms > 0:
+            filter_parts.append(f"[aout]adelay={count_in_ms}:all=1[countin]")
+            map_label = "[countin]"
+        else:
+            map_label = "[aout]"
 
         # Explicitly force the 'ogg' format muxer so ffmpeg accepts the .ogg extension.
         # -page_duration forces small pages (~2048-3072 sample granules) matching
@@ -216,7 +228,7 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
         # pages that Rock Band's Milkshake audio engine cannot decode reliably.
         cmd.extend([
             "-filter_complex", ";".join(filter_parts),
-            "-map", "[aout]",
+            "-map", map_label,
             "-c:a", "libvorbis",
             "-q:a", "2",
             "-page_duration", str(PAGE_DURATION_US),
@@ -251,9 +263,14 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
         n = len(input_files)
         filter_parts = [f"[{i}:a]aformat=channel_layouts=stereo[s{i}]" for i in range(n)]
         filter_parts.append("".join(f"[s{i}]" for i in range(n)) + f"amerge=inputs={n}[aout]")
+        if count_in_ms > 0:
+            filter_parts.append(f"[aout]adelay={count_in_ms}:all=1[countin]")
+            map_label = "[countin]"
+        else:
+            map_label = "[aout]"
         cmd.extend([
             "-filter_complex", ";".join(filter_parts),
-            "-map", "[aout]",
+            "-map", map_label,
             "-c:a", "libvorbis",
             "-q:a", "2",
             "-page_duration", str(PAGE_DURATION_US),

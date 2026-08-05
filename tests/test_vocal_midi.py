@@ -165,3 +165,111 @@ def test_dynamic_tempo_roundtrips_word_times(tmp_path: Path):
         assert abs(back - item["start"]) < 0.01, (
             f"word @{item['start']:.2f}s mapped to tick {tick} -> {back:.3f}s"
         )
+
+
+def _items_with_t0(n: int = 30, gap: float = 0.6, start: float = 0.58) -> list[dict]:
+    """Generate *n* evenly-spaced word entries at 120 BPM starting at *start* s."""
+    items = []
+    t = start
+    for i in range(n):
+        items.append({"start": t, "end": t + 0.5, "word": f"w{i}", "pitch": 60})
+        t += gap
+    return items
+
+
+def test_count_in_shifts_chart_and_fixes_underflow(tmp_path: Path):
+    """With count_in_ticks>0, every chart event must shift past the count-in and
+    the first vocal phrase must sit well past ForgeTool's 640-tick 'StartTicks -
+    640' uint underflow (first phrase tick < 640 wraps to ~2^32, breaking the
+    vocal guide)."""
+    from autorb.export.midi_generator import count_in_params
+
+    sj = tmp_path / "synced.json"
+    sj.write_text(json.dumps({"synced_lyrics": _items_with_t0(20, gap=1.0)}))
+
+    # 161.5 BPM opening beat grid like tempo_map.json (first beat at 0.894 s).
+    beat_times, bpms = [], []
+    t = 0.894
+    for i in range(60):
+        beat_times.append(t)
+        bpms.append(161.5)
+        t += 60.0 / 161.5
+
+    ci_ticks, ci_ms = count_in_params(beat_times)
+    assert ci_ticks > 0
+    assert ci_ms > 0
+
+    mid_path = generate_vocal_midi(
+        sj, tmp_path, "countin",
+        song_length_ms=60000, bpm=161.5,
+        beat_times=beat_times, dynamic_bpms=bpms,
+        count_in_ticks=ci_ticks, count_in_ms=ci_ms,
+    )
+    mf = mido.MidiFile(mid_path)
+
+    # First vocal phrase marker must be after the count-in, far past 640 ticks.
+    voc = next(t for t in mf.tracks if t.name == "PART VOCALS")
+    abs_tick = 0
+    first_phrase = None
+    for msg in voc:
+        abs_tick += msg.time
+        if msg.type == "note_on" and msg.note == 105 and msg.velocity > 0:
+            first_phrase = abs_tick
+            break
+    assert first_phrase is not None
+    assert first_phrase >= ci_ticks, f"first phrase {first_phrase} < count-in {ci_ticks}"
+    assert first_phrase - 640 > 0, f"ForgeTool StartTicks-640 underflows at {first_phrase}"
+
+    # [prc_intro]/[music_start] land at the end of the count-in, not tick 0.
+    events = next(t for t in mf.tracks if t.name == "EVENTS")
+    abs_tick = 0
+    markers = {}
+    for msg in events:
+        abs_tick += msg.time
+        if msg.type == "text":
+            markers[msg.text] = abs_tick
+    assert markers.get("[prc_intro]") == ci_ticks
+    assert markers.get("[music_start]") == ci_ticks
+    assert markers.get("[music_end]") > ci_ticks
+
+    # Tempo map still starts at tick 0 (MidiHelper.cs does idx-- on it).
+    tempos = _tempo_map_from_midi(mid_path)
+    assert tempos[0][0] == 0
+
+    # Placeholder gems must sit past the count-in, never in the lead-in silence.
+    for name in ("PART DRUMS", "PART GUITAR", "PART BASS"):
+        tr = next(t for t in mf.tracks if t.name == name)
+        abs_tick = 0
+        first_note = None
+        for msg in tr:
+            abs_tick += msg.time
+            if msg.type == "note_on" and msg.velocity > 0:
+                first_note = abs_tick
+                break
+        assert first_note == ci_ticks, f"{name} first note {first_note} != {ci_ticks}"
+
+
+def test_no_count_in_when_beat_grid_missing(tmp_path: Path):
+    """Without a usable beat grid, count_in_params returns (0,0) and the chart
+    must be byte-identical to pre-count-in output (flat BPM fallback)."""
+    from autorb.export.midi_generator import count_in_params
+
+    assert count_in_params(None) == (0, 0)
+    assert count_in_params([1.0]) == (0, 0)
+
+    sj = tmp_path / "synced.json"
+    sj.write_text(json.dumps({"synced_lyrics": _items(10)}))
+
+    mid_path = generate_vocal_midi(sj, tmp_path, "nocountin", bpm=120.0)
+    mf = mido.MidiFile(mid_path)
+    voc = next(t for t in mf.tracks if t.name == "PART VOCALS")
+    abs_tick = 0
+    first_phrase = None
+    for msg in voc:
+        abs_tick += msg.time
+        if msg.type == "note_on" and msg.note == 105 and msg.velocity > 0:
+            first_phrase = abs_tick
+            break
+    # No beat grid -> no count-in -> first phrase at the first word's flat-BPM
+    # tick (1.0 s @ 120 BPM = 960 ticks), i.e. the chart is unshifted.
+    assert first_phrase is not None and first_phrase == 960

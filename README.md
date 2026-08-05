@@ -19,6 +19,7 @@ NOTE: Under development.  No release is available to share just yet.
   * Falls back to **WhisperX** for automated speech-to-text alignment if no LRC file is supplied.
 * **Automatic Transcription:** Converts pitch and transient audio into quantized 5-lane instrument tracks (`PART GUITAR`, `PART BASS`, `PART DRUMS`) using Spotify's **Basic-Pitch** and signal processing.
 * **Automatic Difficulty Ratings:** Computes per-instrument Rock Band difficulty (`rank`) values from chart note density (per-instrument level bands 1-6, `band` = hardest charted instrument) instead of a hardcoded value that rendered every song as "1 of 6".
+* **Mandatory Count-In:** Automatically prepends a silent count-in (3 measures at the song's opening tempo) to the multi-channel MOGG and shifts the chart past it, mirroring stock RB3 DLC's ~5s lead-in so vocals/lyrics sync to the audio and the first vocal phrase survives ForgeTool's 640-tick offset (which previously underflowed and broke the vocal guide).
 * **Direct CON Packaging:** Assembles multi-channel audio (`.mogg`), `notes.mid`, `songs.dta`, and album artwork into an Xbox 360 STFS CON container directly—no legacy tools required.
 
 ---
@@ -153,7 +154,7 @@ python3 -m autorb.cli \
 | `--skip-separation` | Flag | Skip AI stem separation; requires `drums.wav`, `bass.wav`, `vocals.wav`, `other.wav` in `[output-dir]/stems`. |
 | `--skip-tempo-detection` | Flag | Skip beat tracking; loads `tempo_map.json` from the output directory. |
 | `--skip-vocals` | Flag | Skip WhisperX alignment and basic-pitch; loads `vocals_cache.json`. |
-| `--skip-mogg` | Flag | Skip MOGG building; reuses the existing `.mogg` file. |
+| `--skip-mogg` | Flag | Skip MOGG building; reuses the existing `.mogg` file (disables the count-in so the chart stays in sync with the reused audio). |
 
 ---
 
@@ -233,7 +234,7 @@ audio_file: (Required) Path to the input audio file.
 
 --skip-vocals: Skips WhisperX alignment and basic-pitch extraction, loading vocals_cache.json from the output directory.
 
---skip-mogg: Skips MOGG audio container building and uses the existing `.mogg` file.
+--skip-mogg: Skips MOGG audio container building and uses the existing `.mogg` file. Disables the automatic count-in so the chart stays in sync with the reused (un-shifted) audio.
 
 ## 🧪 Development, Testing & CON Validation
 
@@ -278,9 +279,9 @@ This repository uses GitHub Actions (`.github/workflows/ci-cd.yml`) to:
 
 ```bash
 # Trigger a build release (tag MUST match the version in autorb/version.py,
-# pyproject.toml, and CHANGELOG.md — currently 0.0063)
-git tag v0.0063
-git push origin v0.0063
+# pyproject.toml, and CHANGELOG.md — currently 0.0064)
+git tag v0.0064
+git push origin v0.0064
 ```
 
 ---

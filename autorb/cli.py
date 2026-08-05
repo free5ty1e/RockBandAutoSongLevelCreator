@@ -106,7 +106,6 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         return
 
     click.echo("\n[5/5] Building assets and packaging Xbox 360 CON file...")
-    from autorb.export.mogg_builder import build_mogg_from_stems
     from autorb.export.midi_generator import generate_vocal_midi
     from autorb.export.dta_writer import generate_songs_dta
     from autorb.export.con_packer import package_con
@@ -118,11 +117,20 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
     try:
         # 1. Build the .mogg audio container from your separated stem WAVs
         click.echo("Building MOGG audio container from stems...")
-        mogg_file = build_mogg_from_stems(stems_dir, out_path, song_id, skip_mogg=skip_mogg)
+        from autorb.export.mogg_builder import build_mogg_from_stems, read_mogg_duration_ms
+        from autorb.export.midi_generator import count_in_params
+        # Mandatory count-in: prepend silence to the MOGG and shift the whole
+        # chart past it (mirrors stock RB3 DLC, e.g. 311 - Down's ~5s lead-in).
+        # When reusing an existing MOGG via --skip-mogg, disable the count-in so
+        # the chart keeps matching the un-shifted audio it was built against.
+        count_in_ticks, count_in_ms = (0, 0) if skip_mogg else count_in_params(list(beat_times))
+        if count_in_ticks:
+            click.echo(f"Prepending {count_in_ms} ms count-in (opening-tempo, {count_in_ticks} ticks)...")
+        mogg_file = build_mogg_from_stems(stems_dir, out_path, song_id, skip_mogg=skip_mogg,
+                                          count_in_ms=count_in_ms)
 
         # 2. Generate the PART VOCALS .mid chart from synced_track.json
         click.echo("Generating vocal MIDI chart (dynamic tempo map from beat grid)...")
-        from autorb.export.mogg_builder import read_mogg_duration_ms
         avg_bpm = sum(dynamic_bpms) / len(dynamic_bpms) if dynamic_bpms else 120.0
         song_length_ms = read_mogg_duration_ms(mogg_file)
         midi_file = generate_vocal_midi(
@@ -131,6 +139,8 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             bpm=avg_bpm,
             beat_times=list(beat_times),
             dynamic_bpms=list(dynamic_bpms),
+            count_in_ticks=count_in_ticks,
+            count_in_ms=count_in_ms,
         )
 
         # 3. Generate songs.dta configuration metadata
