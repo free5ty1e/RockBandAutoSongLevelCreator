@@ -73,12 +73,12 @@ source venv/bin/activate
 # .\venv\Scripts\Activate.ps1
 
 # Verify the venv is using Python 3.11+ (macOS's default python3 is 3.9.6 — too old)
-python -c "import sys; assert sys.version_info >= (3, 11), 'Need Python 3.11+ — recreate the venv with a newer python3'"
+python3 -c "import sys; assert sys.version_info >= (3, 11), 'Need Python 3.11+ — recreate the venv with a newer python3'"
 
 # Install AutoRB and all ML dependencies
-pip install --upgrade pip
-pip install -r requirements.txt
-pip install -e .
+pip3 install --upgrade pip
+pip3 install -r requirements.txt
+pip3 install -e .
 ```
 
 *Note on `--build-pkg`:* The `--build-pkg` flag requires the `ForgeTool` C#/.NET binary toolchain vendored in `tools/forgetool`. If you are running outside of the devcontainer or CI environment, ensure `.NET SDK 8` and `mono-devel` are installed so `tools/build_forgetool.sh` can build the helper binaries if needed. Standard CON file generation does not require `.NET` or `mono`.
@@ -97,7 +97,7 @@ AutoRB relies on Enhanced LRC (`.lrc`) lyric files for precise word and syllable
 Once installed, convert any MP3 and lyric file into an Xbox 360 CON file and an optional PS4 PKG installer:
 
 ```bash
-python -m autorb.cli \
+python3 -m autorb.cli \
   path/to/song.mp3 \
   --artist "Artist Name" \
   --title "Song Title" \
@@ -117,7 +117,7 @@ Your outputs will be generated in `./output/` (the `.con` file) and `./output/pk
 Run `autorb` via the command line:
 
 ```bash
-python -m autorb.cli \
+python3 -m autorb.cli \
   path/to/song.mp3 \
   --artist "The Beatles" \
   --title "Hey Jude" \
@@ -127,7 +127,7 @@ python -m autorb.cli \
   --output-dir ./output
 
 
-python -m autorb.cli \
+python3 -m autorb.cli \
   input/eve6-openRoadSong.mp3 \
   --artist "Eve 6" \
   --title "Open Road Song" \
@@ -182,7 +182,7 @@ If you have access to the original studio multitracks (stems) for a song, you ca
 3. Run the CLI tool with the `--skip-separation` flag:
 
 ```bash
-python -m autorb.cli \
+python3 -m autorb.cli \
   input/dummy-audio.mp3 \
   --artist "Your Band" \
   --title "Your Song" \
@@ -198,7 +198,7 @@ python -m autorb.cli \
 Run the pipeline using the CLI. You can optionally skip heavy processing steps if you have already generated the intermediate files (stems, tempo maps, or vocal data) during a previous run.
 
 ```bash
-python -m autorb.cli \
+python3 -m autorb.cli \
   input/your-audio.mp3 \
   --artist "Eve 6" \
   --title "Open Road Song" \
@@ -256,7 +256,7 @@ tools/forgetool con2gp4 --id 0000000000000001 --desc "Test" output/open_road_son
 
 To build and package a PS4 PKG installer directly from the pipeline:
 ```bash
-python -m autorb.cli \
+python3 -m autorb.cli \
   input/song.mp3 \
   --artist "Artist" --title "Title" --year 1968 --genre "Rock" \
   --lyrics input/song.lrc \

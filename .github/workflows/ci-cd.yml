@@ -83,13 +83,23 @@ jobs:
       with:
         name: dist
         path: dist
-    - name: Add tag name to artifact filenames
+    - name: Tag wheel/sdist filenames as PEP 440 local versions
       run: |
         TAG="${{ github.ref_name }}"
+        # Sanitize the git tag into a PEP 440 local-version label (alnum, dot, underscore, hyphen).
+        # Appending to the VERSION (e.g. autorb-0.62+v0.005xTest17-py3-none-any.whl) keeps the
+        # wheel filename valid for pip; appending after the platform tag (the old behavior) made
+        # pip reject the file with "Invalid build number".
+        LOCAL="${TAG//[^a-zA-Z0-9._-]/-}"
         for f in dist/*; do
-          base="${f%.*}"
-          ext="${f##*.}"
-          mv "$f" "${base}-${TAG}.${ext}"
+          if [[ "$f" == *.whl ]]; then
+            newname="${f%-py3-none-any.whl}+${LOCAL}-py3-none-any.whl"
+          elif [[ "$f" == *.tar.gz ]]; then
+            newname="${f%.tar.gz}+${LOCAL}.tar.gz"
+          else
+            newname="$f"
+          fi
+          mv "$f" "$newname"
         done
         ls -la dist/
     - name: Create GitHub Release
@@ -116,25 +126,25 @@ jobs:
           git clone https://github.com/chrispaiano/RockBandAutoSongLevelCreator.git
           cd RockBandAutoSongLevelCreator
           python3 -m venv venv && source venv/bin/activate
-          pip install -r requirements.txt
-          pip install -e .
-          python -m autorb.cli input/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics input/song.lrc --output-dir ./output --build-pkg
+          pip3 install -r requirements.txt
+          pip3 install -e .
+          python3 -m autorb.cli input/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics input/song.lrc --output-dir ./output --build-pkg
           ```
 
           ## Installing from this release
 
           1. Download the `.whl` file below (`autorb-*.whl`).
           2. Make sure you have Python 3.11+ (see Prerequisites — macOS defaults to 3.9.6, which is too old). Create a venv and install:
-             ```bash
-             python3 -m venv venv && source venv/bin/activate
-             python -c "import sys; assert sys.version_info >= (3, 11), 'Need Python 3.11+ — your venv used an old python3'"
-             pip install ./autorb-*.whl
-             ```
-             Note: this installs ML dependencies (PyTorch, WhisperX, Demucs) — first install takes a few minutes.
-          3. Run:
-             ```bash
-             python -m autorb.cli path/to/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics path/to/lyrics.lrc --output-dir ./output
-             ```
+           ```bash
+           python3 -m venv venv && source venv/bin/activate
+           python3 -c "import sys; assert sys.version_info >= (3, 11), 'Need Python 3.11+ — your venv used an old python3'"
+           pip3 install ./autorb-*.whl
+           ```
+           Note: this installs ML dependencies (PyTorch, WhisperX, Demucs) — first install takes a few minutes.
+        3. Run:
+           ```bash
+           python3 -m autorb.cli path/to/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics path/to/lyrics.lrc --output-dir ./output
+           ```
 
           The `--build-pkg` flag generates a PS4 PKG installer via the vendored ForgeTool (requires `mono`; run from a git clone).
 
@@ -155,13 +165,13 @@ jobs:
           1. Download the `.whl` file below (`autorb-*.whl`).
           2. Create a venv and install:
              ```bash
-             python -m venv venv && source venv/bin/activate
-             pip install ./autorb-*.whl
+             python3 -m venv venv && source venv/bin/activate
+             pip3 install ./autorb-*.whl
              ```
              Note: this installs ML dependencies (PyTorch, WhisperX, Demucs) — first install takes a few minutes.
           3. Run:
              ```bash
-             python -m autorb.cli path/to/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics path/to/lyrics.lrc --output-dir ./output
+             python3 -m autorb.cli path/to/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics path/to/lyrics.lrc --output-dir ./output
              ```
 
           The `--build-pkg` flag generates a PS4 PKG installer via the vendored ForgeTool (requires `mono`; run from a git clone).
