@@ -19,9 +19,7 @@ class NumpyEncoder(json.JSONEncoder):
             return obj.tolist()
         return super(NumpyEncoder, self).default(obj)
 
-# Suppress TensorFlow C++ logging spam before importing basic_pitch
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-from basic_pitch.inference import predict
+from autorb.pitch.inference import predict
 import whisperx
 
 def process_vocals(vocal_stem_path, lrc_path, out_dir):

@@ -11,22 +11,25 @@ dependencies = [
     "click>=8.1.7",
     "demucs>=4.0.0",
     "librosa>=0.10.1",
-    "basic-pitch>=0.3.0",
     "whisperx>=3.1.1",
     "mido>=1.3.0",
     "pretty_midi>=0.2.10",
     "construct>=2.10.69",
     "pydub",
-    "soundfile"
+    "soundfile",
+    "onnxruntime",
+    "mir-eval",
+    "resampy<0.4.3,>=0.2.2"
 ]
 
 [tool.setuptools.dynamic]
 version = {attr = "autorb.version.__version__"}
 
 [tool.setuptools]
-packages = ["autorb", "autorb.audio", "autorb.export"]
+packages = ["autorb", "autorb.audio", "autorb.export", "autorb.pitch"]
 
 [tool.setuptools.package-data]
 autorb = ["export/data/*.con", "export/data/*.bin"]
+"autorb.pitch" = ["*.onnx"]
 
 
