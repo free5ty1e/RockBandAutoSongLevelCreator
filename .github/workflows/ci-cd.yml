@@ -115,7 +115,7 @@ jobs:
 
           ## Prerequisites
 
-          * **Python 3.11, 3.12, or 3.13** (3.13 is not yet supported by WhisperX)
+          * **Python 3.11, 3.12, or 3.13**. **Python 3.14 is NOT supported** — WhisperX (a hard dependency) caps at `<3.14`, and the wheel's `Requires-Python` enforces `>=3.11,<3.14`, so pip refuses 3.14 early with a clear message.
             * **macOS users**: your system `python3` is likely **3.9.6** (too old). Install a current Python first: `brew install python@3.12`, or download from [python.org](https://www.python.org/downloads/), then use `python3.12` below instead of `python3`. Check with `python3 --version`.
           * **FFmpeg** — install via Homebrew (`brew install ffmpeg`), apt (`sudo apt install ffmpeg libsndfile1`), or Chocolatey (`choco install ffmpeg`)
           * **mono-devel** (Linux/macOS) or **Mono** (Windows) — only needed for `--build-pkg`

@@ -6,7 +6,11 @@ build-backend = "setuptools.build_meta"
 name = "autorb"
 dynamic = ["version"]
 description = "Automated Rock Band 3 CON File Generator"
-requires-python = ">=3.11"
+# WhisperX (hard dependency for vocal alignment) caps at Python <3.14, and the
+# only whisperx release without an upper bound (3.2.0) pins ctranslate2==4.4.0,
+# which ships no cp314 wheel. Enforce the upper bound so pip refuses fast and
+# clearly on 3.14+ instead of failing with a cryptic "ctranslate2==4.4.0" error.
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "click>=8.1.7",
     "demucs>=4.0.0",

@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0065] - 2026-08-05
+- **Install fix: enforce `Requires-Python >=3.11,<3.14` on the wheel.** Python 3.14 is not supported: the current WhisperX releases cap at `<3.14`, and the only whisperx without an upper bound (3.2.0) pins `ctranslate2==4.4.0`, which ships no Python 3.14 wheel — so `pip install autorb` on 3.14 previously died with the cryptic `No matching distribution found for ctranslate2==4.4.0` after a long resolution. The wheel now declares `requires-python = ">=3.11,<3.14"` so pip refuses immediately with a clear message, and the README documents why 3.14 is excluded.
+
 ## [0.0064] - 2026-08-05
 - **Mandatory count-in (fixes the ~1s audio-ahead-of-lyrics offset and the ForgeTool phrase underflow).** `mogg_builder.py` now prepends a silent count-in to the 10-channel MOGG via ffmpeg `adelay` (sized from the song's opening beat-grid tempo: 3 measures = 12 beats; Eve 6 "Open Road Song" gets 4458 ms / 5760 ticks), and `midi_generator.py` shifts the whole chart past it (`count_in_ticks`), placing `[prc_intro]`/`[music_start]` at the end of the count-in like stock RB3 DLC (311 - Down has `[music_start]` at 5280 with ~5s of MOGG lead-in). This eliminates the constant ~1s audio-vs-lyrics offset by giving the game a real pre-roll, and moves the first vocal phrase to tick 6071 so ForgeTool's `RBMidConverter.cs` `e.StartTicks - 640` (line 1286) no longer underflows a `uint` to 4294966967 — the old first phrase at tick 311 wrapped to a ~198s StartMillis with a negative length, which is what made the vocal guide show a broken first phrase. Placeholder DRUM/BASS/GUITAR notes also move to the count-in end so no gems land in the lead-in silence.
 - **`--skip-mogg` disables the count-in** so a chart rebuilt against a reused (un-shifted) `.mogg` doesn't desync from its audio.
