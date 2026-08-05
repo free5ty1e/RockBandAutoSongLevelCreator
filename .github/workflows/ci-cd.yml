@@ -83,14 +83,23 @@ jobs:
       with:
         name: dist
         path: dist
+    - name: Add tag name to artifact filenames
+      run: |
+        TAG="${{ github.ref_name }}"
+        for f in dist/*; do
+          base="${f%.*}"
+          ext="${f##*.}"
+          mv "$f" "${base}-${TAG}.${ext}"
+        done
+        ls -la dist/
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ github.ref_name }}
-        name: "AutoRB ${{ needs.build.outputs.version }}"
+        name: "AutoRB ${{ needs.build.outputs.version }} (${{ github.ref_name }})"
         files: dist/*
         body: |
-          # AutoRB ${{ needs.build.outputs.version }}
+          # AutoRB ${{ needs.build.outputs.version }} (${{ github.ref_name }})
 
           Automated Rock Band 3 CON & PS4 PKG Generator using Machine Learning & Signal Processing.
 
