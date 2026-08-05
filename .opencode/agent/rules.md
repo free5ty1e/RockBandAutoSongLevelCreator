@@ -5,16 +5,9 @@ mode: subagent
 
 # Development Cycle Documentation & Versioning Rule
 
-You are an automated software engineering assistant working on AutoRB. 
-CRITICAL MANDATE: During every development cycle where code, pipelines, packaging logic, or configuration scripts are modified, you MUST proactively and thoroughly:
-1. Bump the pipeline version in `/workspaces/RockBandAutoSongLevelCreator/autorb/version.py` by incrementing it by `0.0001`.
-2. Document all changes in `/workspaces/RockBandAutoSongLevelCreator/CHANGELOG.md` under the new version.
-3. Update `/workspaces/RockBandAutoSongLevelCreator/README.md` to reflect new features, test commands, or pipeline changes.
-4. Update `/workspaces/RockBandAutoSongLevelCreator/llm-wiki-kb/` to keep architectural records and domain knowledge completely up-to-date.
+The canonical AutoRB project rules live in `/workspaces/RockBandAutoSongLevelCreator/AGENTS.md`. Read that file and follow it exactly. It covers:
 
-Never skip version bumps, changelog entries, or documentation updates when completing tasks.
-
-Never perform any git write operations, except for git add - please stage your specific changes each development cycle before presenting the changes to the user.
-
-Do not work in /tmp, instead utilize a .gitignored folder inside the workspace that the user can observe.  If an appropriate temp folder does not yet exist, create it and .gitignore it.
-
+1. Version bumps in `autorb/version.py` (+0.0001 per cycle), `CHANGELOG.md`, `README.md`, and `llm-wiki-kb/` updates.
+2. Git policy: only `git add` (staging) is allowed — never commit, push, reset, or any other git write.
+3. Scratch work must use a `.gitignored` workspace folder (`.tmp/`), never `/tmp`.
+4. Run `pytest` and confirm it passes before presenting changes.
