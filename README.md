@@ -84,6 +84,42 @@ pip3 install -e .
 
 *Note on `--build-pkg`:* The `--build-pkg` flag requires the `ForgeTool` C#/.NET binary toolchain vendored in `tools/forgetool`. If you are running outside of the devcontainer or CI environment, ensure `.NET SDK 8` and `mono-devel` are installed so `tools/build_forgetool.sh` can build the helper binaries if needed. Standard CON file generation does not require `.NET` or `mono`.
 
+### Troubleshooting `python3 -m venv venv` failures (macOS/Linux)
+
+If creating the venv fails with a cryptic error like:
+`Command '['.../venv/bin/python3.12', '-m', 'ensurepip', '--upgrade', '--default-pip']' returned non-zero exit status 1`
+
+The real failure is inside `ensurepip` — run it directly to see the actual message:
+```bash
+python3.12 -m ensurepip --upgrade
+```
+
+Try these fixes in order:
+
+1. **Stale `PYTHONPATH`/`PYTHONHOME` env vars** (common on macOS) break the venv's isolated subprocess:
+   ```bash
+   unset PYTHONPATH PYTHONHOME
+   rm -rf venv
+   python3.12 -m venv venv
+   ```
+2. **Wrong `python3.12` binary** — confirm it's the Homebrew/pyenv Python you expect (pyenv shims can point at a build without pip support):
+   ```bash
+   which python3.12
+   python3.12 -c "import sys; print(sys.executable, sys.version)"
+   ```
+3. **Bootstrap pip manually** if `ensurepip` is genuinely broken:
+   ```bash
+   python3.12 -m venv --without-pip venv
+   source venv/bin/activate
+   curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+   python3.12 /tmp/get-pip.py
+   ```
+
+Then install the wheel as usual:
+```bash
+pip3 install ./autorb-*.whl
+```
+
 ### 3. Preparing Lyrics (`.lrc` Files)
 AutoRB relies on Enhanced LRC (`.lrc`) lyric files for precise word and syllable timing. 
 * **Where to find `.lrc` files:** You can find or download synced LRC files from community lyric sites (such as [LRC LIB](https://lrclib.net/) or NetEase/QQ Music repositories), or create them manually using tools like [LRC Generator](https://www.lrcgenerator.com/).

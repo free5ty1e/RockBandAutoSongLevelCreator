@@ -134,7 +134,7 @@ jobs:
           ## Installing from this release
 
           1. Download the `.whl` file below (`autorb-*.whl`).
-          2. Make sure you have Python 3.11+ (see Prerequisites — macOS defaults to 3.9.6, which is too old). Create a venv and install:
+          2. Make sure you have Python 3.11-3.13 (see Prerequisites — macOS defaults to 3.9.6, which is too old, and 3.14 is not supported). Create a venv and install:
            ```bash
            python3 -m venv venv && source venv/bin/activate
            python3 -c "import sys; assert sys.version_info >= (3, 11), 'Need Python 3.11+ — your venv used an old python3'"
@@ -145,37 +145,42 @@ jobs:
            ```bash
            python3 -m autorb.cli path/to/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics path/to/lyrics.lrc --output-dir ./output
            ```
-           
-          The `--build-pkg` flag generates a PS4 PKG installer via the vendored ForgeTool (requires `mono`; run from a git clone).
-
-          ## Finding Lyrics
-
-          AutoRB uses Enhanced LRC files (`.lrc`) for word-level vocal timing:
-          * **lrclib.net** — search by song/artist, download timestamped LRC files
-          * **lrcgenerator.com** — create your own synced lyrics
-
-          Example format:
-          ```lrc
-          [00:12.34]Tonight, the night
-          [00:15.80]When the world was young
-          ```
-
-          ## Installing from this release
-
-          1. Download the `.whl` file below (`autorb-*.whl`).
-          2. Create a venv and install:
-             ```bash
-             python3 -m venv venv && source venv/bin/activate
-             pip3 install ./autorb-*.whl
-             ```
-             Note: this installs ML dependencies (PyTorch, WhisperX, Demucs) — first install takes a few minutes.
-          3. Run:
-             ```bash
-             python3 -m autorb.cli path/to/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics path/to/lyrics.lrc --output-dir ./output
-             ```
 
           The `--build-pkg` flag generates a PS4 PKG installer via the vendored ForgeTool (requires `mono`; run from a git clone).
           If you get a "ForgeTool not found" error, ensure you are running from the repository root or installed via the `.whl`.
+
+          ### Troubleshooting `python3 -m venv venv` failures (macOS/Linux)
+
+          If creating the venv fails with:
+          `Command '[.../venv/bin/python3.12', '-m', 'ensurepip', '--upgrade', '--default-pip']' returned non-zero exit status 1`
+
+          The real failure is inside `ensurepip` — run it directly to see the actual message:
+          ```bash
+          python3.12 -m ensurepip --upgrade
+          ```
+
+          Try these fixes in order:
+
+          1. **Stale `PYTHONPATH`/`PYTHONHOME` env vars** (common on macOS) break the venv's isolated subprocess:
+             ```bash
+             unset PYTHONPATH PYTHONHOME
+             rm -rf venv
+             python3.12 -m venv venv
+             ```
+          2. **Wrong `python3.12` binary** — confirm it's the Homebrew/pyenv Python you expect (pyenv shims can point at a build without pip support):
+             ```bash
+             which python3.12
+             python3.12 -c "import sys; print(sys.executable, sys.version)"
+             ```
+          3. **Bootstrap pip manually** if `ensurepip` is genuinely broken:
+             ```bash
+             python3.12 -m venv --without-pip venv
+             source venv/bin/activate
+             curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+             python3.12 /tmp/get-pip.py
+             ```
+
+          Then install the wheel as usual: `pip3 install ./autorb-*.whl`
 
           ## Finding Lyrics
 

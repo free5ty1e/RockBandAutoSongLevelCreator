@@ -2,6 +2,10 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0066] - 2026-08-05
+- **README + GitHub Release install troubleshooting.** Added a "Troubleshooting `python3 -m venv venv` failures (macOS/Linux)" section to both the README and the CI/CD release body covering the `ensurepip` `non-zero exit status 1` failure seen by a fresh user (who successfully installed the wheel after following it): run `python3.12 -m ensurepip --upgrade` to see the real error, then (1) `unset PYTHONPATH PYTHONHOME` and recreate the venv, (2) confirm `which python3.12` is the Homebrew/pyenv build you expect, or (3) bootstrap pip manually with `python3.12 -m venv --without-pip venv` + `get-pip.py`. Also deduplicated the duplicated "Installing from this release" / "Finding Lyrics" sections in the release body.
+- **ROADMAP: new `--build-clone-hero` feature.** Added a planned CLI flag to also build/output a Clone Hero-format song (`.chart`/`.mid` + audio) alongside the Rock Band CON, reusing the same generated chart and audio mix without the Xbox 360 CON packaging or Rock Band count-in.
+
 ## [0.0065] - 2026-08-05
 - **Install fix: enforce `Requires-Python >=3.11,<3.14` on the wheel.** Python 3.14 is not supported: the current WhisperX releases cap at `<3.14`, and the only whisperx without an upper bound (3.2.0) pins `ctranslate2==4.4.0`, which ships no Python 3.14 wheel — so `pip install autorb` on 3.14 previously died with the cryptic `No matching distribution found for ctranslate2==4.4.0` after a long resolution. The wheel now declares `requires-python = ">=3.11,<3.14"` so pip refuses immediately with a clear message, and the README documents why 3.14 is excluded.
 

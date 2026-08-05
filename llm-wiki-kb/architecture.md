@@ -1,6 +1,9 @@
 # AutoRB Knowledge Base - Architecture & Pipeline
 
-The AutoRB pipeline is an end-to-end automation system for converting raw audio and lyrics into playable Xbox 360 CON and PlayStation 4 PKG custom song packages.
+The AutoRB pipeline is an end-to-end automation system for converting raw audio and lyrics into playable Xbox 360 CON and PlayStation 4 PKG custom song packages. A planned `--build-clone-hero` flag (ROADMAP) will additionally export a Clone Hero-format song (`.chart`/`.mid` + audio) reusing the same chart and mix, without the Xbox 360 CON packaging or Rock Band count-in.
+
+## Fresh-User Wheel Install (v0.0066)
+Fresh users install only the wheel (no git clone). Known macOS/Linux pitfall: `python3 -m venv venv` can fail with `ensurepip ... non-zero exit status 1` — see the "Troubleshooting `python3 -m venv venv` failures" section in README.md and the GitHub release body (run `python3.12 -m ensurepip --upgrade` to see the real error; fixes: `unset PYTHONPATH PYTHONHOME`, verify `which python3.12`, or bootstrap pip with `--without-pip` + `get-pip.py`). The wheel enforces `Requires-Python >=3.11,<3.14` (Python 3.14 unsupported — WhisperX caps at `<3.14`).
 
 ## Pipeline Components
 
