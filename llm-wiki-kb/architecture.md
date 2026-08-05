@@ -17,3 +17,9 @@ The AutoRB pipeline is an end-to-end automation system for converting raw audio 
 4.  **Tooling Integration**:
     *   The `ForgeTool` is built from vendored source within the `tools/libforge/` directory using .NET SDK 8 and Mono, ensuring full reproducibility within the development container.
     *   Pipeline supports automatic PKG generation via the `--build-pkg` flag.
+
+## Key Detection (v0.0063)
+`autorb/export/key_detect.py` estimates the song's key from the Basic-Pitch vocal note events (`[start, end, midi_pitch, ...]`): it builds a pitch-class histogram weighted by note duration, rotates the Krumhansl-Schmuckler major/minor profiles, and returns the best-matching `(tonic_pitch_class, tonality)`. Values are 0-11 chromatic (0=C) and 0=major/1=minor. The CLI passes these to `generate_songs_dta()` which writes `(vocal_tonic_note N)` and `(song_tonality 0|1)` — the metadata that enables Rock Band's "Acceptable Pitch" key guide lanes for Hard/Expert freestyle harmony. See `rock_band_customs_domain.md`.
+
+## Release Packaging: PEP 440 Wheel Filenames
+The CI release job renames the built artifacts to carry the git tag. The old code appended the tag **after** the platform tag (`autorb-0.62-py3-none-any-v0.005xTest17.whl`), which pip rejects with `ERROR: Invalid build number` — macOS users could not install release wheels. The fix inserts the sanitized tag as a **PEP 440 local version** before the platform tag: `autorb-0.62+v0.005xTest17-py3-none-any.whl` (and `autorb-0.62+v0.005xTest17.tar.gz` for the sdist). Tag characters are sanitized with `${TAG//[^a-zA-Z0-9._-]/-}`. pip install instructions must use `python3`/`pip3` (macOS's default `python3` is 3.9.6, below the `>=3.11` requirement).

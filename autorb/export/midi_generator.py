@@ -85,7 +85,8 @@ def build_placeholder_track(name: str, pitches: tuple = PLACEHOLDER_DIFFICULTY_P
 
 def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id: str,
                         preview_start_ms: int = 50000, song_length_ms: int | None = None,
-                        phrase_measures: int = 2, bpm: float = 120.0) -> Path:
+                        phrase_measures: int = 2, bpm: float = 120.0,
+                        beat_times: list | None = None, dynamic_bpms: list | None = None) -> Path:
     """
     Generates a fully compliant Rock Band PART VOCALS MIDI chart from synchronized JSON data.
     Includes placeholder PART DRUMS, PART GUITAR, and PART BASS tracks (one note each) so that
@@ -93,9 +94,14 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
 
     Vocal phrase markers (pitch 105) group the lyrics into fixed-length phrases of
     ``phrase_measures`` measures (Rock Band convention is 2 or 4 bars per phrase).
-    Measure boundaries are derived from the beat grid (4/4 at ``bpm`` BPM, 480 ticks/beat
-    => 1920 ticks/measure), so phrases are anchored to the song's meter rather than
-    to pauses in the lyrics.
+
+    Tempo map: when ``beat_times``/``dynamic_bpms`` (the beat-tracked grid from
+    ``tempo_map.json``) are provided, the tempo track carries a **dynamic tempo map**
+    with a ``set_tempo`` event per beat interval and every note/beat tick is derived
+    from the real beat grid (tick 480*i == ``beat_times[i]``). This mirrors stock RB3
+    charts (311 - Down changes tempo every ~2 bars) and keeps the chart perfectly
+    synced to the audio, eliminating the progressive lyric drift a single averaged
+    BPM causes. Falls back to a flat ``bpm`` when no beat grid is available.
     """
     json_path = Path(synced_json_path)
     midi_path = output_dir / f"{song_id}.mid"
@@ -107,17 +113,14 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
 
     header = b"MThd" + struct.pack(">IHHH", 6, 1, 7, 480)
 
-    # Use the actual detected BPM for the MIDI tempo map so that note ticks
-    # land at musically correct positions.  Rock Band reads this tempo map,
-    # so the game's clock matches the audio exactly.
-    ticks_per_second = 480 * (bpm / 60.0)
-    tempo_us_per_beat = int(60_000_000 / bpm)
-    tempo_bytes = tempo_us_per_beat.to_bytes(3, "big")
+    ticks_per_beat = 480
+    beats_per_measure = 4
+    phrase_ticks = phrase_measures * beats_per_measure * ticks_per_beat
 
-    # Track 0: tempo map (name = song id, matching stock RB3 charts)
-    track0_data = (
-        b"\x00\xFF\x58\x04\x04\x02\x18\x08" +  # 4/4 Time Signature
-        b"\x00\xFF\x51\x03" + tempo_bytes        # Actual detected BPM
+    # Build the time->tick mapping + per-beat tempo events from the beat grid.
+    time_to_tick, tempo_events = _build_tempo_grid(
+        beat_times, dynamic_bpms, bpm=120.0 if not (bpm and bpm > 0) else bpm,
+        ticks_per_beat=ticks_per_beat,
     )
 
     items = []
@@ -137,14 +140,6 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
 
     vocal_events = bytearray()
 
-    # Vocal phrase markers (pitch 105) group lyrics into fixed-length phrases.
-    # The beat grid is 4/4 at 120 BPM with 480 ticks/beat, so one measure is
-    # 4 * 480 = 1920 ticks. Phrases span `phrase_measures` measures (default 2),
-    # and each note is assigned to the phrase window its start tick falls in.
-    ticks_per_beat = 480
-    beats_per_measure = 4
-    phrase_ticks = phrase_measures * beats_per_measure * ticks_per_beat
-
     last_tick = 0
     current_phrase_idx = None
 
@@ -154,8 +149,8 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
         lyric = item.get("word", item.get("lyric", "la"))
         pitch = item.get("pitch", 60)
 
-        target_start_tick = int(start_sec * ticks_per_second)
-        target_end_tick = max(target_start_tick + 48, int(end_sec * ticks_per_second))
+        target_start_tick = time_to_tick(start_sec)
+        target_end_tick = max(target_start_tick + 48, time_to_tick(end_sec))
 
         phrase_idx = target_start_tick // phrase_ticks
 
@@ -209,13 +204,18 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
         last_note_end_tick = 480
 
     if song_length_ms is None:
-        song_length_ms = int(last_note_end_tick / ticks_per_second * 1000) + 1000
-    total_beats = max(1, int(song_length_ms / 1000 * 2))
+        song_length_ms = int(last_note_end_tick / 480 * 60_000 / (bpm if bpm and bpm > 0 else 120.0)) + 1000
+    song_end_tick = time_to_tick(song_length_ms / 1000.0)
+    # The BEAT track must cover the whole song, so base its length on the tempo map,
+    # not on a hardcoded 120 BPM (which left the grid short at faster tempos).
+    total_beats = max(1, song_end_tick // ticks_per_beat + 2)
 
-    # Track 0: tempo map (name = song id, mirroring stock RB3 charts like 311 - Down)
+    # Track 0: tempo map (name = song id, mirroring stock RB3 charts like 311 - Down).
+    # Carries a dynamic tempo map (one set_tempo per beat interval) when the beat
+    # grid is available, so the game clock tracks the audio exactly.
     tempo_data = (
         b"\x00\xFF\x58\x04\x04\x02\x18\x08" +  # 4/4 Time Signature
-        b"\x00\xFF\x51\x03" + tempo_bytes        # Actual detected BPM
+        _build_tempo_events(tempo_events)
     )
     t0 = build_track(song_id, tempo_data)
 
@@ -228,8 +228,8 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     # Track 5: EVENTS with the required [music_start]/[preview]/[music_end]/[end] markers
     t5 = build_events_track(
         first_note_tick=first_note_tick or 0,
-        last_note_end_tick=max(last_note_end_tick, int(song_length_ms * ticks_per_second / 1000)),
-        preview_start_tick=int(preview_start_ms * ticks_per_second / 1000),
+        last_note_end_tick=max(last_note_end_tick, song_end_tick),
+        preview_start_tick=time_to_tick(preview_start_ms / 1000.0),
     )
 
     # Track 6: BEAT - one quarter-note marker per beat (downbeat pitch 12 vel 101,
@@ -256,3 +256,106 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
 
     logger.info(f"Generated complete vocal MIDI chart at {midi_path}")
     return midi_path
+
+
+def _build_tempo_grid(beat_times, dynamic_bpms, bpm, ticks_per_beat=480):
+    """Returns ``(time_to_tick, tempo_events)``.
+
+    ``time_to_tick(seconds)`` maps an audio timestamp to a MIDI tick via linear
+    interpolation on the beat grid (tick 480*i == beat_times[i]). ``tempo_events``
+    is a list of ``(tick, tempo_us_per_beat)`` with one entry per beat interval,
+    reproducing that exact grid through the MIDI tempo track.
+
+    Without a usable beat grid, falls back to a flat ``bpm`` map.
+    """
+    beats = [float(x) for x in (beat_times or []) if x is not None]
+    bpms = list(dynamic_bpms or [])
+
+    if len(beats) < 2:
+        bpm = bpm if bpm and bpm > 0 else 120.0
+        us = int(60_000_000 / bpm)
+
+        def flat_to_tick(t):
+            return int(t * ticks_per_beat * bpm / 60.0)
+
+        return flat_to_tick, [(0, us)]
+
+    # Anchor tick 0 to audio time 0. The beat tracker starts its grid at
+    # beat_times[0] (>0 usually), so without a virtual beat at t=0 the whole
+    # chart is shifted early by that constant lead-in and lyrics never align
+    # with the audio. Prepend a virtual beat at t=0 with the first interval's
+    # tempo so tick 0 == audio 0 and the real first beat lands on its true tick.
+    if beats[0] > 1e-6:
+        beats = [0.0] + beats
+
+    n = len(beats)
+    # Local BPM between consecutive beats; fall back to `bpm` when missing/zero.
+    intervals_us = []
+    for i in range(n - 1):
+        dur = beats[i + 1] - beats[i]
+        if dur > 0:
+            intervals_us.append(int(60_000_000 / (60.0 / dur)))
+        else:
+            intervals_us.append(int(60_000_000 / (bpm if bpm and bpm > 0 else 120.0)))
+
+    first_us = intervals_us[0]
+    last_us = intervals_us[-1]
+    sec_per_beat_first = first_us / 1_000_000.0
+    sec_per_beat_last = last_us / 1_000_000.0
+
+    def grid_to_tick(t):
+        if t <= beats[0]:
+            return max(0, int(t * ticks_per_beat / sec_per_beat_first))
+        if t >= beats[-1]:
+            tail = t - beats[-1]
+            return (n - 1) * ticks_per_beat + int(tail * ticks_per_beat / sec_per_beat_last)
+        # Binary search for the interval containing t.
+        lo, hi = 0, n - 2
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if beats[mid] <= t <= beats[mid + 1]:
+                frac = (t - beats[mid]) / (beats[mid + 1] - beats[mid])
+                return mid * ticks_per_beat + int(frac * ticks_per_beat)
+            elif t < beats[mid]:
+                hi = mid - 1
+            else:
+                lo = mid + 1
+        return max(0, int(t * ticks_per_beat / sec_per_beat_first))
+
+    # One set_tempo event per beat interval, starting at tick 0.
+    tempo_events = []
+    for i, us in enumerate(intervals_us):
+        tempo_events.append((i * ticks_per_beat, us))
+    tempo_events.append(((n - 1) * ticks_per_beat, last_us))
+
+    return grid_to_tick, tempo_events
+
+
+def _build_tempo_events(tempo_events):
+    """Encodes a list of (tick, tempo_us) as chained FF 51 03 set_tempo events.
+
+    Consecutive entries with the same tempo are collapsed, and the first event is
+    placed at tick 0 (it may repeat tick 0's tempo, which is harmless).
+    """
+    if not tempo_events:
+        return b"\x00\xFF\x51\x03\x07\xA1\x20"
+
+    # Sort + dedupe consecutive identical tempos, guaranteeing a tick-0 event.
+    evs = sorted(tempo_events, key=lambda e: e[0])
+    deduped = []
+    for tick, us in evs:
+        if not deduped or deduped[-1][1] != us:
+            deduped.append((tick, us))
+
+    # Ensure there is an event at tick 0.
+    if deduped[0][0] != 0:
+        deduped.insert(0, (0, deduped[0][1]))
+
+    out = bytearray()
+    prev = 0
+    for tick, us in deduped:
+        delta = max(0, tick - prev)
+        out.extend(encode_varlen(delta))
+        out.extend(b"\xFF\x51\x03" + int(us).to_bytes(3, "big"))
+        prev = tick
+    return bytes(out)

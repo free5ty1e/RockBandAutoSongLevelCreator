@@ -9,7 +9,8 @@ from autorb.export.mogg_builder import read_mogg_duration_ms
 logger = logging.getLogger(__name__)
 
 def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path, song_length: int | None = None,
-                       ranks: dict | None = None) -> Path:
+                       ranks: dict | None = None, vocal_tonic_note: int = 4,
+                       song_tonality: int = 0) -> Path:
     """
     Generates the Rock Band songs.dta metadata configuration file in standard concise single-line property format.
     """
@@ -98,8 +99,8 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path, song_leng
         "   (album_art TRUE)",
         f'   (album_name "{album}")',
         "   (album_track_number 1)",
-        "   (vocal_tonic_note 4)",
-        "   (song_tonality 0)",
+        f"   (vocal_tonic_note {vocal_tonic_note})",
+        f"   (song_tonality {song_tonality})",
         ")"
     ]
 

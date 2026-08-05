@@ -109,7 +109,8 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
     from autorb.export.mogg_builder import build_mogg_from_stems
     from autorb.export.midi_generator import generate_vocal_midi
     from autorb.export.dta_writer import generate_songs_dta
-    from autorb.export.con_packer import package_con  
+    from autorb.export.con_packer import package_con
+    from autorb.export.key_detect import detect_vocal_key
     
     # Generate a filesystem-safe song ID from the title
     song_id = title.lower().replace(" ", "_").replace("'", "")
@@ -120,9 +121,17 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         mogg_file = build_mogg_from_stems(stems_dir, out_path, song_id, skip_mogg=skip_mogg)
 
         # 2. Generate the PART VOCALS .mid chart from synced_track.json
-        click.echo("Generating vocal MIDI chart...")
+        click.echo("Generating vocal MIDI chart (dynamic tempo map from beat grid)...")
+        from autorb.export.mogg_builder import read_mogg_duration_ms
         avg_bpm = sum(dynamic_bpms) / len(dynamic_bpms) if dynamic_bpms else 120.0
-        midi_file = generate_vocal_midi(synced_output_json, out_path, song_id, bpm=avg_bpm)
+        song_length_ms = read_mogg_duration_ms(mogg_file)
+        midi_file = generate_vocal_midi(
+            synced_output_json, out_path, song_id,
+            song_length_ms=song_length_ms,
+            bpm=avg_bpm,
+            beat_times=list(beat_times),
+            dynamic_bpms=list(dynamic_bpms),
+        )
 
         # 3. Generate songs.dta configuration metadata
         click.echo("Generating songs.dta metadata...")
@@ -134,7 +143,10 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             "song_id_num": abs(hash(song_id)) % 100000000,
             "album": title
         }
-        dta_path = generate_songs_dta(song_id, metadata, out_path)
+        vocal_tonic_note, song_tonality = detect_vocal_key(vocal_notes)
+        dta_path = generate_songs_dta(song_id, metadata, out_path,
+                                      vocal_tonic_note=vocal_tonic_note,
+                                      song_tonality=song_tonality)
 
         # 4. Package everything into the Xbox 360 CON/STFS container
         click.echo("Packaging into CON container...")

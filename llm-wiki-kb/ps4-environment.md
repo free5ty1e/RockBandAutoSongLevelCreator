@@ -39,3 +39,7 @@ The user's live test environment and experience — the ground truth our PS4 com
 
 - Current symptom on PS4 RB4DX: chart loads (vocal fretboard + lyrics appear briefly), but **no audio preview in the song list** and the song **"completes instantly" at 0%** with a 0-point taunt.
 - Fixes applied and re-tested with the same symptom: small Ogg pages (`-page_duration 40000`), real `(song_length)` from MOGG duration. Chart-side placeholder tracks fixed the earlier ForgeTool NRE (chart now loads).
+- **Fresh retest (v0.0063, rebuilt CON/PKG from current code):** the old chart's phrase-close bug was the scoring killer — the stale PKG chart had 18 phrase opens and 0 real closes, so vocal scoring did nothing. After the phrase-close fix, **vocal scoring now works** (phrases recognized, score bar fills). Remaining on PS4:
+  - **No audio preview in the song list** — root cause still unresolved.
+  - **No count-in / song starts immediately + crowd boos at start** — expected: count-in is audio-based (prepend a 2-measure click at the first bars' tempo to the MOGG; `[music_start]` then fires the crowd cheer after it).
+  - **Lyrics drift progressively later** in the song — suspected cause: the chart uses one averaged BPM from a jittery 534-value beat-tracked tempo map instead of a dynamic tempo map (see `rock_band_customs_domain.md`).

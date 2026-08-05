@@ -278,9 +278,9 @@ This repository uses GitHub Actions (`.github/workflows/ci-cd.yml`) to:
 
 ```bash
 # Trigger a build release (tag MUST match the version in autorb/version.py,
-# pyproject.toml, and CHANGELOG.md — currently 0.0062)
-git tag v0.0062
-git push origin v0.0062
+# pyproject.toml, and CHANGELOG.md — currently 0.0063)
+git tag v0.0063
+git push origin v0.0063
 ```
 
 ---
