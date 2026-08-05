@@ -50,7 +50,8 @@ NOTE: Under development.  No release is available to share just yet.
 AutoRB runs on **macOS, Windows, and Linux**. Because AutoRB leverages heavy machine learning frameworks (PyTorch, Demucs, WhisperX, Basic-Pitch), it is distributed as a standard Python package (`autorb`) which you install via `pip`.
 
 ### 1. Prerequisites (All Operating Systems)
-* **Python 3.11+** installed on your system.
+* **Python 3.11, 3.12, or 3.13** installed on your system (3.13 is not yet supported by WhisperX).
+  * **macOS users:** your system `python3` is likely **3.9.6** (too old — installs will fail with "requires a different Python: 3.9.6 not in '>=3.11'"). Install a current Python first: `brew install python@3.12`, or download from [python.org](https://www.python.org/downloads/). Then use `python3.12` in place of `python3` below. Verify with `python3 --version`.
 * **FFmpeg** installed and available on your system PATH (`ffmpeg -version` should succeed).
   * **Windows:** Download FFmpeg from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) or install via Chocolatey (`choco install ffmpeg`).
   * **macOS:** Install via Homebrew (`brew install ffmpeg`).
@@ -65,11 +66,14 @@ git clone https://github.com/chrispaiano/RockBandAutoSongLevelCreator.git
 cd RockBandAutoSongLevelCreator
 
 # Create and activate a virtual environment (Recommended)
-python -m venv venv
+python3 -m venv venv
 # On macOS / Linux:
 source venv/bin/activate
 # On Windows (PowerShell):
 # .\venv\Scripts\Activate.ps1
+
+# Verify the venv is using Python 3.11+ (macOS's default python3 is 3.9.6 — too old)
+python -c "import sys; assert sys.version_info >= (3, 11), 'Need Python 3.11+ — recreate the venv with a newer python3'"
 
 # Install AutoRB and all ML dependencies
 pip install --upgrade pip

@@ -174,11 +174,12 @@ def package_con(
     return con_file_path
 
 def _find_forgetool() -> Path:
-    """Locates the `tools/forgetool` wrapper, searching the repo root (source
-    installs / git clones) and then the wheel's data-files location
-    (``{sys.prefix}/tools``) for pip-installed users."""
+    """Locates the `tools/forgetool` wrapper, searching the current working
+    directory and common ancestor layouts. `--build-pkg` requires a full git
+    clone (the ForgeTool .NET binaries are not shipped in the pip wheel)."""
     candidates = [
         Path.cwd() / "tools" / "forgetool",
+        Path.cwd().parent / "tools" / "forgetool",
         Path(sys.prefix) / "tools" / "forgetool",
         Path(sys.base_prefix) / "tools" / "forgetool",
     ]
@@ -186,10 +187,12 @@ def _find_forgetool() -> Path:
         if candidate.is_file():
             return candidate
     raise RuntimeError(
-        "ForgeTool not found. `--build-pkg` requires the vendored ForgeTool toolchain:\n"
-        "  - Source installs: run from the repository root (tools/forgetool).\n"
-        "  - pip installs: the wheel ships it under {sys.prefix}/tools.\n"
-        "  - mono is required: `sudo apt install mono-devel` (or `brew install mono` on macOS)."
+        "ForgeTool not found. `--build-pkg` requires a full git clone with the "
+        "vendored toolchain built:\n"
+        "  git clone https://github.com/chrispaiano/RockBandAutoSongLevelCreator.git\n"
+        "  tools/build_forgetool.sh\n"
+        "  # then run from the repository root so tools/forgetool is visible.\n"
+        "mono is also required: `sudo apt install mono-devel` (or `brew install mono` on macOS)."
     )
 
 
