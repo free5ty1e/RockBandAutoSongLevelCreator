@@ -55,21 +55,22 @@ ffmpeg ... -c:a libvorbis -q:a 5 -page_duration 40000 -f ogg out.ogg
 The Ogg stream is a **single logical stream with N channels**; songs.dta's `tracks` assigns channels to instruments. AutoRB emits **10 channels** mirroring the proven-working "311 - Down" DLC layout (which maps cleanly through ForgeTool's `MakeMoggDta` to `drum (0) drum (1) drum (2 3) bass (4) guitar (5 6) vocals (7 8) fake (9)`):
 
 ```
-ch0  kick track    (silent; the kit lives on ch2-3)
-ch1  snare track   (silent)
+ch0-1 full drum kit split stereo (v0.0069: was digital silence)
 ch2-3 stereo drum kit
 ch4  mono bass
 ch5-6 stereo guitar/backing (the 'other' stem)
 ch7-8 stereo vocals
-ch9  fake/crowd    (silent; engine falls back to procedural crowd)
+ch9  quiet fake/crowd ambience (backing at 0.1 gain; was digital silence)
 ```
+
+**v0.0069 correction (silent channels → silent preview):** binary decoding of the reference "311 - Down" MOGG showed **every channel carries audio** — kick/snare ch0/1 are its LOUDEST channels (~3511/1328 RMS vs ~704/530 on the kit ch2/3) and ch9 fake/crowd reads ~50 RMS. AutoRB's previous layout forced ch0/1/ch9 to `volume=0`, which made the PS4 song-list preview **completely silent** while gameplay audio (which mixes ch2-8) still worked. `mogg_builder.py` now sends the full drum kit to ch0/1 and low-level backing to ch9. Any preview mixdown that uses the front stereo pair — or any default mix the engine picks — is therefore never silent. This is the best-supported remaining explanation for the v0.0068 "no preview audio" report (chart, `songs.dta` preview window (ms), rbmid `PreviewStartMillis`, OggMap byte offsets, and Ogg page sizes were all independently verified correct and structurally equivalent to 311 Down).
 
 `pans`/`vols`/`cores` arrays in songs.dta must have one value per channel (10 entries, guitar channels cored). The 8-channel layout used before v0.0059 (`drum 0-1, bass 2-3, guitar 4-5, vocals 6-7`) left the track/channel structure different from every stock/311 song; `maxton/LibForge#30` documents that a track layout that does not match the physical MOGG makes songs start but stop playing prematurely in-game — the failure family of the persistent "no preview + instant 0%" bug.
 
 ## Implementation
 
 `autorb/export/mogg_builder.py`:
-- With the 4 standard stems present, pans each stem into mono/stereo channels (`pan`/`aformat` filters) and `amerge=inputs=10` -> 10ch Ogg @ source rate (44100). Channels 0, 1, and 9 are derived from the drums input with `volume=0` so their duration matches. A generic per-stem stereo merge fallback handles non-standard stem counts.
+- With the 4 standard stems present, pans each stem into mono/stereo channels (`pan`/`aformat` filters) and `amerge=inputs=10` -> 10ch Ogg @ source rate (44100). Since v0.0069 the full drum kit is sent to ch0/1 and a low-level backing ambience to ch9 so **every channel carries audio** (previously 0, 1, and 9 were derived from the drums input with `volume=0`). A generic per-stem stereo merge fallback handles non-standard stem counts.
 - Preprends the mandatory count-in silence with `adelay={count_in_ms}:all=1` on the merged output when `count_in_ms > 0` (v0.0064) — the game expects a silent pre-roll (stock 311 - Down has ~5s of MOGG lead-in); the chart is shifted to match via `midi_generator.generate_vocal_midi(count_in_ticks=...)`.
 - Forces small Ogg pages with `-page_duration 40000` (`PAGE_DURATION_US`) — RB's Milkshake decoder fails on ffmpeg-default ~1s/56KB pages (see above).
 - `wrap_ogg_as_mogg()` parses the Ogg pages and prepends the v10 header + OggMap (pure Python, no external tools beyond ffmpeg). The OggMap's per-entry sample values track page granules (about 1024 samples lower than the reference `ogg2mogg` tool's `ov_raw_seek`+`ov_pcm_tell` values at each 0x8000-byte row, which only affects seek precision, not forward playback; byte offsets are identical).

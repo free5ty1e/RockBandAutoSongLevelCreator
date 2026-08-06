@@ -154,13 +154,20 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
     track/channel structure is identical to a stock song (verified against
     LibForge#30, where mismatched track layouts make songs stop early in-game):
 
-        ch0   kick track      (silent; kit lives on ch2-3)
-        ch1   snare track     (silent)
-        ch2-3 stereo drum kit
-        ch4   mono bass
-        ch5-6 stereo guitar/backing (the 'other' stem)
-        ch7-8 stereo vocals
-        ch9   fake/crowd track (silent; engine falls back to procedural crowd)
+        ch0-1  full drum kit split stereo (311's kick/snare are its loudest
+               channels; keeping the first stereo pair hot guarantees the
+               song-list preview mixdown is never silent)
+        ch2-3  stereo drum kit
+        ch4    mono bass
+        ch5-6  stereo guitar/backing (the 'other' stem)
+        ch7-8  stereo vocals
+        ch9    quiet fake/crowd ambience (backing at low level, near-silent
+               like 311 Down's ch9 which reads ~50 RMS vs ~3500 on ch0)
+
+    Every channel carries audio because the reference "311 - Down" mogg has
+    non-zero signal on all 10 channels; leaving ch0-1/ch9 as digital silence
+    made the PS4 song-list preview completely silent even though the chart,
+    OggMap, and dta preview window were all verified correct.
 
     songs.dta must declare: ((drum (0 1 2 3)) (bass (4)) (guitar (5 6))
     (vocals (7 8))) with 10-entry pans/vols/cores, matching the 311 reference.
@@ -197,10 +204,12 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
         # Every branch is normalized to stereo first, then panned to a mono
         # channel so amerge yields exactly 10 channels in order.
         filter_parts = [
-            # ch0/ch1: mix1 kick/snare tracks left silent so the whole kit is
-            # carried by ch2-3 (avoids partial muting when notes are missed).
-            "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FL,volume=0[s0]",
-            "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FL,volume=0[s1]",
+            # ch0/ch1: full drum kit split stereo. 311 Down's kick/snare
+            # (ch0/1) are its LOUDEST channels (~3500 RMS); keeping the first
+            # stereo pair hot mirrors that and guarantees any preview
+            # mixdown that uses the front stereo pair is audible.
+            "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FL[s0]",
+            "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FR[s1]",
             # ch2-3: stereo drum kit.
             "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FL[s2]",
             "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FR[s3]",
@@ -212,8 +221,9 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
             # ch7-8: stereo vocals.
             "[3:a]aformat=channel_layouts=stereo,pan=mono|c0=FL[s7]",
             "[3:a]aformat=channel_layouts=stereo,pan=mono|c0=FR[s8]",
-            # ch9: fake/crowd track left silent (engine uses procedural crowd).
-            "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FL,volume=0[s9]",
+            # ch9: fake/crowd ambience at low level (near-silent like 311's
+            # ch9, which carries ~50 RMS vs ~3500 on its kick channel).
+            "[2:a]aformat=channel_layouts=stereo,pan=mono|c0=0.5*FL+0.5*FR,volume=0.1[s9]",
             "[s0][s1][s2][s3][s4][s5][s6][s7][s8][s9]amerge=inputs=10[aout]",
         ]
         if count_in_ms > 0:

@@ -25,9 +25,8 @@ The user's live test environment and experience — the ground truth our PS4 com
 
 ## Open Questions / Pending Tests
 
-- **Does a converted `output/known_good_cons/311 - Down` (0xA unencrypted mogg) actually play with audio on PS4 RB4DX?**
-  - The user has confirmed they've played official 311 - Down on PS4, and has reported 0xA works on PS3 — but we still need to confirm they have actually converted *our* 311 CON (0xA) via ForgeTool and played it on the PS4, versus only having played the official encrypted DLC.
-  - This is the decisive test for whether unencrypted 0xA moggs are supported by RB4DX, or whether we must produce an **encrypted v13/v16** mogg (the template `SmellsLikeNirvana_rb3con` contains a v13 0x0D encrypted mogg; RB4-era tooling appears to use encrypted moggs).
+- **Unencrypted 0xA moggs on PS4 RB4DX are now CONFIRMED playable in-game.** The v0.0068 CON/PKG (0xA mogg) installed and played: chart loads, vocal fretboard + lyrics appear, audio plays (user reported the constant ~1s timing offset rather than "no audio"). Only the song-list *preview* and freestyle lines remain broken.
+- **Remaining to confirm on the next retest (v0.0069):** whether filling all 10 MOGG channels (ch0/1 = drums, ch9 = low ambience, mirroring 311 Down where every channel carries signal) restores the song-list preview audio.
 
 ## Conversion Pipeline (User Side)
 
@@ -37,9 +36,9 @@ The user's live test environment and experience — the ground truth our PS4 com
 
 ## Testing Notes
 
-- Current symptom on PS4 RB4DX: chart loads (vocal fretboard + lyrics appear briefly), but **no audio preview in the song list** and the song **"completes instantly" at 0%** with a 0-point taunt.
-- Fixes applied and re-tested with the same symptom: small Ogg pages (`-page_duration 40000`), real `(song_length)` from MOGG duration. Chart-side placeholder tracks fixed the earlier ForgeTool NRE (chart now loads).
-- **Fresh retest (v0.0063, rebuilt CON/PKG from current code):** the old chart's phrase-close bug was the scoring killer — the stale PKG chart had 18 phrase opens and 0 real closes, so vocal scoring did nothing. After the phrase-close fix, **vocal scoring now works** (phrases recognized, score bar fills). Remaining on PS4:
-  - **No audio preview in the song list** — root cause still unresolved.
-  - **No count-in / song starts immediately + crowd boos at start** — expected: count-in is audio-based (prepend a 2-measure click at the first bars' tempo to the MOGG; `[music_start]` then fires the crowd cheer after it).
-  - **Lyrics drift progressively later** in the song — suspected cause: the chart uses one averaged BPM from a jittery 534-value beat-tracked tempo map instead of a dynamic tempo map (see `rock_band_customs_domain.md`).
+- **v0.0068 retest (user, PS4 RB4DX 20260627):** three remaining issues, all confirmed with correct test conditions (count-in plays normally — silence, count-in beats, then music; preview in the song list is **completely silent**; Freestyle Vocals was ON in RB4 Options and Solo Vocals played on Hard/Expert, yet no guide lines). Vocal scoring and chart load work; no "instant 0%" behavior.
+- **v0.0068 file-level verification (exhaustive, all layers consistent within ~30ms):** the CON's embedded `rbmid_ps4` parses end-to-end (first vocal tick 6071 ↔ StartMillis 5037.445ms; `PreviewStartMillis` 54457.59; 391 tempos reproducing every note time; `FinalEventTick` 274900); the CON/PKG MOGG is byte-identical to `output/open_road_song.mogg` (md5 `aa5765806d645ce8bfa629b74f0afbd9`); `songs.dta` `(preview 50636 80636)` is **milliseconds** (RB3 authoring guide + 311 Down corroboration) and lands in loud music; the OggMap byte offsets decode to their claimed samples; Ogg page sizes are small (≤2752 granules). **Therefore the ~1s offset and silent preview are NOT reproducible from the files** — the remaining suspects are game-side.
+- **v0.0069 hypothesis (implemented, awaiting retest):** silent MOGG channels → silent preview. 311 Down's mogg has non-zero signal on ALL 10 channels (ch0/1 loudest, ~3500 RMS; ch9 ~50 RMS); our v0.0068 mogg had ch0/1/9 forced to digital zero. Any preview mixdown keyed to the front stereo pair was therefore silent while gameplay (mixing ch2-8) worked. v0.0069 fills all channels. OggMap re-validated (64/64 sampled), preview windows (50.636s / 54.458s) still land in loud audio (RMS > 1500).
+- **~1s audio-ahead-of-notes offset:** the v0.0064 count-in hypothesis is **disproven** (count-in plays normally in-game and files agree within ~30ms). Next suspects: (a) game-side chart-init delay possibly aggravated by the 391-event dense tempo map (stock 311 Down has 69); (b) RB4DX lyric/vocal rendering offset. A controlled A/B (coarsened tempo map) would isolate (a).
+- **Freestyle lines absent despite correct conditions:** the PKG `songdta_ps4` parses to `HasFreestyleVocals=1` and the rbmid carries 24 freestyle regions, yet RB4DX draws no lines. Both gates the manual documents are satisfied, so the failure is likely RB4DX-side (how it reads/commits `HasFreestyleVocals`, or a re-scan/re-install requirement) rather than the files. The vendored ForgeTool path (patched `SongDataConverter.cs`) is verified writing the flag.
+- **Resolved earlier:** progressive lyric drift (fixed by the dynamic tempo map); count-in/crowd-boo at start (fixed v0.0064 — count-in now plays correctly); "completes instantly at 0%" (fixed by small Ogg pages + real `(song_length)` + placeholder tracks).
