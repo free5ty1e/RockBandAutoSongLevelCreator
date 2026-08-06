@@ -9,6 +9,58 @@ def load_json(filepath):
     with open(filepath, 'r') as f:
         return json.load(f)
 
+# WhisperX word boundaries are systematically LATE relative to the true sung
+# onset (median ~80ms, tail up to ~400ms). The vocal stem's Basic-Pitch note
+# onsets mark where the sung pitch actually begins, so we snap each word's
+# start to the nearest such onset — but constrained so a word can never snap
+# back into the previous word's sung region (Basic-Pitch often merges a fast
+# following word, e.g. "Tonight I", into a single sustained note).
+ONSET_SEARCH_BEFORE = 0.45   # max seconds before the WhisperX start to look
+ONSET_SEARCH_AFTER = 0.05    # max seconds after it (WhisperX is rarely early)
+ONSET_MAX_SHIFT = 0.30       # never snap more than this far
+MIN_WORD_GAP = 0.02          # keep words from collapsing onto each other
+VOCAL_MIDI_MIN, VOCAL_MIDI_MAX = 40, 84  # C2..C6 sane vocal range
+PYIN_CORRECT_ST = 4.0  # override Basic-Pitch only when they disagree this much
+
+
+def _refine_word_timing(segment, note_events, prev_sung_end):
+    """Returns ``(start, end)`` for one word, snapped to the real sung onset.
+
+    ``prev_sung_end`` is the charted end of the previous word; candidate onsets
+    before it are rejected so the word cannot snap into a neighbour's note.
+    """
+    start_time = segment.get("start", segment.get("time", 0.0))
+    end_time = segment.get("end", start_time + 0.3)
+
+    best_start = start_time
+    best_diff = ONSET_MAX_SHIFT
+    for note in note_events:
+        note_start, note_end, _ = note[0], note[1], note[2]
+        if note_start < start_time - ONSET_SEARCH_BEFORE:
+            continue
+        if note_start > start_time + ONSET_SEARCH_AFTER:
+            continue
+        if note_start < prev_sung_end - MIN_WORD_GAP:
+            continue
+        diff = abs(note_start - start_time)
+        if diff < best_diff:
+            best_diff = diff
+            best_start = note_start
+            if note_end > note_start:
+                end_time = max(end_time, note_end)
+
+    # Extend the end across notes that BEGIN inside this word's own span
+    # (multi-syllable words produce several notes). Notes that start after the
+    # word's WhisperX end belong to the next word and must not widen the pitch
+    # window into the neighbour's sung region.
+    for note in note_events:
+        note_start, note_end, _ = note[0], note[1], note[2]
+        if note_start < end_time and note_end > best_start:
+            end_time = max(end_time, note_end)
+
+    return best_start, end_time
+
+
 def sync_lyrics_to_beats(beats_data, lyrics_data):
     """
     Maps word segments to the nearest beat time.
@@ -19,74 +71,60 @@ def sync_lyrics_to_beats(beats_data, lyrics_data):
     
     synced_track = []
     
-    def pitch_at(time_sec, duration=None):
-        """Returns the most frequent note pitch found within the word's duration,
-        weighted by how centered each note is in the word's time window."""
-        if duration is None:
-            duration = 0.3
-        pitches_in_range = []
-        weights = []
-        center = time_sec + duration / 2.0
+    def pitch_at(time_sec, duration):
+        """Returns the pitch of the note that most dominates the word's window.
+
+        Demucs vocal stems carry reverb/bleed, so Basic-Pitch often emits
+        several simultaneous notes (one true vocal, the rest harmonics/echo).
+        Weighting by overlap duration picks the sustained sung note instead of
+        a spurious neighbour that merely sits near the window centre.
+        """
+        window_start = time_sec
+        window_end = time_sec + max(0.05, duration)
+        best_pitch = None
+        best_overlap = 0.0
         for note in note_events:
             note_start, note_end, note_pitch = note[0], note[1], note[2]
-            # Check if the note overlaps the word segment
-            if note_start < (time_sec + duration) and note_end > time_sec:
-                # Weight by how centered the note is in the word's time window
-                note_center = (note_start + note_end) / 2.0
-                dist = abs(note_center - center)
-                weight = max(0.1, 1.0 - dist / duration)
-                pitches_in_range.append(note_pitch)
-                weights.append(weight)
-        
-        if not pitches_in_range:
-            return None
-        
-        # Weighted median: sort pitches by their weight and return the most
-        # central pitch, biasing toward notes that overlap the word center.
-        pairs = sorted(zip(pitches_in_range, weights), key=lambda x: x[0])
-        cumulative = 0
-        total = sum(weights)
-        for pitch, w in pairs:
-            cumulative += w
-            if cumulative >= total / 2.0:
-                return int(pitch)
-        return int(pairs[-1][0])
+            overlap = min(note_end, window_end) - max(note_start, window_start)
+            if overlap <= 0.02:
+                continue
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_pitch = note_pitch
+        return best_pitch
     
-    for i, segment in enumerate(word_segments):
+    # Process words in chronological order; the previous word's sung end keeps
+    # each word's onset snap inside its own sung region.
+    prev_sung_end = float("-inf")
+    for segment in sorted(word_segments, key=lambda s: s.get("start", s.get("time", 0.0))):
         word = segment["word"]
-        start_time = segment.get("start", segment.get("time", 0.0))
-        end_time = segment.get("end", start_time + 0.3)
+        start_time, end_time = _refine_word_timing(segment, note_events, prev_sung_end)
         word_duration = max(0.05, end_time - start_time)
-        
-        # Check for precise note onset correlation if available in note_events.
-        # Search bidirectionally — WhisperX can be either early or late relative
-        # to the actual audio onset.  Prefer onsets closer to the WhisperX time,
-        # but also weight toward notes whose pitch matches a neighboring note
-        # (reduces false snaps to a stray short note).
-        best_note_start = start_time
-        best_diff = 0.10  # Tightened from 150ms to 100ms
-        for note in note_events:
-            note_start, note_end, note_pitch = note[0], note[1], note[2]
-            diff = abs(note_start - start_time)
-            if diff < best_diff:
-                best_diff = diff
-                best_note_start = note_start
-                # Extend end time to the note's end if it's longer
-                if note_end > note_start:
-                    end_time = max(end_time, note_end)
+        prev_sung_end = max(prev_sung_end, end_time)
 
         # Find the closest beat to the refined start time
-        closest_beat = min(beat_times, key=lambda b: abs(b - best_note_start))
+        closest_beat = min(beat_times, key=lambda b: abs(b - start_time))
         beat_index = beat_times.index(closest_beat)
         
-        pitch = pitch_at(best_note_start, duration=word_duration)
+        pitch = pitch_at(start_time, duration=word_duration)
         if pitch is None:
             pitch = 60
+        pitch = int(max(VOCAL_MIDI_MIN, min(VOCAL_MIDI_MAX, pitch)))
+        
+        # Octave guard: when librosa pyin (cached per word) and Basic-Pitch
+        # strongly disagree, a high-confidence median fundamental is the more
+        # reliable vocal reading (Basic-Pitch is prone to octave/hallucinated
+        # notes on stems). Only override when pyin is genuinely confident.
+        pyin_pitch = segment.get("pyin_pitch")
+        pyin_conf = segment.get("pyin_confidence", 0.0)
+        if pyin_pitch is not None and pyin_conf >= 0.8:
+            if abs(pyin_pitch - pitch) > PYIN_CORRECT_ST:
+                pitch = int(max(VOCAL_MIDI_MIN, min(VOCAL_MIDI_MAX, round(pyin_pitch))))
         
         synced_track.append({
             "word": word,
-            "time": best_note_start,
-            "start": best_note_start,
+            "time": start_time,
+            "start": start_time,
             "end": end_time,
             "pitch": int(pitch),
             "beat_time": closest_beat,

@@ -17,7 +17,9 @@ NOTE: Under development.  No release is available to share just yet.
 * **Smart Lyrics & Vocal Alignment:** 
   * Parses **Enhanced LRC (.lrc)** files for word/syllable-level timing.
   * Falls back to **WhisperX** for automated speech-to-text alignment if no LRC file is supplied.
+  * **Onset-snapped timing:** WhisperX word boundaries are systematically late (median ~80ms, tail ~400ms), so each word's start is snapped to the nearest vocal-stem note onset (never back into the previous word or more than 0.30s away), and multi-syllable word ends extend across all notes inside the word's own span.
 * **Automatic Transcription:** Converts pitch and transient audio into quantized 5-lane instrument tracks (`PART GUITAR`, `PART BASS`, `PART DRUMS`) using Spotify's **Basic-Pitch** and signal processing.
+* **Robust Vocal Pitch:** The sung pitch per word is taken from the note with the largest overlap over the word's window (not a weighted median, which let brief harmonics/echo bleed drag the reading off), with a high-confidence **librosa pyin** guard that corrects octave-flipped words (conf ≥ 0.8, disagreement > 4 semitones).
 * **Automatic Difficulty Ratings:** Computes per-instrument Rock Band difficulty (`rank`) values from chart note density (per-instrument level bands 1-6, `band` = hardest charted instrument) instead of a hardcoded value that rendered every song as "1 of 6".
 * **Mandatory Count-In:** Automatically prepends a silent count-in (3 measures at the song's opening tempo) to the multi-channel MOGG and shifts the chart past it, mirroring stock RB3 DLC's ~5s lead-in so vocals/lyrics sync to the audio and the first vocal phrase survives ForgeTool's 640-tick offset (which previously underflowed and broke the vocal guide).
 * **Direct CON Packaging:** Assembles multi-channel audio (`.mogg`), `notes.mid`, `songs.dta`, and album artwork into an Xbox 360 STFS CON container directly—no legacy tools required.
@@ -83,7 +85,24 @@ pip3 install -r requirements.txt
 pip3 install -e .
 ```
 
-*Note on `--build-pkg`:* The `--build-pkg` flag requires the `ForgeTool` C#/.NET binary toolchain vendored in `tools/forgetool`. If you are running outside of the devcontainer or CI environment, ensure `.NET SDK 8` and `mono-devel` are installed so `tools/build_forgetool.sh` can build the helper binaries if needed. Standard CON file generation does not require `.NET` or `mono`. ForgeTool is vendored as **source** (`tools/libforge`) and rebuilt on every fresh devcontainer (`.devcontainer/post-install.sh`) and any fresh `git clone` (`tools/build_forgetool.sh`) — the pip wheel does not ship ForgeTool binaries — so the AutoRB patches to it (e.g. `HasFreestyleVocals` for `--generate-freestyle-vocals`) propagate automatically to every fresh build. Re-run `tools/build_forgetool.sh` once to pick up patches in an existing clone.
+*Note on `--build-pkg`:* The `--build-pkg` flag requires the `ForgeTool` C#/.NET binary toolchain vendored in `tools/forgetool`. If you are running outside of the devcontainer or CI environment, ensure `.NET SDK 8` and `mono-devel` are installed so `tools/build_forgetool.sh` can build the helper binaries if needed. Standard CON file generation does not require `.NET` or `mono`.
+
+### Feature Support Matrix (where each feature works)
+
+ForgeTool is vendored as **source only** — the compiled `.exe`/`.dll` binaries are gitignored and never shipped in the wheel. AutoRB patches to the ForgeTool source (e.g. `HasFreestyleVocals` for `--generate-freestyle-vocals`) therefore only reach users who build the tool from the vendored source. Everything that does not require ForgeTool works everywhere.
+
+| Feature | pip wheel | git checkout (after `tools/build_forgetool.sh`) | devcontainer (auto-built) |
+| :--- | :---: | :---: | :---: |
+| CON generation (`.con`), stems, tempo, vocals, difficulty, count-in, MOGG, `songs.dta` | ✅ | ✅ | ✅ |
+| `--build-pkg` (PS4 PKG) | ❌* | ✅ | ✅ |
+| `--generate-freestyle-vocals` — PS4 guide lines | ❌* | ✅ | ✅ |
+
+\* On a bare wheel install, `--build-pkg` fails fast with a clear message pointing you to `git clone` + `tools/build_forgetool.sh` (the wheel contains only the `autorb.*` Python packages; `_find_forgetool()` searches for `tools/forgetool` under the CWD, its parent, `sys.prefix`, and `sys.base_prefix`, so running the CLI from a clone's root also works against a wheel-installed `autorb`). `--generate-freestyle-vocals` still writes `(freestyle_vocals 1)` into the CON's `songs.dta` on a wheel, but that line has **no effect on PS4 without the patched ForgeTool** carrying it into the `songdta_ps4` `HasFreestyleVocals` flag — so on a wheel it is effectively a no-op for the intended feature.
+
+**Propagation mechanics:**
+- **Devcontainer:** every fresh container runs `.devcontainer/post-install.sh` (`postCreateCommand`), which installs .NET SDK 8 to `/tmp/dotnet` and runs `tools/build_forgetool.sh` — the patched tool is compiled automatically, feature works out of the box. The container image already ships `mono-devel` for running the built tool.
+- **Git clone:** `git clone` gives you the patched source; run `tools/build_forgetool.sh` once (needs .NET SDK 8 + `mono-devel`) and run the CLI from the repository root. Re-run the script once on an existing clone to pick up newly committed patches.
+- **Release wheels:** ForgeTool is never shipped (neither binaries nor the source tree), by design — the wheel is pure Python. All non-ForgeTool features are fully available.
 
 ### Troubleshooting `python3 -m venv venv` failures (macOS/Linux)
 
