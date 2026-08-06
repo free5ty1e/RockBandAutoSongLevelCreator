@@ -33,7 +33,7 @@ namespace LibForge.SongData
         Flags = 0,
         GameOrigin = songDta.Array("game_origin")?.Any(1) ?? "ugc_plus",
         Genre = songDta.Array("genre").Symbol(1).ToString(),
-        HasFreestyleVocals = false,
+        HasFreestyleVocals = songDta.Array("freestyle_vocals")?.Int(1) == 1,
         Medium = "",
         Name = songDta.Array("name").String(1),
         OriginalYear = songDta.Array("year_released").Int(1),

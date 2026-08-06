@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path, song_length: int | None = None,
                        ranks: dict | None = None, vocal_tonic_note: int = 4,
-                       song_tonality: int = 0) -> Path:
+                       song_tonality: int = 0, freestyle_vocals: bool = False) -> Path:
     """
     Generates the Rock Band songs.dta metadata configuration file in standard concise single-line property format.
     """
@@ -101,8 +101,10 @@ def generate_songs_dta(song_id: str, metadata: dict, output_dir: Path, song_leng
         "   (album_track_number 1)",
         f"   (vocal_tonic_note {vocal_tonic_note})",
         f"   (song_tonality {song_tonality})",
-        ")"
+        ")",
     ]
+    if freestyle_vocals:
+        dta_lines.insert(-1, "   (freestyle_vocals 1)")
 
     dta_content = "\r\n".join(dta_lines) + "\r\n"
 

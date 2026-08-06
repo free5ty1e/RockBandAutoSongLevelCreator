@@ -21,6 +21,7 @@ NOTE: Under development.  No release is available to share just yet.
 * **Automatic Difficulty Ratings:** Computes per-instrument Rock Band difficulty (`rank`) values from chart note density (per-instrument level bands 1-6, `band` = hardest charted instrument) instead of a hardcoded value that rendered every song as "1 of 6".
 * **Mandatory Count-In:** Automatically prepends a silent count-in (3 measures at the song's opening tempo) to the multi-channel MOGG and shifts the chart past it, mirroring stock RB3 DLC's ~5s lead-in so vocals/lyrics sync to the audio and the first vocal phrase survives ForgeTool's 640-tick offset (which previously underflowed and broke the vocal guide).
 * **Direct CON Packaging:** Assembles multi-channel audio (`.mogg`), `notes.mid`, `songs.dta`, and album artwork into an Xbox 360 STFS CON container directly—no legacy tools required.
+* **Freestyle Vocals (RB4, opt-in):** `--generate-freestyle-vocals` writes `(freestyle_vocals 1)` into `songs.dta`, which the vendored (patched) ForgeTool carries into the PS4 `songdta_ps4` `HasFreestyleVocals` flag so Rock Band 4 draws the diatonic Freestyle Vocals guide lines on Hard/Expert (the game computes the guide scale from the charted vocal notes).
 
 ---
 
@@ -82,7 +83,7 @@ pip3 install -r requirements.txt
 pip3 install -e .
 ```
 
-*Note on `--build-pkg`:* The `--build-pkg` flag requires the `ForgeTool` C#/.NET binary toolchain vendored in `tools/forgetool`. If you are running outside of the devcontainer or CI environment, ensure `.NET SDK 8` and `mono-devel` are installed so `tools/build_forgetool.sh` can build the helper binaries if needed. Standard CON file generation does not require `.NET` or `mono`.
+*Note on `--build-pkg`:* The `--build-pkg` flag requires the `ForgeTool` C#/.NET binary toolchain vendored in `tools/forgetool`. If you are running outside of the devcontainer or CI environment, ensure `.NET SDK 8` and `mono-devel` are installed so `tools/build_forgetool.sh` can build the helper binaries if needed. Standard CON file generation does not require `.NET` or `mono`. ForgeTool is vendored as **source** (`tools/libforge`) and rebuilt on every fresh devcontainer (`.devcontainer/post-install.sh`) and any fresh `git clone` (`tools/build_forgetool.sh`) — the pip wheel does not ship ForgeTool binaries — so the AutoRB patches to it (e.g. `HasFreestyleVocals` for `--generate-freestyle-vocals`) propagate automatically to every fresh build. Re-run `tools/build_forgetool.sh` once to pick up patches in an existing clone.
 
 ### Troubleshooting `python3 -m venv venv` failures (macOS/Linux)
 
@@ -191,6 +192,7 @@ python3 -m autorb.cli \
 | `--skip-tempo-detection` | Flag | Skip beat tracking; loads `tempo_map.json` from the output directory. |
 | `--skip-vocals` | Flag | Skip WhisperX alignment and basic-pitch; loads `vocals_cache.json`. |
 | `--skip-mogg` | Flag | Skip MOGG building; reuses the existing `.mogg` file (disables the count-in so the chart stays in sync with the reused audio). |
+| `--generate-freestyle-vocals` | Flag | Enable Rock Band 4 **Freestyle Vocals** guide lines (Hard/Expert): writes `(freestyle_vocals 1)` into `songs.dta`, which the vendored (patched) ForgeTool carries into the PS4 `songdta_ps4` `HasFreestyleVocals` flag so the game advertises and draws the diatonic guide lanes. Off by default. Requires `--build-pkg` to take effect on PS4 (the flag lives in the PKG's songdta; the Xbox 360 CON's `songs.dta` is untouched by the game's freestyle check). |
 
 ---
 
@@ -271,6 +273,8 @@ audio_file: (Required) Path to the input audio file.
 --skip-vocals: Skips WhisperX alignment and basic-pitch extraction, loading vocals_cache.json from the output directory.
 
 --skip-mogg: Skips MOGG audio container building and uses the existing `.mogg` file. Disables the automatic count-in so the chart stays in sync with the reused (un-shifted) audio.
+
+--generate-freestyle-vocals: Writes `(freestyle_vocals 1)` into `songs.dta` so the vendored (patched) ForgeTool sets `HasFreestyleVocals` in the PS4 `songdta_ps4` — enabling Rock Band 4's Freestyle Vocals guide lines (Hard/Expert). Requires `--build-pkg` to affect the PS4 PKG. Off by default.
 
 ## 🧪 Development, Testing & CON Validation
 

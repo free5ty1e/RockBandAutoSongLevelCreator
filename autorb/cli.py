@@ -18,7 +18,8 @@ import torch
 @click.option('--skip-mogg', is_flag=True, help='Skip MOGG building and use existing .mogg file')
 @click.option('--album-art', type=click.Path(exists=True), default=None, help='Path to a custom album art image (PNG/JPG); defaults to the generated "Chris Prime Custom" art')
 @click.option('--build-pkg', is_flag=True, help='Build PS4 PKG installer from the generated CON')
-def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg):
+@click.option('--generate-freestyle-vocals', is_flag=True, help='Enable Rock Band 4 freestyle-vocals guide lines (Hard/Expert) by setting HasFreestyleVocals in the PS4 songdta')
+def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, generate_freestyle_vocals):
     click.echo(f"Starting AutoRB Pipeline for: {artist} - {title}")
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -154,9 +155,12 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             "album": title
         }
         vocal_tonic_note, song_tonality = detect_vocal_key(vocal_notes)
+        if generate_freestyle_vocals:
+            click.echo("Freestyle vocals enabled: setting HasFreestyleVocals so the PS4 song advertises freestyle-vocals guide lines.")
         dta_path = generate_songs_dta(song_id, metadata, out_path,
                                       vocal_tonic_note=vocal_tonic_note,
-                                      song_tonality=song_tonality)
+                                      song_tonality=song_tonality,
+                                      freestyle_vocals=generate_freestyle_vocals)
 
         # 4. Package everything into the Xbox 360 CON/STFS container
         click.echo("Packaging into CON container...")
