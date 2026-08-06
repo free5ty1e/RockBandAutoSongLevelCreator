@@ -100,7 +100,8 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
     synced_output_json = out_path / "synced_track.json"
     
     try:
-        run_step_4(str(beats_json), str(lyrics_json), str(synced_output_json))
+        run_step_4(str(beats_json), str(lyrics_json), str(synced_output_json),
+                   vocals_stem=stems["vocals"])
         click.echo(f"Successfully generated synchronized track data at: {synced_output_json}")
     except Exception as e:
         click.echo(f"Error during step 4 synchronization: {e}", err=True)

@@ -8,10 +8,16 @@ Covers the two behavioural changes introduced for the v0.0068 sync/pitch fix:
      overlap over the word window (max-overlap, not nearest), and the pyin
      octave guard only overrides when pyin is both confident (>= 0.8) and far
      from the Basic-Pitch reading (> PYIN_CORRECT_ST).
+
+Plus the v0.0070 true vocal-onset snap: when real vocal-stem onsets (librosa)
+are supplied, ``_refine_word_timing`` snaps to the EARLIEST onset in the window
+— the actual sung attack — instead of the nearest Basic-Pitch note onset, which
+itself lags the attack (first word of a song was charted ~350ms late).
 """
 
 from autorb.audio.step4_sync import (
     ONSET_MAX_SHIFT,
+    ONSET_SNAP_EARLY_MIN,
     PYIN_CORRECT_ST,
     VOCAL_MIDI_MAX,
     VOCAL_MIDI_MIN,
@@ -28,11 +34,58 @@ NOTES = [
 
 def test_snap_start_to_nearest_onset():
     """A WhisperX start just after the real onset snaps back to it (the nearest
-    onset within the search window wins)."""
+    onset within the search window wins, via the Basic-Pitch fallback)."""
     seg = {"start": 1.02, "end": 1.70, "word": "w"}
     start, end = _refine_word_timing(seg, NOTES, float("-inf"))
     assert start == 1.00, f"expected snap to onset 1.00, got {start}"
     assert end >= 1.60, "end should extend across the sustained note"
+
+
+def test_vocal_onsets_snap_to_earliest_attack():
+    """With real vocal-stem onsets, a WhisperX start that is measurably late
+    snaps to the EARLIEST attack in the window (the true sung onset), even when
+    a nearer Basic-Pitch onset exists."""
+    seg = {"start": 1.08, "end": 1.70, "word": "w"}  # WhisperX ~100ms late
+    onsets = [0.50, 1.00, 1.30]                       # true attack = 1.00
+    start, end = _refine_word_timing(seg, [[1.03, 1.60, 60]], float("-inf"), onsets)
+    assert start == 1.00, f"expected snap to true attack 1.00, got {start}"
+    assert end >= 1.60, "end should still extend across the sustained note"
+
+
+def test_vocal_onsets_first_word_very_late():
+    """The v0.0070 regression: a first word WhisperX aligned 350ms late (and
+    whose Basic-Pitch onset is also late) must snap to the true attack."""
+    seg = {"start": 1.60, "end": 1.90, "word": "w"}
+    onsets = [0.40, 0.90, 1.35]  # true attack at 1.35, BP-ish onsets later
+    start, _ = _refine_word_timing(seg, [[1.50, 1.90, 60]], float("-inf"), onsets)
+    assert start == 1.35, f"expected snap to earliest attack 1.35, got {start}"
+
+
+def test_vocal_onsets_not_snapped_when_accurate():
+    """An on-time WhisperX start (within ONSET_SNAP_EARLY_MIN of the earliest
+    attack) is left alone."""
+    seg = {"start": 1.02, "end": 1.60, "word": "w"}
+    onsets = [0.50, 1.00]
+    start, _ = _refine_word_timing(seg, NOTES, float("-inf"), onsets)
+    assert start == 1.02, f"accurate WhisperX start must not move, got {start}"
+    assert ONSET_SNAP_EARLY_MIN < 0.10
+
+
+def test_vocal_onsets_respect_prev_word():
+    """An onset inside the previous word's sung region is rejected even when it
+    is the earliest candidate in the window."""
+    seg = {"start": 1.60, "end": 1.90, "word": "w"}  # WhisperX late
+    prev_sung_end = 1.50                             # previous word sung to 1.50
+    onsets = [1.10, 1.35, 1.55]                      # 1.10/1.35 belong to prev
+    start, _ = _refine_word_timing(seg, NOTES, prev_sung_end, onsets)
+    assert start == 1.55, f"must snap only to onset after prev word, got {start}"
+
+
+def test_vocal_onsets_empty_falls_back_to_bp():
+    """An empty onset list falls back to the nearest-Basic-Pitch snap."""
+    seg = {"start": 1.02, "end": 1.70, "word": "w"}
+    start, _ = _refine_word_timing(seg, NOTES, float("-inf"), [])
+    assert start == 1.00, f"fallback snap to BP onset 1.00, got {start}"
 
 
 def test_no_snap_into_previous_word():
