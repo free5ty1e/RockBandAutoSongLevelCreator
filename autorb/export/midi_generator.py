@@ -34,6 +34,11 @@ PLACEHOLDER_DIFFICULTY_PITCHES = (60, 72, 84, 96)
 # lead-in silence into its MOGG).
 COUNT_IN_BEATS = 12  # 3 measures * 4 beats
 
+# Minimum |delta| between consecutive measure-level tempo events (in
+# microseconds-per-beat) before a new set_tempo event is emitted. ~0.5 BPM at
+# 169 BPM; keeps the tempo track sparse and smooth like stock RB3 charts.
+TEMPO_MEASURE_TOL_US = 1000
+
 
 def count_in_params(beat_times, ticks_per_beat: int = 480) -> tuple[int, int]:
     """Return ``(count_in_ticks, count_in_ms)`` for the mandatory lead-in.
@@ -140,12 +145,16 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     ``phrase_measures`` measures (Rock Band convention is 2 or 4 bars per phrase).
 
     Tempo map: when ``beat_times``/``dynamic_bpms`` (the beat-tracked grid from
-    ``tempo_map.json``) are provided, the tempo track carries a **dynamic tempo map**
-    with a ``set_tempo`` event per beat interval and every note/beat tick is derived
-    from the real beat grid (tick 480*i == ``beat_times[i]``). This mirrors stock RB3
-    charts (311 - Down changes tempo every ~2 bars) and keeps the chart perfectly
-    synced to the audio, eliminating the progressive lyric drift a single averaged
-    BPM causes. Falls back to a flat ``bpm`` when no beat grid is available.
+    ``tempo_map.json``) are provided, the tempo track carries a **sparse,
+    measure-level tempo map** (one ``set_tempo`` event per bar, tempo = that
+    bar's mean interval, skipping bars within ~0.5 BPM of the last event). The
+    raw per-beat grid would otherwise encode a dense, jittery map (391 events,
+    alternating ~167/172 BPM) that makes the game drift progressively late;
+    stock RB3 charts (311 - Down, Smells Like Nirvana) use ~70-90 smooth events
+    spaced every 1-2 bars. Notes are still derived from the exact beat grid via
+    ``time_to_tick``, and the map integrates to the true audio within ~0.3ms at
+    every measure boundary. Falls back to a flat ``bpm`` when no beat grid is
+    available.
     """
     json_path = Path(synced_json_path)
     midi_path = output_dir / f"{song_id}.mid"
@@ -174,10 +183,15 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
 
     if count_in_ticks > 0 and tempo_events:
         # The count-in clicks at the song's opening tempo (first real beat
-        # interval, tempo_events[1]); tick 0 must carry it so the game's clock
-        # runs at the right BPM through the lead-in silence. All source-grid
-        # tempo events then shift past the count-in.
-        opening_us = tempo_events[1][1] if len(tempo_events) > 1 else tempo_events[0][1]
+        # interval of the *raw* beat grid, matching count_in_params); tick 0
+        # must carry it so the game's clock runs at the right BPM through the
+        # lead-in silence. All source-grid tempo events then shift past the
+        # count-in.
+        raw_beats = [float(x) for x in (beat_times or []) if x is not None]
+        if len(raw_beats) > 1:
+            opening_us = int((raw_beats[1] - raw_beats[0]) * 1_000_000)
+        else:
+            opening_us = tempo_events[0][1]
         tempo_events = [(0, opening_us)] + [
             (t + count_in_ticks, us) for t, us in tempo_events
         ]
@@ -326,10 +340,21 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
 def _build_tempo_grid(beat_times, dynamic_bpms, bpm, ticks_per_beat=480):
     """Returns ``(time_to_tick, tempo_events)``.
 
-    ``time_to_tick(seconds)`` maps an audio timestamp to a MIDI tick via linear
-    interpolation on the beat grid (tick 480*i == beat_times[i]). ``tempo_events``
-    is a list of ``(tick, tempo_us_per_beat)`` with one entry per beat interval,
-    reproducing that exact grid through the MIDI tempo track.
+    ``time_to_tick(seconds)`` maps an audio timestamp to a MIDI tick and is the
+    exact *inverse* of the ``tempo_events`` integration, so chart and tempo map
+    are self-consistent (no drift by construction). ``tempo_events`` is a sparse
+    list of ``(tick, tempo_us_per_beat)`` emitted once per **measure**.
+
+    The beat tracker's raw per-beat intervals oscillate ~±3 BPM from beat to
+    beat (166.7/172.3 alternating); encoding one set_tempo event per beat
+    interval yields a dense, jittery map (391 events, 67-185 BPM) that the game
+    mishandles — notes drift progressively late. Stock charts instead carry a
+    smooth, measure-level tempo map (311 - Down: 69 events over ~176 beats;
+    Smells Like Nirvana: 86 events over ~436 beats, spaced 1920-9600 ticks).
+    So we emit one event per measure whose tempo is that measure's mean
+    interval, skipping measures within ~0.5 BPM of the last emitted event. A
+    virtual lead-in interval (audio t=0 to the first tracked beat) is kept raw
+    so the song's first beat stays anchored.
 
     Without a usable beat grid, falls back to a flat ``bpm`` map.
     """
@@ -363,35 +388,55 @@ def _build_tempo_grid(beat_times, dynamic_bpms, bpm, ticks_per_beat=480):
         else:
             intervals_us.append(int(60_000_000 / (bpm if bpm and bpm > 0 else 120.0)))
 
-    first_us = intervals_us[0]
-    last_us = intervals_us[-1]
-    sec_per_beat_first = first_us / 1_000_000.0
-    sec_per_beat_last = last_us / 1_000_000.0
+    # One set_tempo event per *measure* (4 beats), tempo = the measure's mean
+    # interval. Consecutive measures within ~0.5 BPM (TEMPO_MEASURE_TOL_US) of the
+    # last emitted event are skipped, so the track stays sparse and smooth like
+    # stock charts (311 - Down: 69 events over ~176 beats; Smells Like Nirvana:
+    # 86 events over ~436 beats, spaced 1920-9600 ticks) instead of the dense
+    # 1-per-beat jittery map (391 events, 67-185 BPM) that made the game drift
+    # progressively late. Tick 0 carries the raw virtual lead-in interval; the
+    # count-in shift in generate_vocal_midi replaces it with the song's opening
+    # tempo.
+    tempo_events = [(0, intervals_us[0])]
+    last_us = intervals_us[0]
+    j = 0
+    while True:
+        a = 4 * j + 1  # beats[] index of this measure's first real beat
+        b = min(a + 4, n - 1)
+        if a >= n - 1:
+            break
+        span = b - a
+        us_j = int((beats[b] - beats[a]) / span * 1_000_000)
+        tick = a * ticks_per_beat
+        if j == 0 or abs(us_j - last_us) > TEMPO_MEASURE_TOL_US:
+            tempo_events.append((tick, us_j))
+            last_us = us_j
+        if b == n - 1:
+            break
+        j += 1
+    if tempo_events[-1][0] != (n - 1) * ticks_per_beat:
+        tempo_events.append(((n - 1) * ticks_per_beat, tempo_events[-1][1]))
+
+    # grid_to_tick is the *inverse* of the tempo track the file will carry, so
+    # the chart and the tempo map are self-consistent: whatever tick a note is
+    # placed at, the game's tempo-map integration lands on exactly the audio time
+    # it was charted for (no drift by construction).
+    secs = [0.0]
+    for i in range(len(tempo_events) - 1):
+        t0, us = tempo_events[i]
+        t1 = tempo_events[i + 1][0]
+        secs.append(secs[-1] + (t1 - t0) / ticks_per_beat * us / 1e6)
 
     def grid_to_tick(t):
-        if t <= beats[0]:
-            return max(0, int(t * ticks_per_beat / sec_per_beat_first))
-        if t >= beats[-1]:
-            tail = t - beats[-1]
-            return (n - 1) * ticks_per_beat + int(tail * ticks_per_beat / sec_per_beat_last)
-        # Binary search for the interval containing t.
-        lo, hi = 0, n - 2
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            if beats[mid] <= t <= beats[mid + 1]:
-                frac = (t - beats[mid]) / (beats[mid + 1] - beats[mid])
-                return mid * ticks_per_beat + int(frac * ticks_per_beat)
-            elif t < beats[mid]:
-                hi = mid - 1
-            else:
-                lo = mid + 1
-        return max(0, int(t * ticks_per_beat / sec_per_beat_first))
-
-    # One set_tempo event per beat interval, starting at tick 0.
-    tempo_events = []
-    for i, us in enumerate(intervals_us):
-        tempo_events.append((i * ticks_per_beat, us))
-    tempo_events.append(((n - 1) * ticks_per_beat, last_us))
+        if t <= 0:
+            return 0
+        for i in range(len(tempo_events) - 1):
+            if t <= secs[i + 1]:
+                t0, us = tempo_events[i]
+                return t0 + int((t - secs[i]) / (us / 1e6) * ticks_per_beat)
+        # Past the last tempo event: extrapolate with the last tempo.
+        t_last, us_last = tempo_events[-1]
+        return t_last + int((t - secs[-1]) / (us_last / 1e6) * ticks_per_beat)
 
     return grid_to_tick, tempo_events
 

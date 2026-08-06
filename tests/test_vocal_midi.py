@@ -89,9 +89,10 @@ def _tempo_map_from_midi(mid_path: Path) -> list[tuple[int, int]]:
 
 
 def test_dynamic_tempo_map_tracks_beat_grid(tmp_path: Path):
-    """When beat_times/dynamic_bpms are supplied, the tempo track must carry
-    multiple set_tempo events whose ticks reproduce the beat grid, and word
-    ticks must round-trip to their original audio times within a few ms."""
+    """When beat_times/dynamic_bpms are supplied, the tempo track must carry a
+    *sparse, measure-level* set_tempo map (one event per bar, tempo = the bar's
+    mean interval) rather than a dense jittery 1-event-per-beat map, matching
+    stock RB3 charts. Events must sit on beat boundaries starting at tick 0."""
     sj = tmp_path / "synced.json"
     sj.write_text(json.dumps({"synced_lyrics": _items(20, gap=1.0)}))  # 20 s of words
 
@@ -110,7 +111,11 @@ def test_dynamic_tempo_map_tracks_beat_grid(tmp_path: Path):
         beat_times=beat_times, dynamic_bpms=bpms,
     )
     tempos = _tempo_map_from_midi(mid_path)
-    assert len(tempos) > 10, f"expected a dynamic tempo map, got {len(tempos)} events"
+    assert len(tempos) > 1, f"expected a dynamic tempo map, got {len(tempos)} events"
+    # The map must be sparse: one event per measure (4 beats), NOT one per beat.
+    assert len(tempos) < len(beat_times), (
+        f"tempo map not sparse: {len(tempos)} events for {len(beat_times)} beats"
+    )
     # Every tempo event sits on a beat boundary (multiple of 480 ticks), and the
     # map starts at tick 0. Consecutive ticks may be >480 apart because identical
     # neighboring tempos are collapsed.
@@ -122,7 +127,9 @@ def test_dynamic_tempo_map_tracks_beat_grid(tmp_path: Path):
 
 def test_dynamic_tempo_roundtrips_word_times(tmp_path: Path):
     """A word placed at tick time_to_tick(t) must reconstruct to ~t seconds via
-    the tempo map, proving the chart is synced to the beat grid (no drift)."""
+    the tempo track written to the file: grid_to_tick is the inverse of the
+    tempo-map integration, so chart and tempo map are self-consistent (no drift
+    by construction)."""
     sj = tmp_path / "synced.json"
     items = [{"start": float(i), "end": float(i) + 0.4, "word": f"w{i}", "pitch": 60}
              for i in range(1, 50, 3)]
