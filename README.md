@@ -6,7 +6,10 @@
 
 By leveraging modern AI models for stem separation, pitch detection, and vocal alignment, AutoRB automates the complex manual workflow traditionally required to create custom Rock Band tracks.
 
-NOTE: The v0.0.75 release is a **vocal-only MVP** — it produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart (see [Known Limitations](#-known-limitations)). Instrument charts and the remaining roadmap items are still under active development.
+NOTE: The v0.0.75 release is a **vocal-only MVP** — it produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart (see [Known Limitations](#-known-limitations)). Instrument charts and the remaining roadmap items are still under active development - there are a lot of features missing but the concept is now demonstrated and definitely sound.
+
+Quick demo video of an MP3 + LRC file conversion to Rock Band CON + PS4 PKG on Rock Band 4 Deluxe PS4 converted with the v0.0.75 release
+https://youtu.be/lcFGsQfb9tg
 
 ---
 
