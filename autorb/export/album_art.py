@@ -21,6 +21,9 @@ _OS_FONT_CANDIDATES = [
     # macOS (Homebrew / Framework font dirs)
     "/opt/homebrew/share/fonts/dejavu/DejaVuSans-Bold.ttf",
     "/usr/local/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    # macOS built-in fonts (always present)
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/System/Library/Fonts/HelveticaNeue.ttc",
     "/Library/Fonts/Arial Bold.ttf",
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
     # Linux (Debian/Ubuntu + others)
@@ -31,6 +34,8 @@ _OS_FONT_CANDIDATES = [
 _OS_FONT_REGULAR_CANDIDATES = [
     "/opt/homebrew/share/fonts/dejavu/DejaVuSans.ttf",
     "/usr/local/share/fonts/dejavu/DejaVuSans.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/System/Library/Fonts/HelveticaNeue.ttc",
     "/Library/Fonts/Arial.ttf",
     "/System/Library/Fonts/Supplemental/Arial.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
