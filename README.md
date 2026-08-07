@@ -120,9 +120,11 @@ pip3 install -e .
 ```
 
 *Note on `--build-pkg`:* The `--build-pkg` flag requires the `ForgeTool` C#/.NET binary toolchain vendored in `tools/forgetool`. If you are running outside of the devcontainer or CI environment, ensure the **.NET SDK 8** (`dotnet`) and **mono-devel** (`mono`) are installed so `tools/build_forgetool.sh` can build the helper binaries if needed. Standard CON file generation does not require `.NET` or `mono`.
-  * **macOS:** `brew install mono` and `brew install --cask dotnet-sdk@8`.
-  * **Linux (Debian/Ubuntu):** `sudo apt install mono-devel` and the [.NET 8 SDK installer](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) (`wget https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh && chmod +x /tmp/dotnet-install.sh && /tmp/dotnet-install.sh --channel 8.0 --install-dir /tmp/dotnet`).
-  * `tools/build_forgetool.sh` checks for `dotnet` and `mono` and prints these install instructions if either is missing.
+
+  These are the **tested/pinned versions** — `ForgeTool.csproj` targets `.NET Framework v4.7.1`, so mono must ship the `4.7.1-api` reference assemblies (any mono 6.x, e.g. 6.14.1, does):
+  * **macOS:** `brew install mono` (installs 6.14.1) and `brew install --cask dotnet-sdk@8` (SDK 8).
+  * **Linux (Debian/Ubuntu):** `sudo apt install mono-devel` (Debian 12 / Ubuntu 22.04+ ships mono 6.8+/6.12+) and the [.NET 8 SDK installer](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) (`wget https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh && chmod +x /tmp/dotnet-install.sh && /tmp/dotnet-install.sh --channel 8.0 --install-dir /tmp/dotnet`).
+  * `tools/build_forgetool.sh` checks for `dotnet` and `mono`, prints these install instructions if either is missing, and resolves mono's `4.7.1-api` reference-assembly path automatically (it must find `mscorlib.dll` under a `4.7.1-api` directory). Verify with `mono --version` (should be ≥ 6.0) and `dotnet --version` (should be 8.x).
 
 ### Feature Support Matrix (where each feature works)
 

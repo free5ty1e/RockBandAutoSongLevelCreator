@@ -179,13 +179,13 @@ jobs:
 
           ### .NET SDK 8 + Mono (only needed for `--build-pkg`)
 
-          `--build-pkg` builds the vendored ForgeTool from source via `tools/build_forgetool.sh`, which needs **both** the .NET SDK 8 (`dotnet`) and Mono. The script checks for them and prints these instructions if missing.
+          `--build-pkg` builds the vendored ForgeTool from source via `tools/build_forgetool.sh`, which needs **both** the .NET SDK 8 (`dotnet`) and Mono. `ForgeTool.csproj` targets `.NET Framework v4.7.1`, so mono must ship the `4.7.1-api` reference assemblies (any mono 6.x, e.g. 6.14.1, does). The script checks for them and prints these instructions if missing.
 
-          * **macOS:** `brew install mono` and `brew install --cask dotnet-sdk@8`.
+          * **macOS:** `brew install mono` (installs 6.14.1) and `brew install --cask dotnet-sdk@8` (SDK 8).
           * **Windows:** ForgeTool is built from source on macOS/Linux; Windows users run the prebuilt tool from a clone's `tools/libforge` (mono not required).
-          * **Linux (Debian/Ubuntu):** `sudo apt install mono-devel` (add the [Mono project repo](https://www.mono-project.com/download/stable/#download-lin) if the distro version is too old; other distros: `sudo dnf install mono-devel`, `sudo pacman -S mono`) and the [.NET 8 SDK installer](https://dotnet.microsoft.com/en-us/download/dotnet/8.0): `wget https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh && chmod +x /tmp/dotnet-install.sh && /tmp/dotnet-install.sh --channel 8.0 --install-dir /tmp/dotnet`.
+          * **Linux (Debian/Ubuntu):** `sudo apt install mono-devel` (Debian 12 / Ubuntu 22.04+ ships mono 6.8+/6.12+; add the [Mono project repo](https://www.mono-project.com/download/stable/#download-lin) if the distro version is too old; other distros: `sudo dnf install mono-devel`, `sudo pacman -S mono`) and the [.NET 8 SDK installer](https://dotnet.microsoft.com/en-us/download/dotnet/8.0): `wget https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh && chmod +x /tmp/dotnet-install.sh && /tmp/dotnet-install.sh --channel 8.0 --install-dir /tmp/dotnet`.
 
-          Verify with `mono --version` and `dotnet --version`.
+          Verify with `mono --version` (should be ≥ 6.0) and `dotnet --version` (should be 8.x).
 
           ## Quick Start (Recommended: git clone)
 
