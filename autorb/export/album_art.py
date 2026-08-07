@@ -73,13 +73,14 @@ def _font_regular(size: int) -> ImageFont.FreeTypeFont:
 
 def _draw_cp_logo(draw: ImageDraw.ImageDraw, size: int, margin: int) -> None:
     """Draws a 'CP' monogram in the top-left corner: a thick C forming the outer
-    circle (open on the right), with a P inscribed inside."""
+    circle (open on the right), with a cursive P inscribed inside, plus sparkles."""
     logo_d = max(14, int(size * 0.14))
-    logo_cx = margin + logo_d // 2 + 2
-    logo_cy = margin + logo_d // 2 + 2
+    # More padding from the border frame so it doesn't overlap
+    extra_pad = max(8, size // 28)
+    logo_cx = margin + extra_pad + logo_d // 2
+    logo_cy = margin + extra_pad + logo_d // 2
 
     # Thick 'C' that forms the outer circle (open on the right ~40° gap).
-    # The C stroke is the circle itself - no separate outer ring.
     stroke = max(3, logo_d // 10)
     radius = logo_d // 2 - stroke // 2
 
@@ -91,32 +92,34 @@ def _draw_cp_logo(draw: ImageDraw.ImageDraw, size: int, margin: int) -> None:
         width=stroke,
     )
 
-    # 'P' inscribed inside the C: vertical stem on the left interior,
-    # bowl on the right interior (curving into the C's gap).
-    inner_radius = int(radius * 0.45)
-    p_stroke = max(2, logo_d // 14)
+    # Cursive 'P' inscribed inside the C using the bundled font.
+    # Size the P to fit comfortably inside the C's inner radius.
+    p_font_size = max(10, int(radius * 0.75))
+    p_font = _font_bold(p_font_size)
+    # Render "P" in white, centered in the C
+    p_text = "P"
+    bbox = draw.textbbox((0, 0), p_text, font=p_font)
+    p_w = bbox[2] - bbox[0]
+    p_h = bbox[3] - bbox[1]
+    # Position P in the center of the C
+    px = logo_cx - p_w / 2 - bbox[0]
+    py = logo_cy - p_h / 2 - bbox[1]
+    draw.text((px, py), p_text, font=p_font, fill=(255, 255, 255, 255))
 
-    # P stem: vertical line on left side of interior
-    stem_x = logo_cx - int(inner_radius * 0.3)
-    stem_top = logo_cy - int(inner_radius * 0.7)
-    stem_bot = logo_cy + int(inner_radius * 0.7)
-    draw.line(
-        [stem_x, stem_top, stem_x, stem_bot],
-        fill=(255, 255, 255, 255),
-        width=p_stroke,
-    )
-
-    # P bowl: arc on right side of interior, curving into C's gap
-    bowl_r = inner_radius
-    bowl_cx = stem_x + bowl_r
-    bowl_cy = stem_top + bowl_r
-    # Arc from 270° (bottom) to 90° (top) - right-facing bowl
-    draw.arc(
-        [bowl_cx - bowl_r, bowl_cy - bowl_r, bowl_cx + bowl_r, bowl_cy + bowl_r],
-        start=270, end=90,
-        fill=(255, 255, 255, 255),
-        width=p_stroke,
-    )
+    # Sparkles around the logo: small white/orange crosses at 4 corners outside the C
+    sparkle_d = max(2, logo_d // 14)
+    sparkle_dist = radius + max(4, size // 32)
+    sparkle_color = (255, 150, 0, 255)
+    sparkle_white = (255, 255, 255, 255)
+    # Four diagonal positions
+    for dx, dy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
+        sx = logo_cx + int(dx * sparkle_dist * 0.85)
+        sy = logo_cy + int(dy * sparkle_dist * 0.85)
+        # Tiny 4-point sparkle (cross + x)
+        draw.line([sx - sparkle_d, sy, sx + sparkle_d, sy], fill=sparkle_color, width=1)
+        draw.line([sx, sy - sparkle_d, sx, sy + sparkle_d], fill=sparkle_color, width=1)
+        # Add a white center dot
+        draw.point([sx, sy], fill=sparkle_white)
 
 
 def build_default_album_art(size: int = 256) -> Image.Image:
