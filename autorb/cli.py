@@ -15,7 +15,7 @@ import torch
 @click.option('--skip-separation', is_flag=True, help='Skip Demucs separation and use existing stems')
 @click.option('--skip-tempo-detection', is_flag=True, help='Skip beat tracking and use cached tempo map')
 @click.option('--skip-vocals', is_flag=True, help='Skip vocal alignment and pitch extraction (uses cached data)')
-@click.option('--skip-mogg', is_flag=True, help='Skip MOGG building and use existing .mogg file')
+@click.option('--skip-mogg', is_flag=True, help='Skip MOGG encoding and reuse the existing .mogg in the output dir (which is expected to already contain the count-in lead-in); the chart is still shifted to match it')
 @click.option('--album-art', type=click.Path(exists=True), default=None, help='Path to a custom album art image (PNG/JPG); defaults to the generated "Chris Prime Custom" art')
 @click.option('--build-pkg', is_flag=True, help='Build PS4 PKG installer from the generated CON')
 @click.option('--generate-freestyle-vocals', is_flag=True, help='Enable Rock Band 4 freestyle-vocals guide lines (Hard/Expert) by setting HasFreestyleVocals in the PS4 songdta')
@@ -123,9 +123,12 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         from autorb.export.midi_generator import count_in_params
         # Mandatory count-in: prepend silence to the MOGG and shift the whole
         # chart past it (mirrors stock RB3 DLC, e.g. 311 - Down's ~5s lead-in).
-        # When reusing an existing MOGG via --skip-mogg, disable the count-in so
-        # the chart keeps matching the un-shifted audio it was built against.
-        count_in_ticks, count_in_ms = (0, 0) if skip_mogg else count_in_params(list(beat_times))
+        # The count-in is derived purely from the cached beat grid, so it is
+        # computed unconditionally. When --skip-mogg reuses an existing MOGG,
+        # that cached file was already built WITH this lead-in baked in, so the
+        # chart must still be shifted past it (count-in == 0 only when there is
+        # no usable beat grid).
+        count_in_ticks, count_in_ms = count_in_params(list(beat_times))
         if count_in_ticks:
             click.echo(f"Prepending {count_in_ms} ms count-in (opening-tempo, {count_in_ticks} ticks)...")
         mogg_file = build_mogg_from_stems(stems_dir, out_path, song_id, skip_mogg=skip_mogg,
