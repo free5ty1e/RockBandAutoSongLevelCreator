@@ -100,7 +100,7 @@ Open your terminal (Command Prompt/PowerShell on Windows, Terminal on macOS/Linu
 
 ```bash
 # Clone the repository
-git clone https://github.com/chrispaiano/RockBandAutoSongLevelCreator.git
+git clone https://github.com/free5ty1e/RockBandAutoSongLevelCreator.git
 cd RockBandAutoSongLevelCreator
 
 # Create and activate a virtual environment (Recommended)
@@ -119,7 +119,10 @@ pip3 install -r requirements.txt
 pip3 install -e .
 ```
 
-*Note on `--build-pkg`:* The `--build-pkg` flag requires the `ForgeTool` C#/.NET binary toolchain vendored in `tools/forgetool`. If you are running outside of the devcontainer or CI environment, ensure `.NET SDK 8` and `mono-devel` are installed so `tools/build_forgetool.sh` can build the helper binaries if needed. Standard CON file generation does not require `.NET` or `mono`.
+*Note on `--build-pkg`:* The `--build-pkg` flag requires the `ForgeTool` C#/.NET binary toolchain vendored in `tools/forgetool`. If you are running outside of the devcontainer or CI environment, ensure the **.NET SDK 8** (`dotnet`) and **mono-devel** (`mono`) are installed so `tools/build_forgetool.sh` can build the helper binaries if needed. Standard CON file generation does not require `.NET` or `mono`.
+  * **macOS:** `brew install mono` and `brew install --cask dotnet-sdk@8`.
+  * **Linux (Debian/Ubuntu):** `sudo apt install mono-devel` and the [.NET 8 SDK installer](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) (`wget https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh && chmod +x /tmp/dotnet-install.sh && /tmp/dotnet-install.sh --channel 8.0 --install-dir /tmp/dotnet`).
+  * `tools/build_forgetool.sh` checks for `dotnet` and `mono` and prints these install instructions if either is missing.
 
 ### Feature Support Matrix (where each feature works)
 

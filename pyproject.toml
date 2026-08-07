@@ -23,7 +23,12 @@ dependencies = [
     "soundfile",
     "onnxruntime",
     "mir-eval",
-    "resampy<0.4.3,>=0.2.2"
+    "resampy<0.4.3,>=0.2.2",
+    # resampy 0.4.2 imports pkg_resources, which setuptools>=82 deletes. Pin
+    # setuptools below 82 so a bare wheel install gets pkg_resources too
+    # (the wheel's own deps previously shipped no setuptools at all, so
+    # --skip-vocals crashed with ModuleNotFoundError: No module named 'pkg_resources').
+    "setuptools>=68.0.0,<82.0.0",
 ]
 
 [tool.setuptools.dynamic]

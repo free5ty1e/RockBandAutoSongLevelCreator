@@ -189,10 +189,13 @@ def _find_forgetool() -> Path:
     raise RuntimeError(
         "ForgeTool not found. `--build-pkg` requires a full git clone with the "
         "vendored toolchain built:\n"
-        "  git clone https://github.com/chrispaiano/RockBandAutoSongLevelCreator.git\n"
+        "  git clone https://github.com/free5ty1e/RockBandAutoSongLevelCreator.git\n"
         "  tools/build_forgetool.sh\n"
         "  # then run from the repository root so tools/forgetool is visible.\n"
-        "mono is also required: `sudo apt install mono-devel` (or `brew install mono` on macOS)."
+        "Building the toolchain needs the .NET SDK 8 (`dotnet`) and mono-devel, "
+        "e.g.: `sudo apt install mono-devel` (or `brew install mono` on macOS), "
+        "plus `brew install --cask dotnet-sdk@8` (macOS) / the .NET 8 SDK installer (Linux).\n"
+        "`tools/build_forgetool.sh` checks for these and prints install instructions."
     )
 
 

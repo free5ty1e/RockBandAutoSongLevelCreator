@@ -32,7 +32,7 @@ The user's live test environment and experience — the ground truth our PS4 com
 
 - **ForgeToolGUI 0.1.19** on **Windows** performs CON → PKG conversion (LibForge.DLL, MidiCS, DtxCS, GameArchives 0.12).
 - LibForge copies the embedded `.mogg` **byte-for-byte** into the PKG — RB4 does not re-encode the audio. So the audio problem is entirely in the CON's `.mogg` (or its placement), not in conversion.
-- **Our dev container cannot run ForgeTool/LibForge** (no dotnet/mono) — so CON → PKG conversion cannot be validated locally; it must be tested by the user on Windows.
+- **Our dev container CAN run ForgeTool.** The devcontainer Dockerfile installs `mono-devel` (apt) + the .NET SDK 8 to `/tmp/dotnet`, and `.devcontainer/post-install.sh` runs `tools/build_forgetool.sh`. That script now auto-detects mono's reference-assembly dir (Linux `/usr/lib/mono/4.7.1-api` vs macOS `/Library/Frameworks/Mono.framework/...`) instead of hardcoding the Linux path, so CON → PKG conversion can be validated locally on both OSes (verified: `ForgeTool.exe con2gp4` converted `output/open_road_song.con` → GP4 successfully).
 
 ## Testing Notes
 

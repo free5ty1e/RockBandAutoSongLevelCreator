@@ -153,7 +153,7 @@ jobs:
 
           ## Prerequisites
 
-          AutoRB needs **Python**, **FFmpeg**, and (only for `--build-pkg`) **Mono**. Here is how to install each on macOS, Windows, and Linux:
+          AutoRB needs **Python**, **FFmpeg**, and (only for `--build-pkg`) the **.NET SDK 8** + **Mono** toolchain. Here is how to install each on macOS, Windows, and Linux:
 
           ### Python 3.11–3.13
 
@@ -177,18 +177,20 @@ jobs:
 
           Verify with `ffmpeg -version`.
 
-          ### Mono (only needed for `--build-pkg`)
+          ### .NET SDK 8 + Mono (only needed for `--build-pkg`)
 
-          * **macOS:** `brew install mono`
-          * **Windows:** Download and run the installer from [mono-project.com](https://www.mono-project.com/download/stable/#download-win).
-          * **Linux (Debian/Ubuntu):** `sudo apt install mono-devel` (add the [Mono project repo](https://www.mono-project.com/download/stable/#download-lin) if the distro version is too old; other distros: `sudo dnf install mono-devel`, `sudo pacman -S mono`).
+          `--build-pkg` builds the vendored ForgeTool from source via `tools/build_forgetool.sh`, which needs **both** the .NET SDK 8 (`dotnet`) and Mono. The script checks for them and prints these instructions if missing.
 
-          Verify with `mono --version`.
+          * **macOS:** `brew install mono` and `brew install --cask dotnet-sdk@8`.
+          * **Windows:** ForgeTool is built from source on macOS/Linux; Windows users run the prebuilt tool from a clone's `tools/libforge` (mono not required).
+          * **Linux (Debian/Ubuntu):** `sudo apt install mono-devel` (add the [Mono project repo](https://www.mono-project.com/download/stable/#download-lin) if the distro version is too old; other distros: `sudo dnf install mono-devel`, `sudo pacman -S mono`) and the [.NET 8 SDK installer](https://dotnet.microsoft.com/en-us/download/dotnet/8.0): `wget https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh && chmod +x /tmp/dotnet-install.sh && /tmp/dotnet-install.sh --channel 8.0 --install-dir /tmp/dotnet`.
+
+          Verify with `mono --version` and `dotnet --version`.
 
           ## Quick Start (Recommended: git clone)
 
           ```bash
-          git clone https://github.com/chrispaiano/RockBandAutoSongLevelCreator.git
+          git clone https://github.com/free5ty1e/RockBandAutoSongLevelCreator.git
           cd RockBandAutoSongLevelCreator
           python3 -m venv venv && source venv/bin/activate
           pip3 install -r requirements.txt
@@ -211,7 +213,7 @@ jobs:
            python3 -m autorb.cli path/to/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics path/to/lyrics.lrc --output-dir ./output
            ```
 
-          The `--build-pkg` flag generates a PS4 PKG installer via the vendored ForgeTool (requires `mono`; run from a git clone).
+          The `--build-pkg` flag generates a PS4 PKG installer via the vendored ForgeTool (requires the .NET SDK 8 + Mono toolchain; run from a git clone).
           If you get a "ForgeTool not found" error, ensure you are running from the repository root or installed via the `.whl`.
 
           ### Troubleshooting `python3 -m venv venv` failures (macOS/Linux)
