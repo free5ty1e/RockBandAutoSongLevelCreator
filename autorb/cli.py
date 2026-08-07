@@ -15,8 +15,11 @@ import torch
 @click.option('--skip-separation', is_flag=True, help='Skip Demucs separation and use existing stems')
 @click.option('--skip-tempo-detection', is_flag=True, help='Skip beat tracking and use cached tempo map')
 @click.option('--skip-vocals', is_flag=True, help='Skip vocal alignment and pitch extraction (uses cached data)')
-@click.option('--skip-mogg', is_flag=True, help='Skip MOGG building and use existing .mogg file')
-def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, skip_tempo_detection, skip_vocals, skip_mogg):
+@click.option('--skip-mogg', is_flag=True, help='Skip MOGG encoding and reuse the existing .mogg in the output dir (which is expected to already contain the count-in lead-in); the chart is still shifted to match it')
+@click.option('--album-art', type=click.Path(exists=True), default=None, help='Path to a custom album art image (PNG/JPG); defaults to the generated "Chris Prime Custom" art')
+@click.option('--build-pkg', is_flag=True, help='Build PS4 PKG installer from the generated CON')
+@click.option('--generate-freestyle-vocals', is_flag=True, help='Enable Rock Band 4 freestyle-vocals guide lines (Hard/Expert) by setting HasFreestyleVocals in the PS4 songdta')
+def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, generate_freestyle_vocals):
     click.echo(f"Starting AutoRB Pipeline for: {artist} - {title}")
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -97,17 +100,18 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
     synced_output_json = out_path / "synced_track.json"
     
     try:
-        run_step_4(str(beats_json), str(lyrics_json), str(synced_output_json))
+        run_step_4(str(beats_json), str(lyrics_json), str(synced_output_json),
+                   vocals_stem=stems["vocals"])
         click.echo(f"Successfully generated synchronized track data at: {synced_output_json}")
     except Exception as e:
         click.echo(f"Error during step 4 synchronization: {e}", err=True)
         return
 
     click.echo("\n[5/5] Building assets and packaging Xbox 360 CON file...")
-    from autorb.export.mogg_builder import build_mogg_from_stems
     from autorb.export.midi_generator import generate_vocal_midi
     from autorb.export.dta_writer import generate_songs_dta
-    from autorb.export.con_packer import package_con  
+    from autorb.export.con_packer import package_con
+    from autorb.export.key_detect import detect_vocal_key
     
     # Generate a filesystem-safe song ID from the title
     song_id = title.lower().replace(" ", "_").replace("'", "")
@@ -115,11 +119,34 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
     try:
         # 1. Build the .mogg audio container from your separated stem WAVs
         click.echo("Building MOGG audio container from stems...")
-        mogg_file = build_mogg_from_stems(stems_dir, out_path, song_id, skip_mogg=skip_mogg)
+        from autorb.export.mogg_builder import build_mogg_from_stems, read_mogg_duration_ms
+        from autorb.export.midi_generator import count_in_params
+        # Mandatory count-in: prepend silence to the MOGG and shift the whole
+        # chart past it (mirrors stock RB3 DLC, e.g. 311 - Down's ~5s lead-in).
+        # The count-in is derived purely from the cached beat grid, so it is
+        # computed unconditionally. When --skip-mogg reuses an existing MOGG,
+        # that cached file was already built WITH this lead-in baked in, so the
+        # chart must still be shifted past it (count-in == 0 only when there is
+        # no usable beat grid).
+        count_in_ticks, count_in_ms = count_in_params(list(beat_times))
+        if count_in_ticks:
+            click.echo(f"Prepending {count_in_ms} ms count-in (opening-tempo, {count_in_ticks} ticks)...")
+        mogg_file = build_mogg_from_stems(stems_dir, out_path, song_id, skip_mogg=skip_mogg,
+                                          count_in_ms=count_in_ms)
 
         # 2. Generate the PART VOCALS .mid chart from synced_track.json
-        click.echo("Generating vocal MIDI chart...")
-        midi_file = generate_vocal_midi(synced_output_json, out_path, song_id)
+        click.echo("Generating vocal MIDI chart (dynamic tempo map from beat grid)...")
+        avg_bpm = sum(dynamic_bpms) / len(dynamic_bpms) if dynamic_bpms else 120.0
+        song_length_ms = read_mogg_duration_ms(mogg_file)
+        midi_file = generate_vocal_midi(
+            synced_output_json, out_path, song_id,
+            song_length_ms=song_length_ms,
+            bpm=avg_bpm,
+            beat_times=list(beat_times),
+            dynamic_bpms=list(dynamic_bpms),
+            count_in_ticks=count_in_ticks,
+            count_in_ms=count_in_ms,
+        )
 
         # 3. Generate songs.dta configuration metadata
         click.echo("Generating songs.dta metadata...")
@@ -131,19 +158,47 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             "song_id_num": abs(hash(song_id)) % 100000000,
             "album": title
         }
-        dta_path = generate_songs_dta(song_id, metadata, out_path)
+        vocal_tonic_note, song_tonality = detect_vocal_key(vocal_notes)
+        if generate_freestyle_vocals:
+            click.echo("Freestyle vocals enabled: setting HasFreestyleVocals so the PS4 song advertises freestyle-vocals guide lines.")
+        dta_path = generate_songs_dta(song_id, metadata, out_path,
+                                      vocal_tonic_note=vocal_tonic_note,
+                                      song_tonality=song_tonality,
+                                      freestyle_vocals=generate_freestyle_vocals)
 
         # 4. Package everything into the Xbox 360 CON/STFS container
         click.echo("Packaging into CON container...")
+        from autorb.export.texture import keep_texture_from_image, default_album_art_bytes
+        from autorb.export.album_art import build_default_album_art
+        if album_art is not None:
+            click.echo(f"Encoding custom album art from {album_art}...")
+            album_art_bytes = keep_texture_from_image(album_art)
+        else:
+            click.echo("Generating default 'Chris Prime Custom' album art...")
+            # Generate at high-res for preview, standard-res for CON
+            preview_img = build_default_album_art(1024)
+            preview_path = out_path / "album_art_preview.png"
+            preview_img.save(preview_path)
+            click.echo(f"Album art preview saved: {preview_path}")
+            album_art_bytes = default_album_art_bytes()
         con_output_path = package_con(
             output_dir=out_path,
             song_id=song_id,
             mogg_path=mogg_file,
             midi_path=midi_file,
-            dta_path=dta_path
+            dta_path=dta_path,
+            album_art_bytes=album_art_bytes
         )
         click.echo(f"CON file successfully packaged: {con_output_path}")
+
+        if build_pkg:
+            click.echo("\n[6/5] Building PS4 PKG installer...")
+            from autorb.export.con_packer import build_ps4_pkg
+            pkg_path = build_ps4_pkg(con_output_path, out_path, song_id)
+            click.echo(f"PS4 PKG installer successfully built: {pkg_path}")
+
     except Exception as e:
+
         click.echo(f"Error during asset building or CON packaging: {e}", err=True)
         return
 

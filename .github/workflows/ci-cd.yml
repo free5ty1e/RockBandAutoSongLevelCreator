@@ -3,7 +3,7 @@ name: AutoRB CI/CD
 on:
   push:
     branches: [ "main" ]
-    tags: [ "v*.*.*" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "main" ]
 
@@ -25,33 +25,263 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install pytest
-    - name: Run Tests
+        pip install -e .
+        pip install pytest pytest-cov
+    - name: Run Tests with Coverage
       run: |
-        pytest tests/
+        pytest tests/ --cov=autorb --cov-report=term-missing --cov-report=xml:coverage.xml
+    - name: Upload Coverage Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: coverage.xml
 
-  release:
+  build:
     needs: test
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
     - uses: actions/checkout@v4
+    - name: Extract version from autorb/version.py
+      id: version
+      run: |
+        VERSION=$(python -c "exec(open('autorb/version.py').read()); print(__version__)")
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-    - name: Install Dependencies
+    - name: Build Source Package and Wheel
       run: |
-        sudo apt-get install -y ffmpeg
-        pip install -r requirements.txt pyinstaller
-    - name: Build Executable
+        python -m pip install --upgrade pip build
+        python -m build --sdist --wheel
+    - name: Verify wheel contains template assets
       run: |
-        pyinstaller --onefile --name autorb autorb/cli.py
+        python -c "
+        import zipfile, sys, glob
+        whl = glob.glob('dist/*.whl')[0]
+        with zipfile.ZipFile(whl) as z:
+            names = z.namelist()
+            for required in ['template.con', 'template_milo.bin', 'template_png.bin']:
+                matches = [n for n in names if required in n]
+                if not matches:
+                    print(f'FAIL: {required} not found in wheel', file=sys.stderr)
+                    sys.exit(1)
+                print(f'OK: {matches[0]}')
+        "
+    - name: Upload dist artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: dist
+        path: dist/*
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Download dist artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist
+    - name: Tag wheel/sdist filenames as PEP 440 local versions
+      run: |
+        TAG="${{ github.ref_name }}"
+        # Sanitize the git tag into a PEP 440 local-version label (alnum, dot, underscore, hyphen).
+        # Appending to the VERSION (e.g. autorb-0.62+v0.005xTest17-py3-none-any.whl) keeps the
+        # wheel filename valid for pip; appending after the platform tag (the old behavior) made
+        # pip reject the file with "Invalid build number".
+        LOCAL="${TAG//[^a-zA-Z0-9._-]/-}"
+        for f in dist/*; do
+          if [[ "$f" == *.whl ]]; then
+            newname="${f%-py3-none-any.whl}+${LOCAL}-py3-none-any.whl"
+          elif [[ "$f" == *.tar.gz ]]; then
+            newname="${f%.tar.gz}+${LOCAL}.tar.gz"
+          else
+            newname="$f"
+          fi
+          mv "$f" "$newname"
+        done
+        ls -la dist/
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
-        files: dist/autorb
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        tag_name: ${{ github.ref_name }}
+        name: "AutoRB ${{ needs.build.outputs.version }} (${{ github.ref_name }})"
+        files: dist/*
+        body: |
+          # AutoRB ${{ needs.build.outputs.version }} (${{ github.ref_name }})
 
-        
+          Automated Rock Band 3 CON & PS4 PKG Generator using Machine Learning & Signal Processing.
+
+          This is the **vocal-only MVP** (v0.0.75): it produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart. The vocal pitch fix has been confirmed correct on a real PS4.
+
+          ## Features
+
+          * **Universal audio input** — MP3/WAV/FLAC/M4A via FFmpeg
+          * **AI stem separation** — Meta's Demucs isolates drums, bass, vocals, backing
+          * **Smart lyrics & vocal alignment** — Enhanced LRC (`.lrc`) or WhisperX fallback; each word snapped to the true sung attack on the vocal stem (onset-snapped timing), with overlap-free note ends so notes never drift late
+          * **Robust vocal pitch** — per-word librosa **pyin** as the primary source, Basic-Pitch octave-snapped to a melodic contour as fallback: 0/284 notes off-key on the reference song, repeated phrases sing the same notes
+          * **Stock-like measure-level tempo map** — sparse, smooth `set_tempo` map self-consistent with the chart (no progressive in-game drift)
+          * **Mandatory count-in** — silent 3-measure lead-in prepended to the MOGG, chart shifted to match (mirrors stock RB3 DLC)
+          * **Automatic difficulty ratings** — per-instrument `rank` from chart note density instead of a hardcoded value
+          * **Direct CON packaging** — multi-channel `.mogg`, `notes.mid`, `songs.dta`, and album art assembled into an Xbox 360 STFS CON directly
+          * **PS4 PKG (`--build-pkg`)** and **Freestyle Vocals (`--generate-freestyle-vocals`)** via the vendored (patched) ForgeTool
+          * **Default album art is legible everywhere** — DejaVu Sans (permissive license) is now bundled in the wheel; a circular "CP" monogram logo added to the bottom-right corner
+
+          ## Known Limitations
+
+          * **Solo vocals only** — `PART DRUMS` / `PART GUITAR` / `PART BASS` are placeholder tracks (one note per difficulty) so the game loads cleanly; they are **not** playable instrument charts.
+          * **Instrument transcription is not functional yet** — Basic-Pitch is used only for vocal pitch.
+          * **Per-word sync has outliers** — individual words can be a bit early/late, and lyrics must come from a good `.lrc` file (words missing from the LRC aren't charted).
+          * **Vocal phrases are wrong** — phrase boundaries fall back to fixed 2-bar measure windows, not the song's real phrasing, so in-game phrase regions and vocal scoring feel all wrong. Each `.lrc` line timestamp marks the **start of one vocal phrase** and should be the source of truth (falling back to the 2-bar windows only when the `.lrc` is missing or doesn't make phrasing obvious). Highest-priority roadmap item.
+          * **PS4 song-list preview is silent** on Rock Band 4 Deluxe despite all preview metadata and the 10-channel layout being verified — suspected game-side (RB4DX caching/behavior).
+          * **Freestyle Vocals guide lines don't render on PS4** yet, despite `HasFreestyleVocals=1` in the PKG — likely RB4DX-side.
+          * **`--build-pkg` / freestyle flag require a `git clone`** (or the devcontainer), not a bare wheel — ForgeTool is vendored source-only, rebuilt by `tools/build_forgetool.sh` (needs .NET SDK 8 + `mono-devel`).
+          * **Python 3.14 is NOT supported** (`Requires-Python >=3.11,<3.14`); macOS's default `python3` is 3.9.6 and too old — use `python3.12`.
+
+          ## Next Steps / Roadmap
+
+          * **LRC-line phrase source of truth (highest priority)** — each `.lrc` line timestamp defines the start of one vocal phrase (2-bar fallback stays when the `.lrc` is missing/ambiguous). Currently phrase boundaries are wrong, which makes vocal scoring feel off.
+          * **Lyric/audio sync improvements** — tighten the remaining early/late per-word outliers.
+          * **One pitch per lyrical syllable** — every syllable gets its own note/pitch instead of one static pitch per word.
+          * **Vocal pitch tracking** — when the singer changes pitch mid-lyric, the on-screen note moves up/down with the voice (sliding transitions).
+          * **Overdrive section marking** — overdrive activation phrases and vocal fill/talkie sections.
+          * **Solo / Harmony 1 / Harmony 2 detection, separation & instrument tracks** — split the vocal stem into melody + harmony, detect solos, and build real (non-placeholder) drum/guitar/bass charts.
+          * **Real instrument charts** — drums/guitar/bass transcription into playable 5-lane tracks.
+          * **PS4 freestyle-lines + silent-preview fixes**, **vocal gender detection**, **tambourine sections**, **multi-harmony vocals**, and **Clone Hero export (`--build-clone-hero`)**.
+
+          See `ROADMAP.md` for the full list.
+
+          ## Prerequisites
+
+          AutoRB needs **Python**, **FFmpeg**, and (only for `--build-pkg`) the **.NET SDK 8** + **Mono** toolchain. Here is how to install each on macOS, Windows, and Linux:
+
+          ### Python 3.11–3.13
+
+          > **Python 3.14 is NOT supported** — WhisperX (a hard dependency) caps at `<3.14`, and the wheel's `Requires-Python` enforces `>=3.11,<3.14`, so pip refuses 3.14 early with a clear message. **macOS's default `python3` is 3.9.6 (too old)** — install a current Python first.
+
+          * **macOS:** `brew install python@3.12` (or download from [python.org](https://www.python.org/downloads/)), then use `python3.12` instead of `python3`.
+          * **Windows:** Download the installer from [python.org](https://www.python.org/downloads/) (3.11/3.12/3.13) and check **"Add Python to PATH"**, or `winget install Python.Python.3.12`.
+          * **Linux:** Debian/Ubuntu: `sudo apt install python3 python3-venv python3-pip` (verify the version is 3.11+; if not, use the [dead-snakes PPA](https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa): `sudo add-apt-repository ppa:deadsnakes/ppa && sudo apt install python3.12`). Arch: `sudo pacman -S python`.
+
+          Verify with `python3 --version`.
+
+          ### FFmpeg
+
+          AutoRB needs the `libvorbis` encoder to build the multi-channel MOGG. **Homebrew's regular `ffmpeg` formula dropped libvorbis in ffmpeg 8**, so a plain `brew install ffmpeg` on macOS fails with `Unknown encoder 'libvorbis'`. Use a libvorbis-capable build:
+
+          * **macOS:** `brew install ffmpeg-full` (includes libvorbis; it is **keg-only**, so put its `bin` on PATH first — on Apple Silicon: `export PATH="/opt/homebrew/opt/ffmpeg-full/bin:$PATH"`), or download a macOS static build from [ffmpeg.org](https://ffmpeg.org/download.html) (includes libvorbis).
+          * **Windows:** Download from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) (the "release essentials" build) and add `bin\` to your PATH, or `winget install Gyan.FFmpeg`. These builds include libvorbis.
+          * **Linux (Debian/Ubuntu):** `sudo apt install ffmpeg libsndfile1` (distro packages build with libvorbis; other distros: `sudo dnf install ffmpeg` on Fedora, `sudo pacman -S ffmpeg` on Arch).
+
+          Verify `libvorbis` is present: `ffmpeg -encoders 2>&1 | grep vorbis` (should list `libvorbis`).
+
+          Verify with `ffmpeg -version`.
+
+          ### .NET SDK 8 + Mono + libgdiplus (only needed for `--build-pkg`)
+
+          `--build-pkg` builds the vendored ForgeTool from source via `tools/build_forgetool.sh`, which needs the **.NET SDK 8** (`dotnet`), **Mono**, and **libgdiplus** (ForgeTool uses System.Drawing to read the CON's album art, and Homebrew's mono does not bundle libgdiplus). `ForgeTool.csproj` targets `.NET Framework v4.7.1`, so mono must ship the `4.7.1-api` reference assemblies (any mono 6.x, e.g. 6.14.1, does). The script checks for all of them and prints these instructions if missing.
+
+          * **macOS:** `brew install mono` (installs 6.14.1), `brew install mono-libgdiplus`, and `brew install --cask dotnet-sdk@8` (SDK 8).
+          * **Windows:** ForgeTool is built from source on macOS/Linux; Windows users run the prebuilt tool from a clone's `tools/libforge` (mono not required).
+          * **Linux (Debian/Ubuntu):** `sudo apt install mono-devel libgdiplus` (Debian 12 / Ubuntu 22.04+ ships mono 6.8+/6.12+; add the [Mono project repo](https://www.mono-project.com/download/stable/#download-lin) if the distro version is too old; other distros: `sudo dnf install mono-devel`, `sudo pacman -S mono`) and the [.NET 8 SDK installer](https://dotnet.microsoft.com/en-us/download/dotnet/8.0): `wget https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh && chmod +x /tmp/dotnet-install.sh && /tmp/dotnet-install.sh --channel 8.0 --install-dir /tmp/dotnet`.
+
+          Verify with `mono --version` (should be ≥ 6.0), `dotnet --version` (should be 8.x), and (macOS only) `brew list mono-libgdiplus`.
+
+          ## Quick Start (Recommended: git clone)
+
+          ```bash
+          git clone https://github.com/free5ty1e/RockBandAutoSongLevelCreator.git
+          cd RockBandAutoSongLevelCreator
+          python3 -m venv venv && source venv/bin/activate
+          pip3 install -r requirements.txt
+          pip3 install -e .
+          python3 -m autorb.cli input/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics input/song.lrc --output-dir ./output --build-pkg
+          ```
+
+          ## Installing from this release
+
+          1. Download the `.whl` file below (`autorb-*.whl`).
+          2. Make sure you have Python 3.11-3.13 (see Prerequisites — macOS defaults to 3.9.6, which is too old, and 3.14 is not supported). Create a venv and install:
+           ```bash
+           python3 -m venv venv && source venv/bin/activate
+           python3 -c "import sys; assert sys.version_info >= (3, 11), 'Need Python 3.11+ — your venv used an old python3'"
+           pip3 install ./autorb-*.whl
+           ```
+           Note: this installs ML dependencies (PyTorch, WhisperX, Demucs) — first install takes a few minutes.
+          3. Run:
+           ```bash
+           python3 -m autorb.cli path/to/song.mp3 --artist "Artist" --title "Title" --year 2024 --genre "Rock" --lyrics path/to/lyrics.lrc --output-dir ./output
+           ```
+
+          The `--build-pkg` flag generates a PS4 PKG installer via the vendored ForgeTool (requires the .NET SDK 8 + Mono toolchain; run from a git clone).
+          If you get a "ForgeTool not found" error, ensure the tool is built (`tools/build_forgetool.sh`); the CLI auto-discovers it by searching the current directory, its child dirs, and its ancestors, so you can run from the clone or any folder within/near it.
+
+          ### Using the release wheel with `--build-pkg` (no editable install)
+
+          The wheel does **not** include ForgeTool (vendored source-only). To use `--build-pkg` with a wheel install:
+
+          1. `git clone` the repo (for ForgeTool source)
+          2. `cd RockBandAutoSongLevelCreator && tools/build_forgetool.sh` (build once; needs .NET SDK 8 + Mono)
+          3. From a **parent directory of the clone** (e.g., `temp/` with clone at `temp/RockBandAutoSongLevelCreator/`), run with **absolute paths**:
+
+          ```bash
+          python3 -m autorb.cli \
+            /full/path/to/song.mp3 \
+            --artist "Artist" --title "Title" --year 2024 --genre "Rock" \
+            --lyrics /full/path/to/song.lrc \
+            --output-dir /full/path/to/output \
+            --build-pkg
+          ```
+
+          **Why run from the parent?** The wheel installs `autorb` as a package. If you `cd` into the clone, Python imports the local source (shadowing the wheel), and features like the album art preview won't work. Running from outside with absolute paths uses the true wheel install. `_find_forgetool()` discovers the tool in the child dir automatically.
+
+          ### Troubleshooting `python3 -m venv venv` failures (macOS/Linux)
+
+          If creating the venv fails with:
+          `Command '[.../venv/bin/python3.12', '-m', 'ensurepip', '--upgrade', '--default-pip']' returned non-zero exit status 1`
+
+          The real failure is inside `ensurepip` — run it directly to see the actual message:
+          ```bash
+          python3.12 -m ensurepip --upgrade
+          ```
+
+          Try these fixes in order:
+
+          1. **Stale `PYTHONPATH`/`PYTHONHOME` env vars** (common on macOS) break the venv's isolated subprocess:
+             ```bash
+             unset PYTHONPATH PYTHONHOME
+             rm -rf venv
+             python3.12 -m venv venv
+             ```
+          2. **Wrong `python3.12` binary** — confirm it's the Homebrew/pyenv Python you expect (pyenv shims can point at a build without pip support):
+             ```bash
+             which python3.12
+             python3.12 -c "import sys; print(sys.executable, sys.version)"
+             ```
+          3. **Bootstrap pip manually** if `ensurepip` is genuinely broken:
+             ```bash
+             python3.12 -m venv --without-pip venv
+             source venv/bin/activate
+             curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+             python3.12 /tmp/get-pip.py
+             ```
+
+          Then install the wheel as usual: `pip3 install ./autorb-*.whl`
+
+          ## Finding Lyrics
+
+          AutoRB uses Enhanced LRC files (`.lrc`) for word-level vocal timing:
+          * **lrclib.net** — search by song/artist, download timestamped LRC files
+          * **lrcgenerator.com** — create your own synced lyrics
+
+          Example format:
+          ```lrc
+          [00:12.34]Tonight, the night
+          [00:15.80]When the world was young
+          ```

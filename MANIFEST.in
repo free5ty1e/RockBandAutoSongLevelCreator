@@ -1,0 +1,5 @@
+include README.md
+include CHANGELOG.md
+recursive-include autorb/export/data *
+recursive-include autorb/pitch *.py *.onnx
+recursive-include tools *

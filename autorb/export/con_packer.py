@@ -1,228 +1,247 @@
 #!/usr/bin/env python
-
 from pathlib import Path
-import struct
 import shutil
 import click
+import os
+import struct
+import subprocess
+import sys
 
-RB3_TITLE_ID = 0x45410914  # Rock Band 3 Title ID
-CONTENT_TYPE_DLC = 0x00010000
 BLOCK_SIZE = 0x1000
+MILO_A_MAGIC = 0xCABEDEAF
+ADDE_PADDING = b'\xad\xde\xad\xde'
 
-def create_stfs_header(display_name: str, total_payload_blocks: int, total_payload_size: int, entry_count: int, title_id: int = RB3_TITLE_ID) -> bytearray:
-    """
-    Constructs a valid STFS package header structure with correct content sizing,
-    file counts, and volume descriptor metadata for Rock Band 3 customs and ForgeTool GUI.
-    """
-    header = bytearray(0xC000)
-    header[0:4] = b"CON "
-    header[4:132] = b"\x00" * 128
-    
-    # Pack content size (Int64) at offset 0x34C
-    struct.pack_into(">q", header, 0x34C, total_payload_size)
-    
-    struct.pack_into(">I", header, 0x344, CONTENT_TYPE_DLC)
-    struct.pack_into(">I", header, 0x3EC, CONTENT_TYPE_DLC)
-    struct.pack_into(">I", header, 0x360, title_id)
-    struct.pack_into(">I", header, 0x410, title_id)
-    
-    # Volume Descriptor (STFS) starting at offset 0x379 (Strict Free60 Spec)
-    header[0x379] = 0x24  # Descriptor size
-    header[0x37A] = 0x00  # Reserved/Version
-    header[0x37B] = 0x01  # Block separation/Flags
-    
-    # File Table Block Count (2 bytes, Little Endian)
-    struct.pack_into("<H", header, 0x37C, 1)  
-    
-    # File Table Start Block Number (3 bytes, Little Endian) -> Block 0 (relative to payload start)
-    header[0x37E:0x381] = b'\x00\x00\x00'
-    
-    # Total Allocated Blocks (4 bytes, Big Endian)
-    struct.pack_into(">I", header, 0x395, total_payload_blocks)
-    # Total Unallocated Blocks
-    struct.pack_into(">I", header, 0x399, 0)
-    
-    # Data File Count and Combined Size
-    struct.pack_into(">I", header, 0x39D, entry_count)
-    struct.pack_into(">q", header, 0x3A1, total_payload_size)
-    
-    name_encoded = display_name.encode("utf-16-be")[:0x80]
-    header[0x41C:0x41C + len(name_encoded)] = name_encoded
-    return header
+def repair_milo(milo_bytes: bytes) -> bytes:
+    magic = int.from_bytes(milo_bytes[0:4], 'little')
+    if magic != MILO_A_MAGIC: return milo_bytes
+    offset = int.from_bytes(milo_bytes[4:8], 'little')
+    block_count = int.from_bytes(milo_bytes[8:12], 'little')
+    if block_count == 0: return milo_bytes
+    total_size = sum(int.from_bytes(milo_bytes[0x10 + i * 4: 0x14 + i * 4], 'little') for i in range(block_count))
+    data_region = milo_bytes[offset: offset + total_size]
+    if len(data_region) >= 4 and data_region[-4:] == ADDE_PADDING: return milo_bytes
+    out = bytearray(milo_bytes)
+    last_field = 0x10 + (block_count - 1) * 4
+    cur = int.from_bytes(milo_bytes[last_field:last_field + 4], 'little')
+    out[last_field:last_field + 4] = (cur + 4).to_bytes(4, 'little')
+    out.extend(ADDE_PADDING)
+    return bytes(out)
 
-def create_file_entry(name: str, allocated_blocks: int, real_blocks: int, start_block: int, parent_index: int = 0xFFFF, file_size: int = 0, is_dir: bool = False) -> bytearray:
-    """
-    Creates a 64-byte STFS file/directory table entry.
-    """
-    entry = bytearray(0x40)
-    name_bytes = name.encode('ascii', errors='ignore')[:0x28]
-    entry[0:len(name_bytes)] = name_bytes
-    
-    name_len = len(name_bytes) & 0x3F
-    
-    # Flags: Bit 7 (0x80) = Directory | Bit 6 (0x40) = Contiguous File (Required if no hash blocks)
-    flags = name_len | (0x80 if is_dir else 0x40)
-    entry[0x28] = flags
-    
-    entry[0x29:0x2C] = allocated_blocks.to_bytes(3, 'little', signed=False)
-    entry[0x2C:0x2F] = real_blocks.to_bytes(3, 'little', signed=False)
-    entry[0x2F:0x32] = start_block.to_bytes(3, 'little', signed=False)
-    
-    # Parent directory index (Big Endian, unsigned 16-bit, 0xFFFF for root)
-    entry[0x32:0x34] = parent_index.to_bytes(2, 'big', signed=False)
-    entry[0x34:0x38] = file_size.to_bytes(4, 'big', signed=False)
-    entry[0x38:0x3C] = (0x50212000).to_bytes(4, 'big', signed=False)
-    
-    return entry
+def logical_to_physical(logical: int) -> int:
+    block_adjust = 0
+    if logical >= 0xAA: block_adjust += (logical // 0xAA) + 1
+    if logical >= 0x70E4: block_adjust += (logical // 0x70E4) + 1
+    return logical + block_adjust
+
+def set_entry_name(con_data: bytearray, ft_offset: int, entry_idx: int, new_name: str):
+    entry_addr = ft_offset + entry_idx * 0x40
+    name_bytes = new_name.encode('ascii', errors='ignore')[:0x28]
+    con_data[entry_addr : entry_addr + 0x28] = b'\x00' * 0x28
+    con_data[entry_addr : entry_addr + len(name_bytes)] = name_bytes
+    is_dir = (con_data[entry_addr + 0x28] & 0x80) != 0
+    con_data[entry_addr + 0x28] = (len(name_bytes) & 0x3F) | (0x80 if is_dir else 0x40)
+
+def set_entry_allocation(con_data: bytearray, ft_offset: int, entry_idx: int, start_block: int, size: int):
+    entry_addr = ft_offset + entry_idx * 0x40
+    block_count = (size + BLOCK_SIZE - 1) // BLOCK_SIZE
+    con_data[entry_addr + 0x34 : entry_addr + 0x38] = size.to_bytes(4, 'big')
+    con_data[entry_addr + 0x29 : entry_addr + 0x2C] = block_count.to_bytes(3, 'little')
+    con_data[entry_addr + 0x2C : entry_addr + 0x2F] = block_count.to_bytes(3, 'little')
+    con_data[entry_addr + 0x2F : entry_addr + 0x32] = start_block.to_bytes(3, 'little')
+
+def patch_stfs_header_metadata(con_data: bytearray, title: str, artist: str):
+    title_encoded = title.encode('utf-16-be')
+    con_data[0x43D : 0x43D + len(title_encoded)] = title_encoded
+    artist_encoded = artist.encode('utf-16-be')
+    con_data[0x413 : 0x413 + len(artist_encoded)] = artist_encoded
 
 def package_con(
     output_dir: str | Path,
     song_id: str,
     mogg_path: Path,
     midi_path: Path,
-    dta_path: Path
+    dta_path: Path,
+    title: str = "Open Road Song",
+    artist: str = "Eve 6",
+    album_art_bytes: bytes | None = None
 ) -> Path:
-    """
-    Stages song assets and generates an Xbox 360 STFS CON container 
-    with the correct root structure and table padding for ForgeTool GUI.
-    """
     output_path = Path(output_dir)
     songs_root = output_path / "songs"
     song_staging_dir = songs_root / song_id
-    song_staging_dir.mkdir(parents=True, exist_ok=True)
-    
+    gen_staging_dir = song_staging_dir / "gen"
+    gen_staging_dir.mkdir(parents=True, exist_ok=True)
+
     target_dta_parent = songs_root / "songs.dta"
     target_dta_sub = song_staging_dir / "songs.dta"
-    
+
     if dta_path.resolve() != target_dta_parent.resolve():
         shutil.copy2(dta_path, target_dta_parent)
     shutil.copy2(target_dta_parent, target_dta_sub)
 
     target_mogg = song_staging_dir / f"{song_id}.mogg"
     target_mid = song_staging_dir / f"{song_id}.mid"
-    
+
     if mogg_path.resolve() != target_mogg.resolve():
         shutil.copy2(mogg_path, target_mogg)
     if midi_path.resolve() != target_mid.resolve():
         shutil.copy2(midi_path, target_mid)
-        
-    click.echo(f"Staged clean song folder structure at: {song_staging_dir}")
 
-    dta_parent_content = target_dta_parent.read_bytes()
-    dta_sub_content = target_dta_sub.read_bytes()
-    mogg_content = target_mogg.read_bytes()
-    midi_content = target_mid.read_bytes()
-
-    # Initialize entire file table block to 0xFF to cleanly terminate unused slots
-    file_table_block = bytearray(b'\xff' * BLOCK_SIZE)
-
-    # Exact Index Mapping matching SmellsLikeNirvana_rb3con:
-    # Index 0: songs (Root directory, parent 0xFFFF)
-    # Index 1: song_id (Subdirectory inside songs, parent 0)
-    # Index 2: songs.dta (File inside songs, parent 0)
-    # Index 3: {song_id}.mid (File inside song folder, parent 1)
-    # Index 4: {song_id}.mogg (File inside song folder, parent 1)
-    items = [
-        {"name": "songs", "is_dir": True, "parent": 0xFFFF, "content": None},
-        {"name": song_id, "is_dir": True, "parent": 0, "content": None},
-        {"name": "songs.dta", "is_dir": False, "parent": 0, "content": dta_parent_content},
-        {"name": f"{song_id}.mid", "is_dir": False, "parent": 1, "content": midi_content},
-        {"name": f"{song_id}.mogg", "is_dir": False, "parent": 1, "content": mogg_content},
-    ]
-
-    current_block = 0
-    packed_files = []
-    
-    for idx, item in enumerate(items):
-        entry_offset = idx * 0x40
-        if item["is_dir"]:
-            file_table_block[entry_offset:entry_offset + 0x40] = create_file_entry(
-                name=item["name"],
-                allocated_blocks=0,
-                real_blocks=0,
-                start_block=0,
-                parent_index=item["parent"],
-                file_size=0,
-                is_dir=True
-            )
-        else:
-            content = item["content"]
-            file_size = len(content)
-            block_count = (file_size + BLOCK_SIZE - 1) // BLOCK_SIZE
-            
-            file_table_block[entry_offset:entry_offset + 0x40] = create_file_entry(
-                name=item["name"],
-                allocated_blocks=block_count,
-                real_blocks=block_count,
-                start_block=current_block,
-                parent_index=item["parent"],
-                file_size=file_size,
-                is_dir=False
-            )
-            packed_files.append({
-                "content": content,
-                "size": file_size,
-                "blocks": block_count
-            })
-            current_block += block_count
-
-    total_payload_blocks = current_block
-    total_payload_size = total_payload_blocks * BLOCK_SIZE
+    template_con = Path(__file__).parent / "data/template.con"
+    milo_bin = Path(__file__).parent / "data/template_milo.bin"
+    png_bin = Path(__file__).parent / "data/template_png.bin"
 
     con_file_path = output_path / f"{song_id}.con"
+
+    if not template_con.exists():
+        raise FileNotFoundError(f"Template CON not found at {template_con}")
+
+    shutil.copy2(template_con, con_file_path)
+    con_data = bytearray(con_file_path.read_bytes())
+    ft_offset = 0xC000
+
+    patch_stfs_header_metadata(con_data, title, artist)
+
+    target_milo = gen_staging_dir / f"{song_id}.milo_xbox"
+    target_png = gen_staging_dir / f"{song_id}_keep.png_xbox"
+
+    raw_milo = milo_bin.read_bytes() if milo_bin.exists() else b''
+    repaired_milo = repair_milo(raw_milo)
+    target_milo.write_bytes(repaired_milo)
+
+    png_bytes = album_art_bytes if album_art_bytes is not None else (png_bin.read_bytes() if png_bin.exists() else b'')
+    target_png.write_bytes(png_bytes)
+
+    dta_content = target_dta_parent.read_bytes()
+    midi_content = target_mid.read_bytes()
+    mogg_content = target_mogg.read_bytes()
+    milo_content = repaired_milo
+    png_content = target_png.read_bytes()
+
+    set_entry_name(con_data, ft_offset, 1, song_id)
+    set_entry_name(con_data, ft_offset, 4, f"{song_id}.mid")
+    set_entry_name(con_data, ft_offset, 5, f"{song_id}.mogg")
+    set_entry_name(con_data, ft_offset, 6, f"{song_id}.milo_xbox")
+    set_entry_name(con_data, ft_offset, 7, f"{song_id}_keep.png_xbox")
+
+    dta_size = len(dta_content)
+    dta_blocks = (dta_size + BLOCK_SIZE - 1) // BLOCK_SIZE
+    mid_size = len(midi_content)
+    mid_blocks = (mid_size + BLOCK_SIZE - 1) // BLOCK_SIZE
+    mogg_size = len(mogg_content)
+    mogg_blocks = (mogg_size + BLOCK_SIZE - 1) // BLOCK_SIZE
+    milo_size = len(milo_content)
+    milo_blocks = (milo_size + BLOCK_SIZE - 1) // BLOCK_SIZE
+    png_size = len(png_content)
+    png_blocks = (png_size + BLOCK_SIZE - 1) // BLOCK_SIZE
     
-    template_path = output_path / "SmellsLikeNirvana_rb3con"
-    if template_path.exists():
-        # Clone signed template CON file to inherit valid cryptographic signatures and certificates
-        shutil.copy2(template_path, con_file_path)
-        with open(con_file_path, "rb+") as con_file:
-            con_data = bytearray(con_file.read())
-            
-            # Update header metadata
-            struct.pack_into(">q", con_data, 0x34C, total_payload_size)
-            struct.pack_into(">I", con_data, 0x395, total_payload_blocks)
-            struct.pack_into(">I", con_data, 0x39D, len(items))
-            struct.pack_into(">q", con_data, 0x3A1, total_payload_size)
-            name_encoded = song_id.encode("utf-16-be")[:0x80]
-            con_data[0x41C:0x41C + len(name_encoded)] = name_encoded
-            
-            # Write File Table block at 0xC000
-            con_data[0xC000:0xC000 + BLOCK_SIZE] = file_table_block
-            
-            # Write payload files starting at 0xD000 (Block 12 + 1)
-            current_offset = 0xD000
-            con_file.seek(0)
-            con_file.write(con_data[:current_offset])
-            
-            for item in packed_files:
-                con_file.write(item["content"])
-                remainder = item["size"] % BLOCK_SIZE
-                if remainder != 0:
-                    con_file.write(b"\x00" * (BLOCK_SIZE - remainder))
-        import os
-        os.utime(con_file_path, None)
-        click.echo(f"Signed template-patched CON file successfully packaged: {con_file_path}")
-        return con_file_path
-    else:
-        header = create_stfs_header(song_id, total_payload_blocks, total_payload_size, len(items))
+    dta_start = 1
+    mid_start = dta_start + dta_blocks
+    mogg_start = mid_start + mid_blocks
+    milo_start = mogg_start + mogg_blocks
+    png_start = milo_start + milo_blocks
 
-        with open(con_file_path, "wb") as con_file:
-            con_file.write(header)
-            
-            current_offset = con_file.tell()
-            padding_needed = (BLOCK_SIZE - (current_offset % BLOCK_SIZE)) % BLOCK_SIZE
-            con_file.write(b"\x00" * padding_needed)
+    set_entry_allocation(con_data, ft_offset, 3, dta_start, dta_size)
+    set_entry_allocation(con_data, ft_offset, 4, mid_start, mid_size)
+    set_entry_allocation(con_data, ft_offset, 5, mogg_start, mogg_size)
+    set_entry_allocation(con_data, ft_offset, 6, milo_start, milo_size)
+    set_entry_allocation(con_data, ft_offset, 7, png_start, png_size)
 
-            # Write File Table block (Block 12 at 0xC000)
-            con_file.write(b"\x00" * (0xC000 - con_file.tell()))
-            con_file.write(file_table_block)
+    total_allocated = 1 + dta_blocks + mid_blocks + mogg_blocks + milo_blocks + png_blocks
+    con_data[0x395 : 0x399] = total_allocated.to_bytes(4, 'big')
+    con_data[0x399 : 0x39D] = (0).to_bytes(4, 'big')
 
-            # Write Payload Files
-            for item in packed_files:
-                con_file.write(item["content"])
-                remainder = item["size"] % BLOCK_SIZE
-                if remainder != 0:
-                    con_file.write(b"\x00" * (BLOCK_SIZE - remainder))
-                    
-        click.echo(f"Direct CON file successfully packaged with correct ForgeTool layout: {con_file_path}")
-        return con_file_path
+    def write_payload(start_block: int, content: bytes):
+        size = len(content)
+        block_count = (size + BLOCK_SIZE - 1) // BLOCK_SIZE
+        for i in range(block_count):
+            payload_offset = 0xC000 + logical_to_physical(start_block + i) * BLOCK_SIZE
+            chunk = content[i * BLOCK_SIZE: (i + 1) * BLOCK_SIZE]
+            chunk = chunk + b'\x00' * (BLOCK_SIZE - len(chunk))
+            end = payload_offset + BLOCK_SIZE
+            if len(con_data) < end:
+                con_data.extend(b'\x00' * (end - len(con_data)))
+            con_data[payload_offset: end] = chunk
+
+    write_payload(dta_start, dta_content)
+    write_payload(mid_start, midi_content)
+    write_payload(mogg_start, mogg_content)
+    write_payload(milo_start, milo_content)
+    write_payload(png_start, png_content)
+
+    con_file_path.write_bytes(con_data)
+    os.utime(con_file_path, None)
+    click.echo(f"Successfully patched CON: {con_file_path}")
+    return con_file_path
+
+def _find_forgetool() -> Path:
+    """Locates the `tools/forgetool` wrapper.
+
+    `--build-pkg` requires a full git clone (the ForgeTool .NET binaries are
+    not shipped in the pip wheel), so the tool is not installed with `autorb`.
+    This searches:
+      1. The current working directory and its immediate children (the CLI is
+         often run from a parent of the clone, e.g. `temp/` with the clone at
+         `temp/RockBandAutoSongLevelCreator/`).
+      2. Every ancestor directory of the CWD (walking up to the filesystem root).
+      3. sys.prefix / sys.base_prefix.
+    The first hit wins.
+    """
+    cwd = Path.cwd()
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+
+    # (1) CWD and its immediate child dirs.
+    candidates.append(cwd / "tools" / "forgetool")
+    if cwd.is_dir():
+        for child in cwd.iterdir():
+            if child.is_dir() and not child.name.startswith("."):
+                candidates.append(child / "tools" / "forgetool")
+
+    # (2) Ancestors of the CWD, from closest to root.
+    for ancestor in cwd.parents:
+        candidates.append(ancestor / "tools" / "forgetool")
+
+    # (3) Interpreter roots.
+    candidates.append(Path(sys.prefix) / "tools" / "forgetool")
+    candidates.append(Path(sys.base_prefix) / "tools" / "forgetool")
+
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.is_file():
+            return candidate
+    raise RuntimeError(
+        "ForgeTool not found. `--build-pkg` requires a full git clone with the "
+        "vendored toolchain built:\n"
+        "  git clone https://github.com/free5ty1e/RockBandAutoSongLevelCreator.git\n"
+        "  cd RockBandAutoSongLevelCreator\n"
+        "  tools/build_forgetool.sh\n"
+        "  # then run the CLI from the clone, or from anywhere within/near it "
+        "(the tool is auto-discovered by searching the CWD, its child dirs, and its ancestors).\n"
+        "Building the toolchain needs the .NET SDK 8 (`dotnet`) and mono-devel, "
+        "e.g.: `sudo apt install mono-devel` (or `brew install mono` on macOS), "
+        "plus `brew install --cask dotnet-sdk@8` (macOS) / the .NET 8 SDK installer (Linux).\n"
+        "`tools/build_forgetool.sh` checks for these and prints install instructions."
+    )
+
+
+def build_ps4_pkg(con_path: Path, output_dir: Path, song_id: str) -> Path:
+    pkg_dir = output_dir / "pkg"
+    pkg_dir.mkdir(parents=True, exist_ok=True)
+    forgetool = _find_forgetool()
+    cmd = [
+        str(forgetool),
+        "con2pkg",
+        "--id", "0000000000000001",
+        "--desc", f"Custom Song - {song_id}",
+        str(con_path),
+        str(pkg_dir)
+    ]
+    click.echo(f"Running ForgeTool: {' '.join(cmd)}")
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode != 0:
+        click.echo(f"Error during PKG conversion: {result.stderr}", err=True)
+        raise RuntimeError(f"ForgeTool failed to build PKG: {result.stderr}")
+    pkg_file = pkg_dir / f"{song_id}.pkg"
+    return pkg_file

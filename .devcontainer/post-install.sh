@@ -17,3 +17,10 @@ if [ -n "$CT2_LIB" ]; then
 else
     echo "Warning: libctranslate2-*.so* not found. Did the pip install fail?"
 fi
+
+echo "Installing .NET SDK for ForgeTool build..."
+curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 8.0 --install-dir /tmp/dotnet
+export PATH=/tmp/dotnet:$PATH
+
+echo "Building ForgeTool..."
+bash tools/build_forgetool.sh

@@ -4,21 +4,41 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autorb"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Automated Rock Band 3 CON File Generator"
-requires-python = ">=3.11"
+# WhisperX (hard dependency for vocal alignment) caps at Python <3.14, and the
+# only whisperx release without an upper bound (3.2.0) pins ctranslate2==4.4.0,
+# which ships no cp314 wheel. Enforce the upper bound so pip refuses fast and
+# clearly on 3.14+ instead of failing with a cryptic "ctranslate2==4.4.0" error.
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "click>=8.1.7",
     "demucs>=4.0.0",
     "librosa>=0.10.1",
-    "basic-pitch>=0.3.0",
     "whisperx>=3.1.1",
     "mido>=1.3.0",
     "pretty_midi>=0.2.10",
     "construct>=2.10.69",
     "pydub",
-    "soundfile"
+    "soundfile",
+    "onnxruntime",
+    "mir-eval",
+    "resampy<0.4.3,>=0.2.2",
+    # resampy 0.4.2 imports pkg_resources, which setuptools>=82 deletes. Pin
+    # setuptools below 82 so a bare wheel install gets pkg_resources too
+    # (the wheel's own deps previously shipped no setuptools at all, so
+    # --skip-vocals crashed with ModuleNotFoundError: No module named 'pkg_resources').
+    "setuptools>=68.0.0,<82.0.0",
 ]
 
+[tool.setuptools.dynamic]
+version = {attr = "autorb.version.__version__"}
+
 [tool.setuptools]
-packages = ["autorb", "autorb.audio", "autorb.export"]
+packages = ["autorb", "autorb.audio", "autorb.export", "autorb.pitch"]
+
+[tool.setuptools.package-data]
+autorb = ["export/data/*.con", "export/data/*.bin", "export/data/fonts/*.ttf"]
+"autorb.pitch" = ["*.onnx"]
+
+
