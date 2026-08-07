@@ -113,7 +113,7 @@ jobs:
 
           Automated Rock Band 3 CON & PS4 PKG Generator using Machine Learning & Signal Processing.
 
-          This is the **vocal-only MVP** (v0.0074): it produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart. The vocal pitch fix has been confirmed correct on a real PS4.
+          This is the **vocal-only MVP** (v0.0075): it produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart. The vocal pitch fix has been confirmed correct on a real PS4.
 
           ## Features
 
@@ -126,6 +126,7 @@ jobs:
           * **Automatic difficulty ratings** — per-instrument `rank` from chart note density instead of a hardcoded value
           * **Direct CON packaging** — multi-channel `.mogg`, `notes.mid`, `songs.dta`, and album art assembled into an Xbox 360 STFS CON directly
           * **PS4 PKG (`--build-pkg`)** and **Freestyle Vocals (`--generate-freestyle-vocals`)** via the vendored (patched) ForgeTool
+          * **Default album art is legible everywhere** — DejaVu Sans (permissive license) is now bundled in the wheel; a circular "CP" monogram logo added to the bottom-right corner
 
           ## Known Limitations
 

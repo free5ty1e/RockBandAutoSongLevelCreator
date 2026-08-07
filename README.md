@@ -6,7 +6,7 @@
 
 By leveraging modern AI models for stem separation, pitch detection, and vocal alignment, AutoRB automates the complex manual workflow traditionally required to create custom Rock Band tracks.
 
-NOTE: The v0.0074 release is a **vocal-only MVP** — it produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart (see [Known Limitations](#-known-limitations)). Instrument charts and the remaining roadmap items are still under active development.
+NOTE: The v0.0075 release is a **vocal-only MVP** — it produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart (see [Known Limitations](#-known-limitations)). Instrument charts and the remaining roadmap items are still under active development.
 
 ---
 
@@ -31,7 +31,7 @@ NOTE: The v0.0074 release is a **vocal-only MVP** — it produces a fully playab
 
 ## ⚠️ Known Limitations
 
-The v0.0074 release is a **vocal-only MVP** — the pipeline produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart. Be aware of what is and isn't supported yet:
+The v0.0075 release is a **vocal-only MVP** — the pipeline produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart. Be aware of what is and isn't supported yet:
 
 - **Solo vocals only.** There are no real guitar, bass, or drum charts. `PART GUITAR` / `PART BASS` / `PART DRUMS` are *placeholder tracks* (one note per difficulty) so the game loads cleanly and ForgeTool's CON→PKG conversion doesn't crash — they are **not** playable instrument charts.
 - **Instrument transcription is not functional yet.** `Basic-Pitch` is used only for vocal pitch; automatic transcription into real 5-lane instrument tracks is still on the roadmap.
@@ -245,7 +245,7 @@ python3 -m autorb.cli \
 | `-y, --year` | Integer | Release year (Default: Current Year). |
 | `-g, --genre` | String | Genre string (Default: `"Rock"`). |
 | `-o, --output-dir` | Path | Destination folder for the compiled CON file (Default: `./output`). |
-| `--album-art` | Path | Optional. Custom album art image (PNG/JPG) for the CON's `_keep.png_xbox` texture. Defaults to a generated "Chris Prime Custom" cover (stacked CHRIS/PRIME text with an orange "BOT" badge). |
+| `--album-art` | Path | Optional. Custom album art image (PNG/JPG) for the CON's `_keep.png_xbox` texture. Defaults to a generated "Chris Prime Custom" cover (stacked CHRIS/PRIME text with an orange "BOT" badge and a circular "CP" monogram logo). The art's font is bundled with the package, so it renders legibly on any OS (no system font paths required). |
 | `--skip-separation` | Flag | Skip AI stem separation; requires `drums.wav`, `bass.wav`, `vocals.wav`, `other.wav` in `[output-dir]/stems`. |
 | `--skip-tempo-detection` | Flag | Skip beat tracking; loads `tempo_map.json` from the output directory. |
 | `--skip-vocals` | Flag | Skip WhisperX alignment and basic-pitch; loads `vocals_cache.json`. |

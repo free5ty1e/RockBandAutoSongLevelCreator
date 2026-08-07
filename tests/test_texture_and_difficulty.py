@@ -65,6 +65,28 @@ def test_custom_album_art_file():
     assert decoded.size == (256, 256)
 
 
+def test_album_art_title_is_legible():
+    # Regression: the title must render at the real DejaVu size (thousands of
+    # glyph pixels on 256px art), NOT Pillow's tiny 8px load_default fallback
+    # (a few hundred px) that made the art illegible on macOS. Also the bundled
+    # font must be found regardless of OS font paths.
+    image = build_default_album_art(256)
+    region = image.crop((0, int(256 * 0.10), 256, int(256 * 0.45)))
+    white = sum(1 for p in region.getdata() if p[0] > 200 and p[1] > 200 and p[2] > 200)
+    assert white > 2000
+
+
+def test_album_art_has_cp_logo():
+    # The circular "CP" monogram lives in the bottom-right corner.
+    image = build_default_album_art(256)
+    region = image.crop((int(256 * 0.72), int(256 * 0.72), 256, 256))
+    pixels = list(region.getdata())
+    orange = sum(1 for p in pixels if p[0] > 200 and 100 < p[1] < 200 and p[2] < 120)
+    white = sum(1 for p in pixels if p[0] > 200 and p[1] > 200 and p[2] > 200)
+    assert orange > 50   # the outer ring
+    assert white > 50    # the C + P glyphs
+
+
 def test_difficulty_ranks_use_chart_density(tmp_path):
     midi = tmp_path / "song.mid"
     # 50 drum notes + 4 vocal notes over a nominal 10s song

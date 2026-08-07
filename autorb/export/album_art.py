@@ -3,17 +3,112 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PIL import Image, ImageDraw, ImageFont
 
-_FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-_FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+# Fonts are bundled with the package (autorb/export/data/fonts) so the art
+# renders identically on any OS regardless of system font paths. On Linux the
+# same DejaVu fonts are also commonly installed system-wide, but we never rely
+# on that — the bundled copy is the source of truth.
+_DATA_DIR = Path(__file__).parent / "data" / "fonts"
+_FONT_BOLD = _DATA_DIR / "DejaVuSans-Bold.ttf"
+_FONT_REGULAR = _DATA_DIR / "DejaVuSans.ttf"
+
+# Fallback search paths for systems where the bundled font is unavailable
+# (e.g. a loose-source checkout missing package data).
+_OS_FONT_CANDIDATES = [
+    # macOS (Homebrew / Framework font dirs)
+    "/opt/homebrew/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/local/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    "/Library/Fonts/Arial Bold.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    # Linux (Debian/Ubuntu + others)
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+]
+_OS_FONT_REGULAR_CANDIDATES = [
+    "/opt/homebrew/share/fonts/dejavu/DejaVuSans.ttf",
+    "/usr/local/share/fonts/dejavu/DejaVuSans.ttf",
+    "/Library/Fonts/Arial.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+]
 
 
-def _font(path: str, size: int) -> ImageFont.FreeTypeFont:
+def _resolve_font(bundled: Path, os_candidates: list[str]) -> Path | None:
+    if bundled.is_file():
+        return bundled
+    for candidate in os_candidates:
+        if Path(candidate).is_file():
+            return Path(candidate)
+    return None
+
+
+def _load_font(bundled: Path, os_candidates: list[str], size: int) -> ImageFont.FreeTypeFont:
+    """Load a TrueType font, preferring the bundled copy, then known OS paths.
+
+    Falls back to Pillow's built-in scalable default (``load_default(size=)``,
+    Pillow >= 10.1) so text is still legible even if no TTF can be found.
+    """
+    resolved = _resolve_font(bundled, os_candidates)
+    if resolved is not None:
+        return ImageFont.truetype(str(resolved), size)
     try:
-        return ImageFont.truetype(path, size)
-    except OSError:
+        return ImageFont.load_default(size=size)
+    except TypeError:  # Pillow < 10.1 has no size arg
         return ImageFont.load_default()
+
+
+def _font_bold(size: int) -> ImageFont.FreeTypeFont:
+    return _load_font(_FONT_BOLD, _OS_FONT_CANDIDATES, size)
+
+
+def _font_regular(size: int) -> ImageFont.FreeTypeFont:
+    return _load_font(_FONT_REGULAR, _OS_FONT_REGULAR_CANDIDATES, size)
+
+
+def _draw_cp_logo(draw: ImageDraw.ImageDraw, size: int, margin: int) -> None:
+    """Draws a circular 'CP' monogram in the bottom-right corner."""
+    logo_d = max(14, int(size * 0.14))
+    logo_cx = size - margin - logo_d // 2 - 2
+    logo_cy = size - margin - logo_d // 2 - 2
+
+    # Outer ring
+    draw.ellipse(
+        [logo_cx - logo_d / 2, logo_cy - logo_d / 2, logo_cx + logo_d / 2, logo_cy + logo_d / 2],
+        outline=(255, 150, 0, 255),
+        width=max(2, logo_d // 12),
+    )
+
+    # Inner 'C' + 'P' letters, drawn as thick strokes for a clean monogram.
+    stroke = max(2, logo_d // 14)
+    inner = max(6, logo_d // 2)
+
+    # 'C' on the left half
+    draw.arc(
+        [logo_cx - inner, logo_cy - inner, logo_cx, logo_cy + inner],
+        start=90, end=330,
+        fill=(255, 255, 255, 255),
+        width=stroke,
+    )
+    # 'P' on the right half: vertical stem + bowl
+    stem_x = logo_cx + int(logo_d * 0.02)
+    draw.line(
+        [stem_x, logo_cy - int(logo_d * 0.28), stem_x, logo_cy + int(logo_d * 0.28)],
+        fill=(255, 255, 255, 255),
+        width=stroke,
+    )
+    bowl_r = int(logo_d * 0.18)
+    draw.arc(
+        [stem_x, logo_cy - int(logo_d * 0.28), stem_x + 2 * bowl_r, logo_cy - int(logo_d * 0.28) + 2 * bowl_r],
+        start=270, end=90,
+        fill=(255, 255, 255, 255),
+        width=stroke,
+    )
 
 
 def build_default_album_art(size: int = 256) -> Image.Image:
@@ -60,20 +155,20 @@ def build_default_album_art(size: int = 256) -> Image.Image:
         )
 
     # Title text
-    title_font = _font(_FONT_BOLD, max(14, size // 7))
-    sub_font = _font(_FONT_BOLD, max(10, size // 10))
-    tag_font = _font(_FONT_REGULAR, max(8, size // 18))
-    badge_font = _font(_FONT_BOLD, max(9, size // 16))
+    title_font = _font_bold(max(14, size // 7))
+    sub_font = _font_bold(max(10, size // 10))
+    tag_font = _font_regular(max(8, size // 18))
+    badge_font = _font_bold(max(9, size // 16))
 
-    def _center_text(d, text, font, y, fill):
-        bbox = d.textbbox((0, 0), text, font=font)
+    def _center(text, font, y, fill):
+        bbox = draw.textbbox((0, 0), text, font=font)
         tw = bbox[2] - bbox[0]
-        d.text(((size - tw) / 2 - bbox[0], y), text, font=font, fill=fill)
+        draw.text(((size - tw) / 2 - bbox[0], y), text, font=font, fill=fill)
 
-    _center_text(draw, "CHRIS", title_font, int(size * 0.12), (255, 255, 255, 255))
-    _center_text(draw, "PRIME", title_font, int(size * 0.24), (255, 255, 255, 255))
-    _center_text(draw, "CUSTOM", sub_font, int(size * 0.36), (255, 150, 0, 255))
-    _center_text(draw, "rock band custom song", tag_font, int(size * 0.84), (200, 200, 200, 255))
+    _center("CHRIS", title_font, int(size * 0.12), (255, 255, 255, 255))
+    _center("PRIME", title_font, int(size * 0.24), (255, 255, 255, 255))
+    _center("CUSTOM", sub_font, int(size * 0.36), (255, 150, 0, 255))
+    _center("rock band custom song", tag_font, int(size * 0.84), (200, 200, 200, 255))
 
     # "BOT" badge in the top-right corner so songlists show this was script-made
     badge_w = int(size * 0.16)
@@ -94,6 +189,9 @@ def build_default_album_art(size: int = 256) -> Image.Image:
         font=badge_font,
         fill=(20, 20, 20, 255),
     )
+
+    # Circular "CP" monogram logo in the bottom-right corner
+    _draw_cp_logo(draw, size, m)
 
     # Flatten onto an opaque black canvas so the texture encodes as DXT1
     bg = Image.new("RGBA", img.size, (0, 0, 0, 255))

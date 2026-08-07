@@ -38,7 +38,7 @@ version = {attr = "autorb.version.__version__"}
 packages = ["autorb", "autorb.audio", "autorb.export", "autorb.pitch"]
 
 [tool.setuptools.package-data]
-autorb = ["export/data/*.con", "export/data/*.bin"]
+autorb = ["export/data/*.con", "export/data/*.bin", "export/data/fonts/*.ttf"]
 "autorb.pitch" = ["*.onnx"]
 
 
