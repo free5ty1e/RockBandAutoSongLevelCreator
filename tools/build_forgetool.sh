@@ -26,6 +26,19 @@ if ! command -v mono >/dev/null 2>&1; then
   exit 1
 fi
 
+# libgdiplus provides System.Drawing's native backing (used to read the CON's
+# album art, _keep.png_xbox) when ForgeTool runs CON -> PKG conversion.
+# Linux mono bundles it, but Homebrew's mono does NOT — macOS needs a separate
+# install. Fail fast rather than surfacing ForgeTool's cryptic
+# "DllNotFoundException: libgdiplus.dylib" at conversion time.
+if ! find /usr/lib /usr/local/lib /opt/homebrew/lib /Library/Frameworks \
+    -name "libgdiplus*" 2>/dev/null | grep -q .; then
+  echo "ERROR: 'libgdiplus' not found. ForgeTool needs it (System.Drawing) to read the CON's album art." >&2
+  echo "  - macOS:  brew install mono-libgdiplus" >&2
+  echo "  - Linux:  libgdiplus is bundled with mono (sudo apt install libgdiplus if missing)" >&2
+  echo "  (Your mono install is fine; this is an additional native library.)" >&2
+  exit 1
+fi
 # Locate mono's .NET Framework reference assemblies (mscorlib.dll) for
 # FrameworkPathOverride. ForgeTool.csproj targets .NET Framework v4.7.1, so we
 # specifically want the 4.7.1-api reference assemblies (any mono 6.x ships them).
