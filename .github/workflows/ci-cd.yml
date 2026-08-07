@@ -132,6 +132,7 @@ jobs:
           * **Solo vocals only** — `PART DRUMS` / `PART GUITAR` / `PART BASS` are placeholder tracks (one note per difficulty) so the game loads cleanly; they are **not** playable instrument charts.
           * **Instrument transcription is not functional yet** — Basic-Pitch is used only for vocal pitch.
           * **Per-word sync has outliers** — individual words can be a bit early/late, and lyrics must come from a good `.lrc` file (words missing from the LRC aren't charted).
+          * **Vocal phrases are wrong** — phrase boundaries fall back to fixed 2-bar measure windows, not the song's real phrasing, so in-game phrase regions and vocal scoring feel all wrong. Each `.lrc` line timestamp marks the **start of one vocal phrase** and should be the source of truth (falling back to the 2-bar windows only when the `.lrc` is missing or doesn't make phrasing obvious). Highest-priority roadmap item.
           * **PS4 song-list preview is silent** on Rock Band 4 Deluxe despite all preview metadata and the 10-channel layout being verified — suspected game-side (RB4DX caching/behavior).
           * **Freestyle Vocals guide lines don't render on PS4** yet, despite `HasFreestyleVocals=1` in the PKG — likely RB4DX-side.
           * **`--build-pkg` / freestyle flag require a `git clone`** (or the devcontainer), not a bare wheel — ForgeTool is vendored source-only, rebuilt by `tools/build_forgetool.sh` (needs .NET SDK 8 + `mono-devel`).
@@ -139,14 +140,46 @@ jobs:
 
           ## Next Steps / Roadmap
 
-          Real instrument charts (drums/guitar/bass transcription), syllable-level pitch contours per word, `.lrc`-line phrase source of truth, PS4 freestyle-lines + preview fixes, vocal gender detection, tambourine sections, multi-harmony vocals, solo-section/overdrive markers, Clone Hero export (`--build-clone-hero`), and per-word sync polish. See `ROADMAP.md`.
+          * **LRC-line phrase source of truth (highest priority)** — each `.lrc` line timestamp defines the start of one vocal phrase (2-bar fallback stays when the `.lrc` is missing/ambiguous). Currently phrase boundaries are wrong, which makes vocal scoring feel off.
+          * **Lyric/audio sync improvements** — tighten the remaining early/late per-word outliers.
+          * **One pitch per lyrical syllable** — every syllable gets its own note/pitch instead of one static pitch per word.
+          * **Vocal pitch tracking** — when the singer changes pitch mid-lyric, the on-screen note moves up/down with the voice (sliding transitions).
+          * **Overdrive section marking** — overdrive activation phrases and vocal fill/talkie sections.
+          * **Solo / Harmony 1 / Harmony 2 detection, separation & instrument tracks** — split the vocal stem into melody + harmony, detect solos, and build real (non-placeholder) drum/guitar/bass charts.
+          * **Real instrument charts** — drums/guitar/bass transcription into playable 5-lane tracks.
+          * **PS4 freestyle-lines + silent-preview fixes**, **vocal gender detection**, **tambourine sections**, **multi-harmony vocals**, and **Clone Hero export (`--build-clone-hero`)**.
+
+          See `ROADMAP.md` for the full list.
 
           ## Prerequisites
 
-          * **Python 3.11, 3.12, or 3.13**. **Python 3.14 is NOT supported** — WhisperX (a hard dependency) caps at `<3.14`, and the wheel's `Requires-Python` enforces `>=3.11,<3.14`, so pip refuses 3.14 early with a clear message.
-            * **macOS users**: your system `python3` is likely **3.9.6** (too old). Install a current Python first: `brew install python@3.12`, or download from [python.org](https://www.python.org/downloads/), then use `python3.12` below instead of `python3`. Check with `python3 --version`.
-          * **FFmpeg** — install via Homebrew (`brew install ffmpeg`), apt (`sudo apt install ffmpeg libsndfile1`), or Chocolatey (`choco install ffmpeg`)
-          * **mono-devel** (Linux/macOS) or **Mono** (Windows) — only needed for `--build-pkg`
+          AutoRB needs **Python**, **FFmpeg**, and (only for `--build-pkg`) **Mono**. Here is how to install each on macOS, Windows, and Linux:
+
+          ### Python 3.11–3.13
+
+          > **Python 3.14 is NOT supported** — WhisperX (a hard dependency) caps at `<3.14`, and the wheel's `Requires-Python` enforces `>=3.11,<3.14`, so pip refuses 3.14 early with a clear message. **macOS's default `python3` is 3.9.6 (too old)** — install a current Python first.
+
+          * **macOS:** `brew install python@3.12` (or download from [python.org](https://www.python.org/downloads/)), then use `python3.12` instead of `python3`.
+          * **Windows:** Download the installer from [python.org](https://www.python.org/downloads/) (3.11/3.12/3.13) and check **"Add Python to PATH"**, or `winget install Python.Python.3.12`.
+          * **Linux:** Debian/Ubuntu: `sudo apt install python3 python3-venv python3-pip` (verify the version is 3.11+; if not, use the [dead-snakes PPA](https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa): `sudo add-apt-repository ppa:deadsnakes/ppa && sudo apt install python3.12`). Arch: `sudo pacman -S python`.
+
+          Verify with `python3 --version`.
+
+          ### FFmpeg
+
+          * **macOS:** `brew install ffmpeg`
+          * **Windows:** Download from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) (the "release essentials" build) and add `bin\` to your PATH, or `winget install Gyan.FFmpeg`.
+          * **Linux (Debian/Ubuntu):** `sudo apt install ffmpeg libsndfile1` (other distros: `sudo dnf install ffmpeg` on Fedora, `sudo pacman -S ffmpeg` on Arch).
+
+          Verify with `ffmpeg -version`.
+
+          ### Mono (only needed for `--build-pkg`)
+
+          * **macOS:** `brew install mono`
+          * **Windows:** Download and run the installer from [mono-project.com](https://www.mono-project.com/download/stable/#download-win).
+          * **Linux (Debian/Ubuntu):** `sudo apt install mono-devel` (add the [Mono project repo](https://www.mono-project.com/download/stable/#download-lin) if the distro version is too old; other distros: `sudo dnf install mono-devel`, `sudo pacman -S mono`).
+
+          Verify with `mono --version`.
 
           ## Quick Start (Recommended: git clone)
 

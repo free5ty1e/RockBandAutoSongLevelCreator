@@ -36,6 +36,7 @@ The v0.0073 release is a **vocal-only MVP** — the pipeline produces a fully pl
 - **Solo vocals only.** There are no real guitar, bass, or drum charts. `PART GUITAR` / `PART BASS` / `PART DRUMS` are *placeholder tracks* (one note per difficulty) so the game loads cleanly and ForgeTool's CON→PKG conversion doesn't crash — they are **not** playable instrument charts.
 - **Instrument transcription is not functional yet.** `Basic-Pitch` is used only for vocal pitch; automatic transcription into real 5-lane instrument tracks is still on the roadmap.
 - **Per-word sync has outliers.** Onset-snapped timing eliminated the progressive drift (first word right-on, then late), but individual words can still be a bit early or late, and lyrics must come from a good `.lrc` file — words missing from the LRC don't get charted.
+- **Vocal phrases are wrong.** Phrase boundaries currently fall back to fixed 2-bar measure windows on the beat grid, not the song's real phrasing — so the in-game phrase regions and vocal scoring feel all wrong. Each timestamped line in the `.lrc` file marks the **start of one vocal phrase** and should be the source of truth (falling back to the 2-bar windows only when the `.lrc` is missing or doesn't make phrasing obvious). This is the highest-priority roadmap item (see [Next Steps](#-next-steps--roadmap)).
 - **PS4 song-list preview audio is silent** on Rock Band 4 Deluxe, even though all preview metadata (`songdta_ps4`, `rbmid_ps4`, MOGG seek table) and the 10-channel audio layout (mirroring stock "311 - Down") are verified correct. This is suspected to be game-side (RB4DX caching/behavior) rather than file-side.
 - **Freestyle Vocals guide lines do not render on PS4** yet, despite `HasFreestyleVocals=1` being written to the PKG. Both gates the RB4 manual documents are satisfied, so the failure is likely RB4DX-side (how it commits/reads the flag).
 - **`--build-pkg` and the PS4 freestyle-vocals flag require a `git clone`** (or the devcontainer), not a bare wheel: ForgeTool is vendored as **source** (`tools/libforge/`) and rebuilt by `tools/build_forgetool.sh` (needs .NET SDK 8 + `mono-devel`). On a wheel, `--build-pkg` fails fast with a clear pointer, and the freestyle flag is a no-op for PS4.
@@ -45,16 +46,18 @@ The v0.0073 release is a **vocal-only MVP** — the pipeline produces a fully pl
 
 Beyond the vocal-only MVP, the roadmap (see `ROADMAP.md`) includes:
 
+- **LRC-line phrase source of truth** — each `.lrc` line timestamp defines the **start of one vocal phrase** (currently phrase boundaries fall back to fixed 2-bar measure windows, which makes scoring feel wrong; the 2-bar fallback remains for when the `.lrc` is missing or doesn't make phrasing obvious). **Highest priority.**
+- **Lyric/audio sync improvements** — tighten the remaining early/late per-word outliers so lyrics land exactly on the sung audio.
+- **One pitch per lyrical syllable** — lyrical resolution enhancement so every syllable gets its own note/pitch instead of one static pitch per word.
+- **Vocal pitch tracking** — when the singer changes pitch mid-lyric, the on-screen note moves up/down with the voice (sliding pitch transitions), not a single flat pitch per word.
+- **Overdrive section marking** — automatically mark overdrive activation phrases (and vocal fills / talkie sections) so players can activate overdrive.
+- **Solo / Harmony 1 / Harmony 2 detection, separation & instrument tracks** — split the vocal stem into melody + harmony parts, detect solo sections, and build real (non-placeholder) drum/guitar/bass charts.
 - **Real instrument charts** — Basic-Pitch / signal-processing transcription of drums, guitar, and bass into playable 5-lane tracks (instead of placeholders).
-- **Syllable-level pitch mapping** — multi-pitch contours per word (sliding pitch transitions) rather than a single static pitch per word.
-- **LRC-line phrase source of truth** — each `.lrc` line defines one vocal phrase (currently phrase boundaries fall back to fixed 2-bar measure windows).
 - **Verify/refine Freestyle Vocals guide lines** on PS4 and the silent song-list preview.
 - **Vocal gender detection** (`'male'`/`'female'`) for `songs.dta` metadata.
 - **Tambourine detection** — map vocal-free instrumental breaks to microphone "Tambourine" sections.
 - **Multi-harmony vocals** — extract harmony + melody parts for Rock Band's up-to-3-mic harmony system.
-- **Solo-section recognition** and **overdrive / vocal-fill markers**.
 - **Clone Hero export (`--build-clone-hero`)** — also emit a Clone Hero-format song (`.chart`/`.mid` + audio) reusing the same chart and mix, without the Xbox 360 CON packaging or Rock Band count-in.
-- **Per-word sync polish** — tighten the remaining early/late word outliers.
 
 ---
 
