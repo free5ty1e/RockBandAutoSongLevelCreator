@@ -113,6 +113,34 @@ jobs:
 
           Automated Rock Band 3 CON & PS4 PKG Generator using Machine Learning & Signal Processing.
 
+          This is the **vocal-only MVP** (v0.0073): it produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart. The vocal pitch fix has been confirmed correct on a real PS4.
+
+          ## Features
+
+          * **Universal audio input** — MP3/WAV/FLAC/M4A via FFmpeg
+          * **AI stem separation** — Meta's Demucs isolates drums, bass, vocals, backing
+          * **Smart lyrics & vocal alignment** — Enhanced LRC (`.lrc`) or WhisperX fallback; each word snapped to the true sung attack on the vocal stem (onset-snapped timing), with overlap-free note ends so notes never drift late
+          * **Robust vocal pitch** — per-word librosa **pyin** as the primary source, Basic-Pitch octave-snapped to a melodic contour as fallback: 0/284 notes off-key on the reference song, repeated phrases sing the same notes
+          * **Stock-like measure-level tempo map** — sparse, smooth `set_tempo` map self-consistent with the chart (no progressive in-game drift)
+          * **Mandatory count-in** — silent 3-measure lead-in prepended to the MOGG, chart shifted to match (mirrors stock RB3 DLC)
+          * **Automatic difficulty ratings** — per-instrument `rank` from chart note density instead of a hardcoded value
+          * **Direct CON packaging** — multi-channel `.mogg`, `notes.mid`, `songs.dta`, and album art assembled into an Xbox 360 STFS CON directly
+          * **PS4 PKG (`--build-pkg`)** and **Freestyle Vocals (`--generate-freestyle-vocals`)** via the vendored (patched) ForgeTool
+
+          ## Known Limitations
+
+          * **Solo vocals only** — `PART DRUMS` / `PART GUITAR` / `PART BASS` are placeholder tracks (one note per difficulty) so the game loads cleanly; they are **not** playable instrument charts.
+          * **Instrument transcription is not functional yet** — Basic-Pitch is used only for vocal pitch.
+          * **Per-word sync has outliers** — individual words can be a bit early/late, and lyrics must come from a good `.lrc` file (words missing from the LRC aren't charted).
+          * **PS4 song-list preview is silent** on Rock Band 4 Deluxe despite all preview metadata and the 10-channel layout being verified — suspected game-side (RB4DX caching/behavior).
+          * **Freestyle Vocals guide lines don't render on PS4** yet, despite `HasFreestyleVocals=1` in the PKG — likely RB4DX-side.
+          * **`--build-pkg` / freestyle flag require a `git clone`** (or the devcontainer), not a bare wheel — ForgeTool is vendored source-only, rebuilt by `tools/build_forgetool.sh` (needs .NET SDK 8 + `mono-devel`).
+          * **Python 3.14 is NOT supported** (`Requires-Python >=3.11,<3.14`); macOS's default `python3` is 3.9.6 and too old — use `python3.12`.
+
+          ## Next Steps / Roadmap
+
+          Real instrument charts (drums/guitar/bass transcription), syllable-level pitch contours per word, `.lrc`-line phrase source of truth, PS4 freestyle-lines + preview fixes, vocal gender detection, tambourine sections, multi-harmony vocals, solo-section/overdrive markers, Clone Hero export (`--build-clone-hero`), and per-word sync polish. See `ROADMAP.md`.
+
           ## Prerequisites
 
           * **Python 3.11, 3.12, or 3.13**. **Python 3.14 is NOT supported** — WhisperX (a hard dependency) caps at `<3.14`, and the wheel's `Requires-Python` enforces `>=3.11,<3.14`, so pip refuses 3.14 early with a clear message.
