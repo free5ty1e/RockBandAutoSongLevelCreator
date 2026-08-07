@@ -169,11 +169,17 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         # 4. Package everything into the Xbox 360 CON/STFS container
         click.echo("Packaging into CON container...")
         from autorb.export.texture import keep_texture_from_image, default_album_art_bytes
+        from autorb.export.album_art import build_default_album_art
         if album_art is not None:
             click.echo(f"Encoding custom album art from {album_art}...")
             album_art_bytes = keep_texture_from_image(album_art)
         else:
             click.echo("Generating default 'Chris Prime Custom' album art...")
+            # Generate at high-res for preview, standard-res for CON
+            preview_img = build_default_album_art(1024)
+            preview_path = out_path / "album_art_preview.png"
+            preview_img.save(preview_path)
+            click.echo(f"Album art preview saved: {preview_path}")
             album_art_bytes = default_album_art_bytes()
         con_output_path = package_con(
             output_dir=out_path,
