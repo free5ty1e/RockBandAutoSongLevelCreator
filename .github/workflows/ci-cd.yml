@@ -113,7 +113,7 @@ jobs:
 
           Automated Rock Band 3 CON & PS4 PKG Generator using Machine Learning & Signal Processing.
 
-          This is the **vocal-only MVP** (v0.0073): it produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart. The vocal pitch fix has been confirmed correct on a real PS4.
+          This is the **vocal-only MVP** (v0.0074): it produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart. The vocal pitch fix has been confirmed correct on a real PS4.
 
           ## Features
 
@@ -167,9 +167,13 @@ jobs:
 
           ### FFmpeg
 
-          * **macOS:** `brew install ffmpeg`
-          * **Windows:** Download from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) (the "release essentials" build) and add `bin\` to your PATH, or `winget install Gyan.FFmpeg`.
-          * **Linux (Debian/Ubuntu):** `sudo apt install ffmpeg libsndfile1` (other distros: `sudo dnf install ffmpeg` on Fedora, `sudo pacman -S ffmpeg` on Arch).
+          AutoRB needs the `libvorbis` encoder to build the multi-channel MOGG. **Homebrew's regular `ffmpeg` formula dropped libvorbis in ffmpeg 8**, so a plain `brew install ffmpeg` on macOS fails with `Unknown encoder 'libvorbis'`. Use a libvorbis-capable build:
+
+          * **macOS:** `brew install ffmpeg-full` (includes libvorbis; it is **keg-only**, so put its `bin` on PATH first — on Apple Silicon: `export PATH="/opt/homebrew/opt/ffmpeg-full/bin:$PATH"`), or download a macOS static build from [ffmpeg.org](https://ffmpeg.org/download.html) (includes libvorbis).
+          * **Windows:** Download from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) (the "release essentials" build) and add `bin\` to your PATH, or `winget install Gyan.FFmpeg`. These builds include libvorbis.
+          * **Linux (Debian/Ubuntu):** `sudo apt install ffmpeg libsndfile1` (distro packages build with libvorbis; other distros: `sudo dnf install ffmpeg` on Fedora, `sudo pacman -S ffmpeg` on Arch).
+
+          Verify `libvorbis` is present: `ffmpeg -encoders 2>&1 | grep vorbis` (should list `libvorbis`).
 
           Verify with `ffmpeg -version`.
 

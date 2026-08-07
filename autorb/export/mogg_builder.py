@@ -16,6 +16,56 @@ FRAME_INCREMENT = 20000          # seek-map entries every 20000 samples
 SEEK_INCREMENT = 0x8000          # raw-byte stepping used to build the map
 PAGE_DURATION_US = 40000         # ogg muxer page target (~2048-3072 sample granules, matching stock RB moggs)
 
+_VORBIS_ENCODER_CACHE = None
+
+
+def _require_libvorbis() -> None:
+    """
+    Ensure the current ffmpeg provides the 'libvorbis' encoder, or fail fast
+    with an actionable message.
+
+    The MOGG's multi-channel (10-ch) Ogg Vorbis payload MUST be encoded with
+    'libvorbis': ffmpeg's built-in native 'vorbis' encoder only supports
+    2 channels (and is experimental), so it cannot encode the 10-channel layout
+    Rock Band requires. Homebrew's `ffmpeg` formula is compiled WITHOUT
+    `--enable-libvorbis`, so a hardcoded `-c:a libvorbis` would otherwise fail
+    with a cryptic 'Unknown encoder libvorbis'. Detect it here and point the
+    user at a libvorbis-capable ffmpeg install.
+    """
+    global _VORBIS_ENCODER_CACHE
+    if _VORBIS_ENCODER_CACHE is not None:
+        if _VORBIS_ENCODER_CACHE:
+            return
+        _raise_no_libvorbis()
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=15,
+        )
+        has = "libvorbis" in result.stdout
+    except Exception as e:
+        # ffmpeg missing/unresponsive -> let the encode step surface the real error
+        logger.warning(f"Could not probe ffmpeg encoders ({e}); assuming libvorbis is available.")
+        has = True
+    _VORBIS_ENCODER_CACHE = has
+    if not has:
+        _raise_no_libvorbis()
+
+
+def _raise_no_libvorbis():
+    raise RuntimeError(
+        "This ffmpeg was built WITHOUT the 'libvorbis' encoder, which is required to build "
+        "the multi-channel (10-ch) MOGG. AutoRB cannot encode audio with this ffmpeg.\n\n"
+        "The most common cause is Homebrew's macOS `ffmpeg` formula, which dropped libvorbis "
+        "in ffmpeg 8. Fix: install an ffmpeg build that includes libvorbis, e.g.:\n"
+        "  brew install ffmpeg-full      (macOS; then ensure it is on your PATH, see below)\n"
+        "or use a static build from https://ffmpeg.org/download.html (macOS builds include libvorbis).\n\n"
+        "ffmpeg-full is keg-only, so make sure its binary comes first on your PATH, e.g. for "
+        "Apple Silicon:\n"
+        "  export PATH=\"/opt/homebrew/opt/ffmpeg-full/bin:$PATH\"\n"
+        "Verify with:  ffmpeg -encoders 2>&1 | grep vorbis   # should list 'libvorbis'"
+    )
+
 
 def _parse_ogg_pages(data: bytes) -> list:
     """
@@ -236,6 +286,7 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
         # -page_duration forces small pages (~2048-3072 sample granules) matching
         # stock Harmonix moggs; ffmpeg's default libvorbis paging emits ~1s/56KB
         # pages that Rock Band's Milkshake audio engine cannot decode reliably.
+        _require_libvorbis()
         cmd.extend([
             "-filter_complex", ";".join(filter_parts),
             "-map", map_label,
@@ -278,6 +329,7 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
             map_label = "[countin]"
         else:
             map_label = "[aout]"
+        _require_libvorbis()
         cmd.extend([
             "-filter_complex", ";".join(filter_parts),
             "-map", map_label,

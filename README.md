@@ -6,7 +6,7 @@
 
 By leveraging modern AI models for stem separation, pitch detection, and vocal alignment, AutoRB automates the complex manual workflow traditionally required to create custom Rock Band tracks.
 
-NOTE: The v0.0073 release is a **vocal-only MVP** — it produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart (see [Known Limitations](#-known-limitations)). Instrument charts and the remaining roadmap items are still under active development.
+NOTE: The v0.0074 release is a **vocal-only MVP** — it produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart (see [Known Limitations](#-known-limitations)). Instrument charts and the remaining roadmap items are still under active development.
 
 ---
 
@@ -31,7 +31,7 @@ NOTE: The v0.0073 release is a **vocal-only MVP** — it produces a fully playab
 
 ## ⚠️ Known Limitations
 
-The v0.0073 release is a **vocal-only MVP** — the pipeline produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart. Be aware of what is and isn't supported yet:
+The v0.0074 release is a **vocal-only MVP** — the pipeline produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart. Be aware of what is and isn't supported yet:
 
 - **Solo vocals only.** There are no real guitar, bass, or drum charts. `PART GUITAR` / `PART BASS` / `PART DRUMS` are *placeholder tracks* (one note per difficulty) so the game loads cleanly and ForgeTool's CON→PKG conversion doesn't crash — they are **not** playable instrument charts.
 - **Instrument transcription is not functional yet.** `Basic-Pitch` is used only for vocal pitch; automatic transcription into real 5-lane instrument tracks is still on the roadmap.
@@ -90,10 +90,10 @@ AutoRB runs on **macOS, Windows, and Linux**. Because AutoRB leverages heavy mac
 ### 1. Prerequisites (All Operating Systems)
 * **Python 3.11, 3.12, or 3.13** installed on your system. **Python 3.14 is NOT supported** — WhisperX (a hard dependency for vocal alignment) caps at `<3.14`, and the only whisperx release without an upper bound pins `ctranslate2==4.4.0`, which ships no Python 3.14 wheel. The wheel's `Requires-Python` now enforces `>=3.11,<3.14`, so pip refuses early with a clear message instead of failing with `No matching distribution found for ctranslate2==4.4.0`.
   * **macOS users:** your system `python3` is likely **3.9.6** (too old — installs will fail with "requires a different Python: 3.9.6 not in '>=3.11'"). Install a current Python first: `brew install python@3.12`, or download from [python.org](https://www.python.org/downloads/). Then use `python3.12` in place of `python3` below. Verify with `python3 --version`.
-* **FFmpeg** installed and available on your system PATH (`ffmpeg -version` should succeed).
-  * **Windows:** Download FFmpeg from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) or install via Chocolatey (`choco install ffmpeg`).
-  * **macOS:** Install via Homebrew (`brew install ffmpeg`).
-  * **Linux (Ubuntu/Debian):** Install via apt (`sudo apt install ffmpeg libsndfile1`).
+* **FFmpeg** installed and available on your system PATH (`ffmpeg -version` should succeed). **Important:** AutoRB needs the `libvorbis` encoder to build the multi-channel MOGG. Homebrew's standard `ffmpeg` formula dropped libvorbis in ffmpeg 8 — if your run fails with `Unknown encoder 'libvorbis'`, install a libvorbis-capable build (see below) and confirm with `ffmpeg -encoders 2>&1 | grep vorbis` (should list `libvorbis`).
+  * **Windows:** Download FFmpeg from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) or install via Chocolatey (`choco install ffmpeg`). The full/essentials builds include libvorbis.
+  * **macOS:** Install `brew install ffmpeg-full` (which includes libvorbis; it is keg-only, so put its `bin` on PATH first — e.g. `export PATH="/opt/homebrew/opt/ffmpeg-full/bin:$PATH"` on Apple Silicon). Alternatively use a [ffmpeg.org](https://ffmpeg.org/download.html) macOS static build, which includes libvorbis. (Plain `brew install ffmpeg` since ffmpeg 8 lacks libvorbis.)
+  * **Linux (Ubuntu/Debian):** Install via apt (`sudo apt install ffmpeg libsndfile1`). Distro packages (Debian/Ubuntu/Fedora/Arch) build ffmpeg with libvorbis.
 
 ### 2. Installing AutoRB
 Open your terminal (Command Prompt/PowerShell on Windows, Terminal on macOS/Linux) and run:

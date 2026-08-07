@@ -46,6 +46,14 @@ ffmpeg ... -c:a libvorbis -q:a 5 -page_duration 40000 -f ogg out.ogg
 
 `PAGE_DURATION_US = 40000` (40 ms page target) in `mogg_builder.py` yields pages of ~2048-3072 granules at 44100 Hz. The rebuilt `output/open_road_song.mogg` has 4233 pages, avg 3414 bytes/page, granule deltas 2048/2624.
 
+### The encoder MUST be `libvorbis`, and it must exist (v0.0074)
+
+The multi-channel (10-ch) payload **cannot** be encoded by ffmpeg's built-in native `vorbis` encoder — it only supports **2 channels** (and is experimental). So `libvorbis` is a hard requirement, not a nice-to-have. Homebrew's standard `ffmpeg` formula **dropped libvorbis in ffmpeg 8**, so a fresh macOS user hit `Unknown encoder 'libvorbis'` during MOGG build. `mogg_builder.py` now probes `ffmpeg -encoders` up front (`_require_libvorbis()`, cached) and fails fast with an actionable message pointing to a libvorbis-capable build:
+- `brew install ffmpeg-full` — includes libvorbis, but is **keg-only**, so its `bin` must be put on PATH first (Apple Silicon: `export PATH="/opt/homebrew/opt/ffmpeg-full/bin:$PATH"`).
+- Or a [ffmpeg.org](https://ffmpeg.org/download.html) macOS static build (includes libvorbis).
+
+Verify with `ffmpeg -encoders 2>&1 | grep vorbis` (should list `libvorbis`).
+
 ## song_length comes from the real audio (v0.0058)
 
 `songs.dta`'s `(song_length ...)` was previously hardcoded (230162) and did not match the actual audio. `dta_writer.py` now derives it with `read_mogg_duration_ms()`: parse the MOGG `header_size` (u32 at offset 4), read the Vorbis identification header's sample rate (LE u32 at packet offset 12), take the final audio granulepos from the Ogg pages, and return `granule * 1000 // rate` ms. `generate_songs_dta(..., song_length=...)` can still override the value explicitly; it falls back to 198089 ms with a warning only if the MOGG is missing.
