@@ -72,42 +72,50 @@ def _font_regular(size: int) -> ImageFont.FreeTypeFont:
 
 
 def _draw_cp_logo(draw: ImageDraw.ImageDraw, size: int, margin: int) -> None:
-    """Draws a circular 'CP' monogram in the bottom-right corner."""
+    """Draws a 'CP' monogram in the top-left corner: a thick C forming the outer
+    circle (open on the right), with a P inscribed inside."""
     logo_d = max(14, int(size * 0.14))
-    logo_cx = size - margin - logo_d // 2 - 2
-    logo_cy = size - margin - logo_d // 2 - 2
+    logo_cx = margin + logo_d // 2 + 2
+    logo_cy = margin + logo_d // 2 + 2
 
-    # Outer ring
-    draw.ellipse(
-        [logo_cx - logo_d / 2, logo_cy - logo_d / 2, logo_cx + logo_d / 2, logo_cy + logo_d / 2],
-        outline=(255, 150, 0, 255),
-        width=max(2, logo_d // 12),
-    )
+    # Thick 'C' that forms the outer circle (open on the right ~40° gap).
+    # The C stroke is the circle itself - no separate outer ring.
+    stroke = max(3, logo_d // 10)
+    radius = logo_d // 2 - stroke // 2
 
-    # Inner 'C' + 'P' letters, drawn as thick strokes for a clean monogram.
-    stroke = max(2, logo_d // 14)
-    inner = max(6, logo_d // 2)
-
-    # 'C' on the left half
+    # C: arc from 45° to 315° (leaves a gap at 0° / 3 o'clock)
     draw.arc(
-        [logo_cx - inner, logo_cy - inner, logo_cx, logo_cy + inner],
-        start=90, end=330,
-        fill=(255, 255, 255, 255),
+        [logo_cx - radius, logo_cy - radius, logo_cx + radius, logo_cy + radius],
+        start=45, end=315,
+        fill=(255, 150, 0, 255),
         width=stroke,
     )
-    # 'P' on the right half: vertical stem + bowl
-    stem_x = logo_cx + int(logo_d * 0.02)
+
+    # 'P' inscribed inside the C: vertical stem on the left interior,
+    # bowl on the right interior (curving into the C's gap).
+    inner_radius = int(radius * 0.45)
+    p_stroke = max(2, logo_d // 14)
+
+    # P stem: vertical line on left side of interior
+    stem_x = logo_cx - int(inner_radius * 0.3)
+    stem_top = logo_cy - int(inner_radius * 0.7)
+    stem_bot = logo_cy + int(inner_radius * 0.7)
     draw.line(
-        [stem_x, logo_cy - int(logo_d * 0.28), stem_x, logo_cy + int(logo_d * 0.28)],
+        [stem_x, stem_top, stem_x, stem_bot],
         fill=(255, 255, 255, 255),
-        width=stroke,
+        width=p_stroke,
     )
-    bowl_r = int(logo_d * 0.18)
+
+    # P bowl: arc on right side of interior, curving into C's gap
+    bowl_r = inner_radius
+    bowl_cx = stem_x + bowl_r
+    bowl_cy = stem_top + bowl_r
+    # Arc from 270° (bottom) to 90° (top) - right-facing bowl
     draw.arc(
-        [stem_x, logo_cy - int(logo_d * 0.28), stem_x + 2 * bowl_r, logo_cy - int(logo_d * 0.28) + 2 * bowl_r],
+        [bowl_cx - bowl_r, bowl_cy - bowl_r, bowl_cx + bowl_r, bowl_cy + bowl_r],
         start=270, end=90,
         fill=(255, 255, 255, 255),
-        width=stroke,
+        width=p_stroke,
     )
 
 
@@ -190,7 +198,7 @@ def build_default_album_art(size: int = 256) -> Image.Image:
         fill=(20, 20, 20, 255),
     )
 
-    # Circular "CP" monogram logo in the bottom-right corner
+    # "CP" monogram logo in the top-left corner: thick C as outer circle, P inscribed inside
     _draw_cp_logo(draw, size, m)
 
     # Flatten onto an opaque black canvas so the texture encodes as DXT1

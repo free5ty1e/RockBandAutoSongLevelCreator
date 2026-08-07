@@ -77,14 +77,15 @@ def test_album_art_title_is_legible():
 
 
 def test_album_art_has_cp_logo():
-    # The circular "CP" monogram lives in the bottom-right corner.
+    # The "CP" monogram lives in the top-left corner: thick orange C (outer circle)
+    # with a white P inscribed inside.
     image = build_default_album_art(256)
-    region = image.crop((int(256 * 0.72), int(256 * 0.72), 256, 256))
+    region = image.crop((0, 0, int(256 * 0.28), int(256 * 0.28)))
     pixels = list(region.getdata())
     orange = sum(1 for p in pixels if p[0] > 200 and 100 < p[1] < 200 and p[2] < 120)
     white = sum(1 for p in pixels if p[0] > 200 and p[1] > 200 and p[2] > 200)
-    assert orange > 50   # the outer ring
-    assert white > 50    # the C + P glyphs
+    assert orange > 50   # the thick C stroke
+    assert white > 50    # the inscribed P
 
 
 def test_difficulty_ranks_use_chart_density(tmp_path):
