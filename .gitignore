@@ -32,3 +32,4 @@ tools/libforge/**/obj/
 
 # Local scratch/temp workspace
 .tmp/
+.coverage

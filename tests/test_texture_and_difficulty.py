@@ -1,8 +1,10 @@
 import numpy as np
 import pytest
-from PIL import Image
+from pathlib import Path
+from PIL import Image, ImageFont
+from unittest.mock import patch
 
-from autorb.export.album_art import build_default_album_art
+from autorb.export.album_art import build_default_album_art, _resolve_font, _load_font
 from autorb.export.difficulty import compute_ranks, count_notes_per_track
 from autorb.export.texture import (
     decode_keep_texture,
@@ -86,6 +88,30 @@ def test_album_art_has_cp_logo():
     white = sum(1 for p in pixels if p[0] > 200 and p[1] > 200 and p[2] > 200)
     assert orange > 50   # the thick C stroke
     assert white > 50    # the inscribed P
+
+
+def test_font_resolve_fallbacks():
+    # Test _resolve_font prefers bundled, then OS paths, then None
+    from autorb.export import album_art as aa
+    # Bundled exists -> returns bundled
+    assert aa._resolve_font(aa._FONT_BOLD, aa._OS_FONT_CANDIDATES) == aa._FONT_BOLD
+    # Bundled missing, OS path exists -> returns first OS path found
+    # Use a known-existing system font path as candidate
+    result = aa._resolve_font(Path("/nonexistent.ttf"), ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"])
+    assert result is not None
+    assert "/usr/share" in str(result)
+    # Bundled missing, no OS paths -> returns None
+    result = aa._resolve_font(Path("/nonexistent.ttf"), ["/nonexistent/path.ttf"])
+    assert result is None
+
+
+def test_font_load_fallback_chain():
+    # Test _load_font falls back through chain: bundled -> OS -> load_default(size=)
+    from autorb.export import album_art as aa
+    # With bundled missing and OS missing, should fall back to load_default(size=)
+    font = aa._load_font(Path("/nonexistent.ttf"), ["/nonexistent/path.ttf"], 36)
+    assert isinstance(font, ImageFont.FreeTypeFont)
+    assert getattr(font, "size", None) == 36
 
 
 def test_difficulty_ranks_use_chart_density(tmp_path):

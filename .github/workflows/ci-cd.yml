@@ -26,10 +26,15 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install -e .
-        pip install pytest
-    - name: Run Tests
+        pip install pytest pytest-cov
+    - name: Run Tests with Coverage
       run: |
-        pytest tests/
+        pytest tests/ --cov=autorb --cov-report=term-missing --cov-report=xml:coverage.xml
+    - name: Upload Coverage Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: coverage.xml
 
   build:
     needs: test
