@@ -207,6 +207,24 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     except Exception:
         pass
 
+    # A word's synced `end` can extend past the *next* word's start (the sync
+    # step stretches multi-syllable word ends across the whole phrase). If each
+    # note's duration is emitted as-is, the following note gets pushed to the
+    # previous note's end whenever the spans overlap, and the push accumulates
+    # across every overlapping pair — charted notes drift progressively later
+    # than the sung audio (the in-game vocal drift). Clipping each note's end to
+    # the next note's charted start keeps every note_on exactly at its true
+    # sung onset.
+    charted = []
+    for item in items:
+        start_sec = item.get("start", item.get("time", item.get("beat_time", 0.0)))
+        end_sec = item.get("end", start_sec + 0.5)
+        charted.append((shifted_time_to_tick(start_sec), shifted_time_to_tick(end_sec)))
+    for i in range(len(charted) - 1):
+        start_i, end_i = charted[i]
+        if end_i > charted[i + 1][0]:
+            charted[i] = (start_i, charted[i + 1][0])
+
     last_event_tick = 0
     first_note_tick = None
     last_note_end_tick = 0
@@ -216,14 +234,15 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     last_tick = 0
     current_phrase_idx = None
 
-    for item in items:
-        start_sec = item.get("start", item.get("time", item.get("beat_time", 0.0)))
-        end_sec = item.get("end", start_sec + 0.5)
+    for i, item in enumerate(items):
         lyric = item.get("word", item.get("lyric", "la"))
         pitch = item.get("pitch", 60)
 
-        target_start_tick = shifted_time_to_tick(start_sec)
-        target_end_tick = max(target_start_tick + 48, shifted_time_to_tick(end_sec))
+        target_start_tick, target_end_raw = charted[i]
+        next_start_tick = charted[i + 1][0] if i + 1 < len(charted) else target_end_raw
+        target_end_tick = max(
+            target_start_tick + 48, min(target_end_raw, next_start_tick)
+        )
 
         phrase_idx = target_start_tick // phrase_ticks
 

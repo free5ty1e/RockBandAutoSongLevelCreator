@@ -280,3 +280,79 @@ def test_no_count_in_when_beat_grid_missing(tmp_path: Path):
     # No beat grid -> no count-in -> first phrase at the first word's flat-BPM
     # tick (1.0 s @ 120 BPM = 960 ticks), i.e. the chart is unshifted.
     assert first_phrase is not None and first_phrase == 960
+
+
+def _vocal_note_ticks(mid_path: Path) -> list[int]:
+    """Returns the absolute tick of every charted vocal note (phrase markers
+    pitch 105 excluded) in emission order."""
+    mf = mido.MidiFile(mid_path)
+    voc = next(t for t in mf.tracks if t.name == "PART VOCALS")
+    abs_tick = 0
+    ticks = []
+    for msg in voc:
+        abs_tick += msg.time
+        if msg.type == "note_on" and msg.velocity > 0 and msg.note != 105:
+            ticks.append(abs_tick)
+    return ticks
+
+
+def test_overlapping_word_ends_do_not_push_notes_late(tmp_path: Path):
+    """The synced word `end` times can stretch past the *next* word's start
+    (multi-syllable end spans). Each note's on-tick must still land exactly at
+    its charted onset — a note whose end overlaps the following start must have
+    its duration clipped, NOT push every later note progressively later (the
+    in-game vocal drift bug)."""
+    from autorb.export.midi_generator import _build_tempo_grid
+
+    # 120 BPM flat grid, count-in disabled: grid_to_tick(t) = t * 960 ticks/s.
+    beat_times, bpms = [], []
+    t = 0.0
+    for i in range(40):
+        beat_times.append(t)
+        bpms.append(120.0)
+        t += 0.5
+
+    # Words whose `end` spans far past the next word's start (like the real
+    # synced_track.json: "Tonight" ends at 0.94 while "I" starts at 0.853).
+    items = [
+        {"start": 1.0, "end": 4.0, "word": "a", "pitch": 60},
+        {"start": 1.5, "end": 4.0, "word": "b", "pitch": 60},
+        {"start": 2.0, "end": 4.0, "word": "c", "pitch": 60},
+        {"start": 2.5, "end": 4.0, "word": "d", "pitch": 60},
+        {"start": 3.0, "end": 4.0, "word": "e", "pitch": 60},
+        {"start": 3.5, "end": 4.0, "word": "f", "pitch": 60},
+    ]
+    sj = tmp_path / "overlap.json"
+    sj.write_text(json.dumps({"synced_lyrics": items}))
+
+    mid_path = generate_vocal_midi(
+        sj, tmp_path, "overlap",
+        song_length_ms=10000, bpm=120.0,
+        beat_times=beat_times, dynamic_bpms=bpms,
+    )
+    ticks = _vocal_note_ticks(mid_path)
+    assert len(ticks) == len(items)
+    for item, tick in zip(items, ticks):
+        expected = int(item["start"] * 960)  # 120 BPM @ 480 tpb
+        assert tick == expected, (
+            f"word {item['word']} on-tick {tick} != charted onset {expected} "
+            f"(overlapping end pushed it late)"
+        )
+
+    # Consecutive notes must not overlap: each note_off precedes the next note.
+    mf = mido.MidiFile(mid_path)
+    voc = next(t for t in mf.tracks if t.name == "PART VOCALS")
+    abs_tick = 0
+    ons: list[int] = []
+    offs: list[int] = []
+    for msg in voc:
+        abs_tick += msg.time
+        if msg.type == "note_on" and msg.note == 60 and msg.velocity > 0:
+            ons.append(abs_tick)
+        elif msg.type == "note_off" and msg.note == 60:
+            offs.append(abs_tick)
+    assert len(ons) == len(items) == len(offs)
+    # Every note_off lands on or before the next note_on (no overlap).
+    assert all(offs[i] <= ons[i + 1] for i in range(len(ons) - 1)), (
+        f"notes overlap: offs={offs} ons={ons}"
+    )
