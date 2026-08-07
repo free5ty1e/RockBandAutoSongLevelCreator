@@ -174,24 +174,51 @@ def package_con(
     return con_file_path
 
 def _find_forgetool() -> Path:
-    """Locates the `tools/forgetool` wrapper, searching the current working
-    directory and common ancestor layouts. `--build-pkg` requires a full git
-    clone (the ForgeTool .NET binaries are not shipped in the pip wheel)."""
-    candidates = [
-        Path.cwd() / "tools" / "forgetool",
-        Path.cwd().parent / "tools" / "forgetool",
-        Path(sys.prefix) / "tools" / "forgetool",
-        Path(sys.base_prefix) / "tools" / "forgetool",
-    ]
+    """Locates the `tools/forgetool` wrapper.
+
+    `--build-pkg` requires a full git clone (the ForgeTool .NET binaries are
+    not shipped in the pip wheel), so the tool is not installed with `autorb`.
+    This searches:
+      1. The current working directory and its immediate children (the CLI is
+         often run from a parent of the clone, e.g. `temp/` with the clone at
+         `temp/RockBandAutoSongLevelCreator/`).
+      2. Every ancestor directory of the CWD (walking up to the filesystem root).
+      3. sys.prefix / sys.base_prefix.
+    The first hit wins.
+    """
+    cwd = Path.cwd()
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+
+    # (1) CWD and its immediate child dirs.
+    candidates.append(cwd / "tools" / "forgetool")
+    if cwd.is_dir():
+        for child in cwd.iterdir():
+            if child.is_dir() and not child.name.startswith("."):
+                candidates.append(child / "tools" / "forgetool")
+
+    # (2) Ancestors of the CWD, from closest to root.
+    for ancestor in cwd.parents:
+        candidates.append(ancestor / "tools" / "forgetool")
+
+    # (3) Interpreter roots.
+    candidates.append(Path(sys.prefix) / "tools" / "forgetool")
+    candidates.append(Path(sys.base_prefix) / "tools" / "forgetool")
+
     for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
         if candidate.is_file():
             return candidate
     raise RuntimeError(
         "ForgeTool not found. `--build-pkg` requires a full git clone with the "
         "vendored toolchain built:\n"
         "  git clone https://github.com/free5ty1e/RockBandAutoSongLevelCreator.git\n"
+        "  cd RockBandAutoSongLevelCreator\n"
         "  tools/build_forgetool.sh\n"
-        "  # then run from the repository root so tools/forgetool is visible.\n"
+        "  # then run the CLI from the clone, or from anywhere within/near it "
+        "(the tool is auto-discovered by searching the CWD, its child dirs, and its ancestors).\n"
         "Building the toolchain needs the .NET SDK 8 (`dotnet`) and mono-devel, "
         "e.g.: `sudo apt install mono-devel` (or `brew install mono` on macOS), "
         "plus `brew install --cask dotnet-sdk@8` (macOS) / the .NET 8 SDK installer (Linux).\n"

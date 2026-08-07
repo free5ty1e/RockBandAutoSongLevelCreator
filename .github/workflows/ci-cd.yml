@@ -214,7 +214,7 @@ jobs:
            ```
 
           The `--build-pkg` flag generates a PS4 PKG installer via the vendored ForgeTool (requires the .NET SDK 8 + Mono toolchain; run from a git clone).
-          If you get a "ForgeTool not found" error, ensure you are running from the repository root or installed via the `.whl`.
+          If you get a "ForgeTool not found" error, ensure the tool is built (`tools/build_forgetool.sh`); the CLI auto-discovers it by searching the current directory, its child dirs, and its ancestors, so you can run from the clone or any folder within/near it.
 
           ### Troubleshooting `python3 -m venv venv` failures (macOS/Linux)
 

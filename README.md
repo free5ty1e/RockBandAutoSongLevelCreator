@@ -140,7 +140,7 @@ ForgeTool is vendored as **source only** — the compiled `.exe`/`.dll` binaries
 
 **Propagation mechanics:**
 - **Devcontainer:** every fresh container runs `.devcontainer/post-install.sh` (`postCreateCommand`), which installs .NET SDK 8 to `/tmp/dotnet` and runs `tools/build_forgetool.sh` — the patched tool is compiled automatically, feature works out of the box. The container image already ships `mono-devel` for running the built tool.
-- **Git clone:** `git clone` gives you the patched source; run `tools/build_forgetool.sh` once (needs .NET SDK 8 + `mono-devel`) and run the CLI from the repository root. Re-run the script once on an existing clone to pick up newly committed patches.
+- **Git clone:** `git clone` gives you the patched source; run `tools/build_forgetool.sh` once (needs .NET SDK 8 + `mono-devel`) and run the CLI from the repository root (or anywhere within/near it — `_find_forgetool()` auto-discovers the tool by searching the CWD, its child dirs, and its ancestors). Re-run the script once on an existing clone to pick up newly committed patches.
 - **Release wheels:** ForgeTool is never shipped (neither binaries nor the source tree), by design — the wheel is pure Python. All non-ForgeTool features are fully available.
 
 ### Troubleshooting `python3 -m venv venv` failures (macOS/Linux)

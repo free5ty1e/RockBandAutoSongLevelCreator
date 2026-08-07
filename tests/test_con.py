@@ -49,3 +49,25 @@ def test_con_packaging_and_validation(tmp_path):
     assert f"/songs/{song_id}/{song_id}.mogg" in result["virtual_paths"]
     assert f"/songs/{song_id}/{song_id}.mid" in result["virtual_paths"]
     assert "/songs/songs.dta" in result["virtual_paths"]
+
+
+def test_find_forgetool_child_and_ancestor(tmp_path, monkeypatch):
+    """--build-pkg discovery must find tools/forgetool when running from a
+    parent of the clone (immediate child) and from a deep subdir (ancestor)."""
+    from autorb.export.con_packer import _find_forgetool
+
+    clone = tmp_path / "RockBandAutoSongLevelCreator"
+    tools = clone / "tools"
+    tools.mkdir(parents=True)
+    wrapper = tools / "forgetool"
+    wrapper.write_text("#!/bin/bash\n")
+
+    # Case 1: run from the PARENT of the clone (immediate child search).
+    monkeypatch.chdir(tmp_path)
+    assert _find_forgetool() == wrapper
+
+    # Case 2: run from a DEEP subdir inside the clone (ancestor walk).
+    deep = clone / "autorb" / "export"
+    deep.mkdir(parents=True)
+    monkeypatch.chdir(deep)
+    assert _find_forgetool() == wrapper
