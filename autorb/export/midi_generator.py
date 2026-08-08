@@ -28,6 +28,51 @@ def encode_varlen(value: int) -> bytes:
 PLACEHOLDER_NOTE_PITCH = 60
 PLACEHOLDER_DIFFICULTY_PITCHES = (60, 72, 84, 96)
 
+# Pyphen for splitting words into display syllables
+try:
+    import pyphen
+    _PYPHEN_DIC = pyphen.Pyphen(lang='en_GB')
+except Exception:
+    _PYPHEN_DIC = None
+
+
+def split_syllable_for_display(text: str, num_segments: int) -> list:
+    """
+    Split a word into sub-syllables for Rock Band lyric display.
+    
+    Uses pyphen hyphenation when available. If the word splits into
+    fewer syllables than note segments, repeats the last syllable.
+    If more, merges extras onto the last syllable.
+    """
+    if not text or num_segments <= 1:
+        return [text] if num_segments > 0 else []
+    
+    if _PYPHEN_DIC is None:
+        # Fallback: repeat text for all segments
+        return [text] * num_segments
+    
+    positions = _PYPHEN_DIC.positions(text)
+    if not positions:
+        # Single syllable word - repeat for all segments
+        return [text] * num_segments
+    
+    # Build syllable texts from hyphenation positions
+    syllables = []
+    last = 0
+    for pos in positions:
+        syllables.append(text[last:pos])
+        last = pos
+    syllables.append(text[last:])
+    
+    if len(syllables) == num_segments:
+        return syllables
+    elif len(syllables) < num_segments:
+        # Distribute extra segments: repeat last syllable
+        return syllables + [syllables[-1]] * (num_segments - len(syllables))
+    else:
+        # More syllables than segments: merge extras onto last segment
+        return syllables[:num_segments-1] + ["".join(syllables[num_segments-1:])]
+
 # Mandatory count-in, per the C3 authoring guide: very fast songs (>=160 BPM)
 # need a 3-measure count-in. Sized at runtime from the song's opening tempo
 # (first beat-grid interval), mirroring stock RB3 DLC (311 - Down bakes ~5s of
@@ -207,18 +252,67 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     except Exception:
         pass
 
-    # A word's synced `end` can extend past the *next* word's start (the sync
-    # step stretches multi-syllable word ends across the whole phrase). If each
-    # note's duration is emitted as-is, the following note gets pushed to the
-    # previous note's end whenever the spans overlap, and the push accumulates
-    # across every overlapping pair — charted notes drift progressively later
-    # than the sung audio (the in-game vocal drift). Clipping each note's end to
-    # the next note's charted start keeps every note_on exactly at its true
-    # sung onset.
+    # Flatten all syllables with their note segments into a single timeline.
+    # Each item (word) now has a "syllables" list, each syllable has "note_segments".
+    # We build a flat list of (start_sec, end_sec, pitch, lyric, is_phrase_start)
+    # where each note_segment becomes one MIDI note.
+    note_items = []
+    for word in items:
+        syllables = word.get("syllables", [])
+        if not syllables:
+            # Backward compat: word has no syllables, use its pitch directly
+            start_sec = word.get("start", word.get("time", word.get("beat_time", 0.0)))
+            end_sec = word.get("end", start_sec + 0.5)
+            pitch = word.get("pitch", 60)
+            lyric = word.get("word", word.get("lyric", "la"))
+            note_items.append((start_sec, end_sec, pitch, lyric, False))
+        else:
+            for syl in syllables:
+                segs = syl.get("note_segments", [])
+                syl_text = syl.get("text", "la")
+                syl_start = syl.get("start", 0.0)
+                syl_end = syl.get("end", syl_start + 0.3)
+                
+                if not segs:
+                    # Fallback
+                    pitch = word.get("pitch", 60)
+                    note_items.append((syl_start, syl_end, pitch, syl_text, False))
+                else:
+                    # Make segments within the same syllable CONTIGUOUS (no gaps).
+                    # The end of segment N = start of segment N+1.
+                    # Only the last segment of a syllable can have a gap to the next syllable.
+                    contiguous_segs = []
+                    for j, seg in enumerate(segs):
+                        start_sec = seg.get("start", syl_start)
+                        end_sec = seg.get("end", syl_end)
+                        if j < len(segs) - 1:
+                            # Next segment's start becomes this segment's end
+                            next_start = segs[j + 1].get("start", start_sec)
+                            end_sec = next_start
+                        contiguous_segs.append((start_sec, end_sec, seg.get("midi_note", 60)))
+                    
+                    # Split syllable text into display sub-syllables using pyphen
+                    # for Rock Band lyric rendering (one sub-syllable per note segment)
+                    sub_syllables = split_syllable_for_display(syl_text, len(contiguous_segs))
+                    
+                    for j, (start_sec, end_sec, pitch) in enumerate(contiguous_segs):
+                        # Assign each segment its sub-syllable for Rock Band display
+                        if sub_syllables:
+                            lyric = sub_syllables.pop(0)
+                        else:
+                            lyric = ""
+                        note_items.append((start_sec, end_sec, pitch, lyric, False))
+
+    if not note_items:
+        # Empty fallback
+        note_items = [(0.0, 0.5, 60, "la", False)]
+
+    # Sort by start time
+    note_items.sort(key=lambda x: x[0])
+
+    # Now clip overlapping ends (same logic as before, but on the flat note list)
     charted = []
-    for item in items:
-        start_sec = item.get("start", item.get("time", item.get("beat_time", 0.0)))
-        end_sec = item.get("end", start_sec + 0.5)
+    for start_sec, end_sec, pitch, lyric, _ in note_items:
         charted.append((shifted_time_to_tick(start_sec), shifted_time_to_tick(end_sec)))
     for i in range(len(charted) - 1):
         start_i, end_i = charted[i]
@@ -234,10 +328,7 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     last_tick = 0
     current_phrase_idx = None
 
-    for i, item in enumerate(items):
-        lyric = item.get("word", item.get("lyric", "la"))
-        pitch = item.get("pitch", 60)
-
+    for i, (start_sec, end_sec, pitch, lyric, _) in enumerate(note_items):
         target_start_tick, target_end_raw = charted[i]
         next_start_tick = charted[i + 1][0] if i + 1 < len(charted) else target_end_raw
         target_end_tick = max(
@@ -269,8 +360,9 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
         vocal_events.extend(encode_varlen(delta_on))
         vocal_events.extend(b"\x90" + bytes([pitch, 100]))
 
-        lyric_bytes = lyric.encode('utf-8')
-        vocal_events.extend(b"\x00\xFF\x05" + bytes([len(lyric_bytes)]) + lyric_bytes)
+        if lyric:
+            lyric_bytes = lyric.encode('utf-8')
+            vocal_events.extend(b"\x00\xFF\x05" + bytes([len(lyric_bytes)]) + lyric_bytes)
 
         vocal_events.extend(encode_varlen(duration))
         vocal_events.extend(b"\x80" + bytes([pitch, 0]))

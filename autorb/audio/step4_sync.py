@@ -4,6 +4,9 @@ import json
 import os
 import warnings
 import numpy as np
+from pathlib import Path
+
+from autorb.transcribe.syllables import segment_all_words_to_syllables
 
 def load_json(filepath):
     """Utility to load a JSON file."""
@@ -254,18 +257,23 @@ def _resolve_pitches(starts, ends, note_events, times, f0, voiced, probs):
     return pitches
 
 
-def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None):
+def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=None):
     """
     Maps word segments to the nearest beat time.
 
     ``vocals_stem`` (optional) is the path to the vocal stem WAV; when given,
     its true attack onsets (librosa) drive the per-word start snap so charted
-    notes land on the real sung onset instead of WhisperX's late boundary, and a
-    per-word pyin analysis is used to choose accurate vocal pitches.
+    notes land on the real sung onset instead of WhisperX's late boundary.
+    
+    ``lrc_path`` (optional) is the path to the LRC file for syllable-level timing.
     """
     beat_times = beats_data.get("beat_times", [])
     word_segments = lyrics_data.get("word_segments", [])
     note_events = lyrics_data.get("note_events", [])
+    alignment_result = lyrics_data.get("alignment_result", {})
+    
+    # NEW: Load per-syllable pitch data from cache (v2 format)
+    syllable_pitches = lyrics_data.get("syllable_pitches", [])
 
     vocal_onsets = _detect_vocal_onsets(vocals_stem) if vocals_stem else None
     if vocal_onsets:
@@ -293,29 +301,129 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None):
             "confidence_score": segment.get("score", 1.0)
         })
 
-    # Second pass: resolve pitches using per-word pyin + melodic contour.
-    starts = np.array([r["start"] for r in refined], dtype=float)
-    ends = np.array([r["end"] for r in refined], dtype=float)
+    # Second pass: syllable segmentation
+    lrc_data = None
+    if lrc_path and Path(lrc_path).exists():
+        lrc_data = lyrics_data.get("lyrics_data", [])
+    
+    # Add syllable segmentation
+    refined = segment_all_words_to_syllables(
+        refined,
+        lrc_data=lrc_data,
+        whisperx_alignment=alignment_result,
+    )
 
-    f0 = voiced = probs = times = None
-    if vocals_stem:
-        try:
-            import librosa
-            y, sr = librosa.load(str(vocals_stem), sr=22050, mono=True)
-            f0, voiced, probs = librosa.pyin(
-                y,
-                fmin=librosa.note_to_hz("C2"),
-                fmax=librosa.note_to_hz("C6"),
-                sr=sr,
-                frame_length=2048,
-            )
-            times = librosa.times_like(f0, sr=sr)
-        except Exception:
-            pass
+    # Third pass: attach per-syllable pitch data from cache
+    if syllable_pitches:
+        # The syllable_pitches from cache are in the SAME ORDER as WhisperX
+        # word_segments (284 entries each). The refined words are also sorted
+        # from the same WhisperX word_segments. Match by INDEX, not time,
+        # because refined words have extended end times that overlap with
+        # subsequent syllables.
+        #
+        # Both lists should have the same length (one per WhisperX word).
+        # If lengths differ, fall back to time-based matching.
+        if len(syllable_pitches) == len(refined):
+            for wi, (word, sp) in enumerate(zip(refined, syllable_pitches)):
+                # Shift syllable timing from original WhisperX timing to
+                # refined (onset-snapped) timing.
+                shift = word["start"] - sp["syllable_start"]
+                shifted_segs = []
+                for seg in sp["note_segments"]:
+                    shifted_segs.append({
+                        "start": seg["start"] + shift,
+                        "end": seg["end"] + shift,
+                        "midi_note": seg["midi_note"],
+                        "confidence": seg["confidence"]
+                    })
+                word["syllables"] = [{
+                    "text": sp["syllable_text"],
+                    "start": word["start"],
+                    "end": word["end"],
+                    "source": "cache",
+                    "note_segments": shifted_segs,
+                    "pitch_trusted": sp["is_trusted"]
+                }]
+        else:
+            # Fallback: time-based matching (old behavior)
+            word_syllables = [[] for _ in refined]
+            for sp in syllable_pitches:
+                syl_start = sp["syllable_start"]
+                for wi, word in enumerate(refined):
+                    if word["start"] - 0.1 <= syl_start <= word["end"] + 0.1:
+                        word_syllables[wi].append({
+                            "text": sp["syllable_text"],
+                            "start": sp["syllable_start"],
+                            "end": sp["syllable_end"],
+                            "source": "cache",
+                            "note_segments": sp["note_segments"],
+                            "pitch_trusted": sp["is_trusted"]
+                        })
+                        break
+            
+            for wi, word in enumerate(refined):
+                if word_syllables[wi]:
+                    word_syllables[wi].sort(key=lambda s: s["start"])
+                    word["syllables"] = word_syllables[wi]
+                else:
+                    word["syllables"] = [{
+                        "text": word["word"],
+                        "start": word["start"],
+                        "end": word["end"],
+                        "source": "fallback",
+                        "note_segments": [{
+                            "start": word["start"],
+                            "end": word["end"],
+                            "midi_note": word.get("pitch", 60),
+                            "confidence": 0.5
+                        }],
+                        "pitch_trusted": False
+                    }]
+    else:
+        # No v2 cache - fall back to old per-word pitch logic
+        # (This path is for backward compatibility with old caches)
+        starts = np.array([r["start"] for r in refined], dtype=float)
+        ends = np.array([r["end"] for r in refined], dtype=float)
 
-    pitches = _resolve_pitches(starts, ends, note_events, times, f0, voiced, probs)
-    for r, p in zip(refined, pitches):
-        r["pitch"] = int(max(VOCAL_MIDI_MIN, min(VOCAL_MIDI_MAX, p)))
+        f0 = voiced = probs = times = None
+        if vocals_stem:
+            try:
+                import librosa
+                y, sr = librosa.load(str(vocals_stem), sr=22050, mono=True)
+                f0, voiced, probs = librosa.pyin(
+                    y,
+                    fmin=librosa.note_to_hz("C2"),
+                    fmax=librosa.note_to_hz("C6"),
+                    sr=sr,
+                    frame_length=2048,
+                )
+                times = librosa.times_like(f0, sr=sr)
+            except Exception:
+                pass
+
+        pitches = _resolve_pitches(starts, ends, note_events, times, f0, voiced, probs)
+        for r, p in zip(refined, pitches):
+            r["pitch"] = int(max(VOCAL_MIDI_MIN, min(VOCAL_MIDI_MAX, p)))
+        
+        # Run syllable segmentation for display purposes
+        lrc_data = None
+        if lrc_path and Path(lrc_path).exists():
+            lrc_data = lyrics_data.get("lyrics_data", [])
+        refined = segment_all_words_to_syllables(
+            refined,
+            lrc_data=lrc_data,
+            whisperx_alignment=alignment_result,
+            whisperx_word_segments=lyrics_data.get("word_segments", []),
+        )
+        for word in refined:
+            for syl in word.get("syllables", []):
+                syl["note_segments"] = [{
+                    "start": syl["start"],
+                    "end": syl["end"],
+                    "midi_note": word.get("pitch", 60),
+                    "confidence": 0.5
+                }]
+                syl["pitch_trusted"] = False
 
     return {
         "metadata": {
@@ -326,11 +434,12 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None):
     }
 
 
-def run_step_4(beats_filepath, lyrics_filepath, output_filepath, vocals_stem=None):
+def run_step_4(beats_filepath, lyrics_filepath, output_filepath, vocals_stem=None, lrc_path=None):
     """Main execution function for Step 4.
 
     ``vocals_stem`` optionally supplies the vocal stem WAV so each word's start
     snaps to the true sung attack rather than WhisperX's late boundary.
+    ``lrc_path`` optionally supplies the original LRC file for syllable parsing.
     """
     if not os.path.exists(beats_filepath) or not os.path.exists(lyrics_filepath):
         raise FileNotFoundError("Could not find the input JSON files from steps 2 and 3.")
@@ -340,7 +449,7 @@ def run_step_4(beats_filepath, lyrics_filepath, output_filepath, vocals_stem=Non
 
     print(f"Loaded {len(beats_data['beat_times'])} beats and {len(lyrics_data['word_segments'])} word segments.")
 
-    synced_output = sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=vocals_stem)
+    synced_output = sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=vocals_stem, lrc_path=lrc_path)
 
     with open(output_filepath, 'w') as f:
         json.dump(synced_output, f, indent=4)

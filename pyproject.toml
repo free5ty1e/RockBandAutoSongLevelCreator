@@ -35,7 +35,7 @@ dependencies = [
 version = {attr = "autorb.version.__version__"}
 
 [tool.setuptools]
-packages = ["autorb", "autorb.audio", "autorb.export", "autorb.pitch"]
+packages = ["autorb", "autorb.audio", "autorb.export", "autorb.pitch", "autorb.transcribe"]
 
 [tool.setuptools.package-data]
 autorb = ["export/data/*.con", "export/data/*.bin", "export/data/fonts/*.ttf"]
