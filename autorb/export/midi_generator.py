@@ -296,9 +296,8 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
                     sub_syllables = split_syllable_for_display(syl_text, len(contiguous_segs))
                     
                     for j, (start_sec, end_sec, pitch) in enumerate(contiguous_segs):
-                        # Assign lyric: first segment gets the sub-syllable text,
-                        # subsequent segments of same syllable get empty (continues previous)
-                        if j == 0 and sub_syllables:
+                        # Assign each segment its sub-syllable for Rock Band display
+                        if sub_syllables:
                             lyric = sub_syllables.pop(0)
                         else:
                             lyric = ""
