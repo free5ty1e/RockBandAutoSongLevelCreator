@@ -207,18 +207,49 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     except Exception:
         pass
 
-    # A word's synced `end` can extend past the *next* word's start (the sync
-    # step stretches multi-syllable word ends across the whole phrase). If each
-    # note's duration is emitted as-is, the following note gets pushed to the
-    # previous note's end whenever the spans overlap, and the push accumulates
-    # across every overlapping pair — charted notes drift progressively later
-    # than the sung audio (the in-game vocal drift). Clipping each note's end to
-    # the next note's charted start keeps every note_on exactly at its true
-    # sung onset.
+    # Flatten all syllables with their note segments into a single timeline.
+    # Each item (word) now has a "syllables" list, each syllable has "note_segments".
+    # We build a flat list of (start_sec, end_sec, pitch, lyric, is_phrase_start)
+    # where each note_segment becomes one MIDI note.
+    note_items = []
+    for word in items:
+        syllables = word.get("syllables", [])
+        if not syllables:
+            # Backward compat: word has no syllables, use its pitch directly
+            start_sec = word.get("start", word.get("time", word.get("beat_time", 0.0)))
+            end_sec = word.get("end", start_sec + 0.5)
+            pitch = word.get("pitch", 60)
+            lyric = word.get("word", word.get("lyric", "la"))
+            note_items.append((start_sec, end_sec, pitch, lyric, False))
+        else:
+            for syl in syllables:
+                segs = syl.get("note_segments", [])
+                if not segs:
+                    # Fallback
+                    start_sec = syl.get("start", 0.0)
+                    end_sec = syl.get("end", start_sec + 0.3)
+                    pitch = word.get("pitch", 60)
+                    lyric = syl.get("text", "la")
+                    note_items.append((start_sec, end_sec, pitch, lyric, False))
+                else:
+                    for j, seg in enumerate(segs):
+                        start_sec = seg.get("start", syl.get("start", 0.0))
+                        end_sec = seg.get("end", syl.get("end", start_sec + 0.1))
+                        pitch = seg.get("midi_note", 60)
+                        # Only put lyric on the first segment of each syllable
+                        lyric = syl.get("text", "la") if j == 0 else ""
+                        note_items.append((start_sec, end_sec, pitch, lyric, False))
+
+    if not note_items:
+        # Empty fallback
+        note_items = [(0.0, 0.5, 60, "la", False)]
+
+    # Sort by start time
+    note_items.sort(key=lambda x: x[0])
+
+    # Now clip overlapping ends (same logic as before, but on the flat note list)
     charted = []
-    for item in items:
-        start_sec = item.get("start", item.get("time", item.get("beat_time", 0.0)))
-        end_sec = item.get("end", start_sec + 0.5)
+    for start_sec, end_sec, pitch, lyric, _ in note_items:
         charted.append((shifted_time_to_tick(start_sec), shifted_time_to_tick(end_sec)))
     for i in range(len(charted) - 1):
         start_i, end_i = charted[i]
@@ -234,10 +265,7 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     last_tick = 0
     current_phrase_idx = None
 
-    for i, item in enumerate(items):
-        lyric = item.get("word", item.get("lyric", "la"))
-        pitch = item.get("pitch", 60)
-
+    for i, (start_sec, end_sec, pitch, lyric, _) in enumerate(note_items):
         target_start_tick, target_end_raw = charted[i]
         next_start_tick = charted[i + 1][0] if i + 1 < len(charted) else target_end_raw
         target_end_tick = max(
@@ -269,8 +297,9 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
         vocal_events.extend(encode_varlen(delta_on))
         vocal_events.extend(b"\x90" + bytes([pitch, 100]))
 
-        lyric_bytes = lyric.encode('utf-8')
-        vocal_events.extend(b"\x00\xFF\x05" + bytes([len(lyric_bytes)]) + lyric_bytes)
+        if lyric:
+            lyric_bytes = lyric.encode('utf-8')
+            vocal_events.extend(b"\x00\xFF\x05" + bytes([len(lyric_bytes)]) + lyric_bytes)
 
         vocal_events.extend(encode_varlen(duration))
         vocal_events.extend(b"\x80" + bytes([pitch, 0]))

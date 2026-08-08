@@ -75,12 +75,77 @@ def process_vocals(vocal_stem_path, lrc_path, out_dir):
     _, _, note_events = predict(str(vocal_stem_path))
     click.echo(f"Extracted {len(note_events)} distinct vocal notes.")
 
-    # Cache the extracted data
+    # NEW: Run per-syllable pitch tracking (dense pyin + change-point segmentation)
+    click.echo("Running per-syllable pitch tracking...")
+    from autorb.transcribe.syllables import segment_all_words_to_syllables
+    from autorb.transcribe.pitch_tracking import (
+        compute_vocal_pitch_per_syllable,
+        build_melodic_contour_from_syllables,
+        resolve_syllable_pitches_with_fallback,
+    )
+    
+    # First, get syllable segmentation for all words
+    synced_words = []
+    for seg in word_segments:
+        synced_words.append({
+            "word": seg["word"],
+            "start": seg.get("start", seg.get("time", 0.0)),
+            "end": seg.get("end", seg.get("start", 0.0) + 0.3),
+        })
+    
+    # Add syllable segmentation
+    synced_words = segment_all_words_to_syllables(
+        synced_words,
+        lrc_data=lyrics_data,
+        whisperx_alignment=alignment_result,
+    )
+    
+    # Collect all syllables across all words
+    all_syllables = []
+    for word in synced_words:
+        for syl in word.get("syllables", []):
+            all_syllables.append(syl)
+    
+    click.echo(f"Segmented into {len(all_syllables)} syllables.")
+    
+    # Compute pitch for each syllable
+    syllable_pitches = compute_vocal_pitch_per_syllable(all_syllables, str(vocal_stem_path))
+    
+    # Build melodic contour from trusted syllables
+    melodic_contour = build_melodic_contour_from_syllables(syllable_pitches)
+    
+    # Resolve untrusted syllables with Basic-Pitch fallback
+    syllable_pitches = resolve_syllable_pitches_with_fallback(
+        syllable_pitches, note_events, melodic_contour
+    )
+    
+    # Convert to serializable format
+    syllable_pitch_data = []
+    for syl in syllable_pitches:
+        segs = []
+        for seg in syl.note_segments:
+            segs.append({
+                "start": seg.start,
+                "end": seg.end,
+                "midi_note": seg.midi_note,
+                "confidence": seg.confidence,
+            })
+        syllable_pitch_data.append({
+            "syllable_text": syl.syllable_text,
+            "syllable_start": syl.syllable_start,
+            "syllable_end": syl.syllable_end,
+            "note_segments": segs,
+            "is_trusted": syl.is_trusted,
+        })
+    
+    # Cache the extracted data (v2 format with per-syllable pitch)
     cache_data = {
+        "version": 2,
         "lyrics_data": lyrics_data,
         "word_segments": word_segments,
         "note_events": note_events,
-        "alignment_result": alignment_result  # Save full result for syllable segmentation
+        "alignment_result": alignment_result,
+        "syllable_pitches": syllable_pitch_data,  # NEW v2 format
     }
     
     cache_path = out_dir / "vocals_cache.json"
@@ -100,4 +165,8 @@ def load_vocals_cache(out_dir):
     with open(cache_path, "r") as f:
         data = json.load(f)
         
-    return data["lyrics_data"], data["word_segments"], data["note_events"]
+    # Support both v1 and v2 cache formats
+    if data.get("version") == 2:
+        return data["lyrics_data"], data["word_segments"], data["note_events"], data.get("syllable_pitches", [])
+    else:
+        return data["lyrics_data"], data["word_segments"], data["note_events"], []

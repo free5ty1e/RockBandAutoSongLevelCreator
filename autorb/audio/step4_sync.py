@@ -263,8 +263,7 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
 
     ``vocals_stem`` (optional) is the path to the vocal stem WAV; when given,
     its true attack onsets (librosa) drive the per-word start snap so charted
-    notes land on the real sung onset instead of WhisperX's late boundary, and a
-    per-word pyin analysis is used to choose accurate vocal pitches.
+    notes land on the real sung onset instead of WhisperX's late boundary.
     
     ``lrc_path`` (optional) is the path to the LRC file for syllable-level timing.
     """
@@ -272,6 +271,9 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
     word_segments = lyrics_data.get("word_segments", [])
     note_events = lyrics_data.get("note_events", [])
     alignment_result = lyrics_data.get("alignment_result", {})
+    
+    # NEW: Load per-syllable pitch data from cache (v2 format)
+    syllable_pitches = lyrics_data.get("syllable_pitches", [])
 
     vocal_onsets = _detect_vocal_onsets(vocals_stem) if vocals_stem else None
     if vocal_onsets:
@@ -299,35 +301,9 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
             "confidence_score": segment.get("score", 1.0)
         })
 
-    # Second pass: resolve pitches using per-word pyin + melodic contour.
-    starts = np.array([r["start"] for r in refined], dtype=float)
-    ends = np.array([r["end"] for r in refined], dtype=float)
-
-    f0 = voiced = probs = times = None
-    if vocals_stem:
-        try:
-            import librosa
-            y, sr = librosa.load(str(vocals_stem), sr=22050, mono=True)
-            f0, voiced, probs = librosa.pyin(
-                y,
-                fmin=librosa.note_to_hz("C2"),
-                fmax=librosa.note_to_hz("C6"),
-                sr=sr,
-                frame_length=2048,
-            )
-            times = librosa.times_like(f0, sr=sr)
-        except Exception:
-            pass
-
-    pitches = _resolve_pitches(starts, ends, note_events, times, f0, voiced, probs)
-    for r, p in zip(refined, pitches):
-        r["pitch"] = int(max(VOCAL_MIDI_MIN, min(VOCAL_MIDI_MAX, p)))
-
-    # Third pass: syllable segmentation
+    # Second pass: syllable segmentation
     lrc_data = None
     if lrc_path and Path(lrc_path).exists():
-        # The original LRC file path - we'll parse it in the syllable module
-        # The lyrics_data already has the parsed "lyrics_data" from the cache
         lrc_data = lyrics_data.get("lyrics_data", [])
     
     # Add syllable segmentation
@@ -336,6 +312,69 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
         lrc_data=lrc_data,
         whisperx_alignment=alignment_result,
     )
+
+    # Third pass: attach per-syllable pitch data from cache
+    if syllable_pitches:
+        # Build a lookup: (syllable_text, start_time, end_time) -> pitch data
+        # Use approximate time matching since cache times may differ slightly
+        pitch_lookup = {}
+        for sp in syllable_pitches:
+            key = (sp["syllable_text"], round(sp["syllable_start"], 2), round(sp["syllable_end"], 2))
+            pitch_lookup[key] = sp
+        
+        # Attach pitch data to syllables
+        for word in refined:
+            for syl in word.get("syllables", []):
+                key = (syl["text"], round(syl["start"], 2), round(syl["end"], 2))
+                if key in pitch_lookup:
+                    sp = pitch_lookup[key]
+                    syl["note_segments"] = sp["note_segments"]
+                    syl["pitch_trusted"] = sp["is_trusted"]
+                elif "note_segments" not in syl:
+                    # Fallback: use word-level pitch if available (backward compat)
+                    syl["note_segments"] = [{
+                        "start": syl["start"],
+                        "end": syl["end"],
+                        "midi_note": word.get("pitch", 60),
+                        "confidence": 0.5
+                    }]
+                    syl["pitch_trusted"] = False
+    else:
+        # No v2 cache - fall back to old per-word pitch logic
+        # (This path is for backward compatibility with old caches)
+        starts = np.array([r["start"] for r in refined], dtype=float)
+        ends = np.array([r["end"] for r in refined], dtype=float)
+
+        f0 = voiced = probs = times = None
+        if vocals_stem:
+            try:
+                import librosa
+                y, sr = librosa.load(str(vocals_stem), sr=22050, mono=True)
+                f0, voiced, probs = librosa.pyin(
+                    y,
+                    fmin=librosa.note_to_hz("C2"),
+                    fmax=librosa.note_to_hz("C6"),
+                    sr=sr,
+                    frame_length=2048,
+                )
+                times = librosa.times_like(f0, sr=sr)
+            except Exception:
+                pass
+
+        pitches = _resolve_pitches(starts, ends, note_events, times, f0, voiced, probs)
+        for r, p in zip(refined, pitches):
+            r["pitch"] = int(max(VOCAL_MIDI_MIN, min(VOCAL_MIDI_MAX, p)))
+        
+        # Attach single pitch to each syllable as fallback
+        for word in refined:
+            for syl in word.get("syllables", []):
+                syl["note_segments"] = [{
+                    "start": syl["start"],
+                    "end": syl["end"],
+                    "midi_note": word.get("pitch", 60),
+                    "confidence": 0.5
+                }]
+                syl["pitch_trusted"] = False
 
     return {
         "metadata": {
