@@ -79,7 +79,8 @@ def process_vocals(vocal_stem_path, lrc_path, out_dir):
     cache_data = {
         "lyrics_data": lyrics_data,
         "word_segments": word_segments,
-        "note_events": note_events
+        "note_events": note_events,
+        "alignment_result": alignment_result  # Save full result for syllable segmentation
     }
     
     cache_path = out_dir / "vocals_cache.json"

@@ -4,6 +4,9 @@ import json
 import os
 import warnings
 import numpy as np
+from pathlib import Path
+
+from autorb.transcribe.syllables import segment_all_words_to_syllables
 
 def load_json(filepath):
     """Utility to load a JSON file."""
@@ -254,7 +257,7 @@ def _resolve_pitches(starts, ends, note_events, times, f0, voiced, probs):
     return pitches
 
 
-def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None):
+def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=None):
     """
     Maps word segments to the nearest beat time.
 
@@ -262,10 +265,13 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None):
     its true attack onsets (librosa) drive the per-word start snap so charted
     notes land on the real sung onset instead of WhisperX's late boundary, and a
     per-word pyin analysis is used to choose accurate vocal pitches.
+    
+    ``lrc_path`` (optional) is the path to the LRC file for syllable-level timing.
     """
     beat_times = beats_data.get("beat_times", [])
     word_segments = lyrics_data.get("word_segments", [])
     note_events = lyrics_data.get("note_events", [])
+    alignment_result = lyrics_data.get("alignment_result", {})
 
     vocal_onsets = _detect_vocal_onsets(vocals_stem) if vocals_stem else None
     if vocal_onsets:
@@ -317,6 +323,20 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None):
     for r, p in zip(refined, pitches):
         r["pitch"] = int(max(VOCAL_MIDI_MIN, min(VOCAL_MIDI_MAX, p)))
 
+    # Third pass: syllable segmentation
+    lrc_data = None
+    if lrc_path and Path(lrc_path).exists():
+        # The original LRC file path - we'll parse it in the syllable module
+        # The lyrics_data already has the parsed "lyrics_data" from the cache
+        lrc_data = lyrics_data.get("lyrics_data", [])
+    
+    # Add syllable segmentation
+    refined = segment_all_words_to_syllables(
+        refined,
+        lrc_data=lrc_data,
+        whisperx_alignment=alignment_result,
+    )
+
     return {
         "metadata": {
             "total_beats": len(beat_times),
@@ -326,11 +346,12 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None):
     }
 
 
-def run_step_4(beats_filepath, lyrics_filepath, output_filepath, vocals_stem=None):
+def run_step_4(beats_filepath, lyrics_filepath, output_filepath, vocals_stem=None, lrc_path=None):
     """Main execution function for Step 4.
 
     ``vocals_stem`` optionally supplies the vocal stem WAV so each word's start
     snaps to the true sung attack rather than WhisperX's late boundary.
+    ``lrc_path`` optionally supplies the original LRC file for syllable parsing.
     """
     if not os.path.exists(beats_filepath) or not os.path.exists(lyrics_filepath):
         raise FileNotFoundError("Could not find the input JSON files from steps 2 and 3.")
@@ -340,7 +361,7 @@ def run_step_4(beats_filepath, lyrics_filepath, output_filepath, vocals_stem=Non
 
     print(f"Loaded {len(beats_data['beat_times'])} beats and {len(lyrics_data['word_segments'])} word segments.")
 
-    synced_output = sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=vocals_stem)
+    synced_output = sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=vocals_stem, lrc_path=lrc_path)
 
     with open(output_filepath, 'w') as f:
         json.dump(synced_output, f, indent=4)
