@@ -245,3 +245,40 @@ class TestComputeVocalPitchPerSyllable:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+class TestSplitSyllableForDisplay:
+    def test_splits_correctly(self):
+        from autorb.export.midi_generator import split_syllable_for_display
+        
+        # Words that pyphen splits
+        assert split_syllable_for_display("unconditional", 3) == ['un', 'con', 'ditional']
+        assert split_syllable_for_display("flying", 2) == ['fly', 'ing']
+        assert split_syllable_for_display("lonesome", 2) == ['lone', 'some']
+        assert split_syllable_for_display("moment", 2) == ['mo', 'ment']
+        assert split_syllable_for_display("perfect", 2) == ['per', 'fect']
+        assert split_syllable_for_display("ambitious", 3) == ['am', 'bi', 'tious']
+        assert split_syllable_for_display("beautiful", 3) == ['beau', 'ti', 'ful']
+        assert split_syllable_for_display("computer", 2) == ['com', 'puter']
+        
+    def test_single_segment(self):
+        from autorb.export.midi_generator import split_syllable_for_display
+        assert split_syllable_for_display("Tonight", 1) == ['Tonight']
+        
+    def test_unsplittable_word(self):
+        from autorb.export.midi_generator import split_syllable_for_display
+        # Words pyphen doesn't split repeat full text for all segments
+        result = split_syllable_for_display("eighty", 2)
+        assert result == ["eighty", "eighty"]
+        
+    def test_more_segments_than_syllables(self):
+        from autorb.export.midi_generator import split_syllable_for_display
+        # "fly" (1 syllable) with 3 segments -> ['fly', 'fly', 'fly']
+        result = split_syllable_for_display("fly", 3)
+        assert result == ['fly', 'fly', 'fly']
+        
+    def test_more_syllables_than_segments(self):
+        from autorb.export.midi_generator import split_syllable_for_display
+        # "unconditional" (4 syllables) with 2 segments -> merge last 3
+        result = split_syllable_for_display("unconditional", 2)
+        assert result[0] == 'un'
+        assert 'conditional' in result[1]  # merged rest

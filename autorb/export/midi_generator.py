@@ -28,6 +28,51 @@ def encode_varlen(value: int) -> bytes:
 PLACEHOLDER_NOTE_PITCH = 60
 PLACEHOLDER_DIFFICULTY_PITCHES = (60, 72, 84, 96)
 
+# Pyphen for splitting words into display syllables
+try:
+    import pyphen
+    _PYPHEN_DIC = pyphen.Pyphen(lang='en_GB')
+except Exception:
+    _PYPHEN_DIC = None
+
+
+def split_syllable_for_display(text: str, num_segments: int) -> list:
+    """
+    Split a word into sub-syllables for Rock Band lyric display.
+    
+    Uses pyphen hyphenation when available. If the word splits into
+    fewer syllables than note segments, repeats the last syllable.
+    If more, merges extras onto the last syllable.
+    """
+    if not text or num_segments <= 1:
+        return [text] if num_segments > 0 else []
+    
+    if _PYPHEN_DIC is None:
+        # Fallback: repeat text for all segments
+        return [text] * num_segments
+    
+    positions = _PYPHEN_DIC.positions(text)
+    if not positions:
+        # Single syllable word - repeat for all segments
+        return [text] * num_segments
+    
+    # Build syllable texts from hyphenation positions
+    syllables = []
+    last = 0
+    for pos in positions:
+        syllables.append(text[last:pos])
+        last = pos
+    syllables.append(text[last:])
+    
+    if len(syllables) == num_segments:
+        return syllables
+    elif len(syllables) < num_segments:
+        # Distribute extra segments: repeat last syllable
+        return syllables + [syllables[-1]] * (num_segments - len(syllables))
+    else:
+        # More syllables than segments: merge extras onto last segment
+        return syllables[:num_segments-1] + ["".join(syllables[num_segments-1:])]
+
 # Mandatory count-in, per the C3 authoring guide: very fast songs (>=160 BPM)
 # need a 3-measure count-in. Sized at runtime from the song's opening tempo
 # (first beat-grid interval), mirroring stock RB3 DLC (311 - Down bakes ~5s of
@@ -224,20 +269,29 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
         else:
             for syl in syllables:
                 segs = syl.get("note_segments", [])
+                syl_text = syl.get("text", "la")
+                syl_start = syl.get("start", 0.0)
+                syl_end = syl.get("end", syl_start + 0.3)
+                
                 if not segs:
                     # Fallback
-                    start_sec = syl.get("start", 0.0)
-                    end_sec = syl.get("end", start_sec + 0.3)
                     pitch = word.get("pitch", 60)
-                    lyric = syl.get("text", "la")
-                    note_items.append((start_sec, end_sec, pitch, lyric, False))
+                    note_items.append((syl_start, syl_end, pitch, syl_text, False))
                 else:
+                    # Split syllable text into display sub-syllables using pyphen
+                    # for Rock Band lyric rendering (one sub-syllable per note segment)
+                    sub_syllables = split_syllable_for_display(syl_text, len(segs))
+                    
                     for j, seg in enumerate(segs):
-                        start_sec = seg.get("start", syl.get("start", 0.0))
-                        end_sec = seg.get("end", syl.get("end", start_sec + 0.1))
+                        start_sec = seg.get("start", syl_start)
+                        end_sec = seg.get("end", syl_end)
                         pitch = seg.get("midi_note", 60)
-                        # Only put lyric on the first segment of each syllable
-                        lyric = syl.get("text", "la") if j == 0 else ""
+                        # Assign lyric: first segment gets the sub-syllable text,
+                        # subsequent segments of same syllable get empty (continues previous)
+                        if j == 0 and sub_syllables:
+                            lyric = sub_syllables.pop(0)
+                        else:
+                            lyric = ""
                         note_items.append((start_sec, end_sec, pitch, lyric, False))
 
     if not note_items:
