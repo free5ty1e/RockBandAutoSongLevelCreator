@@ -70,7 +70,12 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         click.echo("\n[3/5] Skipping vocal extraction. Loading cached data...")
         from autorb.audio.vocals import load_vocals_cache
         try:
-            lyrics_data, word_segments, vocal_notes = load_vocals_cache(out_path)
+            result = load_vocals_cache(out_path)
+            # Handle both v1 (3 values) and v2 (4 values) cache formats
+            if len(result) == 4:
+                lyrics_data, word_segments, vocal_notes, _ = result
+            else:
+                lyrics_data, word_segments, vocal_notes = result
             click.echo("Successfully loaded vocals data from cache.")
         except FileNotFoundError as e:
             click.echo(f"Error: {e}", err=True)
@@ -79,7 +84,11 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         click.echo("\n[3/5] Aligning vocals and parsing LRC...")
         from autorb.audio.vocals import process_vocals
         # Pass out_path so it knows where to save the JSON cache
-        lyrics_data, word_segments, vocal_notes = process_vocals(stems["vocals"], lyrics, out_path)
+        result = process_vocals(stems["vocals"], lyrics, out_path)
+        if len(result) == 4:
+            lyrics_data, word_segments, vocal_notes, _ = result
+        else:
+            lyrics_data, word_segments, vocal_notes = result
     
     if word_segments:
         first_word = word_segments[0]

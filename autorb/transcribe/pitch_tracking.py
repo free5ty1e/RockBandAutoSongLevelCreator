@@ -385,7 +385,7 @@ def build_melodic_contour_from_syllables(
 
 def resolve_syllable_pitches_with_fallback(
     syllable_pitches: List[SyllablePitch],
-    basic_pitch_notes: List[Tuple[float, float, int]],  # (start, end, pitch)
+    basic_pitch_notes: List[tuple],  # (start, end, pitch, confidence, ...)
     melodic_contour: Optional[callable],
 ) -> List[SyllablePitch]:
     """
@@ -399,7 +399,8 @@ def resolve_syllable_pitches_with_fallback(
         
         # Try Basic-Pitch fallback: find BP note overlapping this syllable
         bp_pitch = None
-        for bp_start, bp_end, bp_midi in basic_pitch_notes:
+        for bp_note in basic_pitch_notes:
+            bp_start, bp_end, bp_midi = bp_note[0], bp_note[1], bp_note[2]
             overlap = min(bp_end, syl.syllable_end) - max(bp_start, syl.syllable_start)
             if overlap > 0.02:  # 20ms minimum overlap
                 bp_pitch = bp_midi

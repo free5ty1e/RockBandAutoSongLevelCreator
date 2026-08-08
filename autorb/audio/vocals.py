@@ -93,11 +93,12 @@ def process_vocals(vocal_stem_path, lrc_path, out_dir):
             "end": seg.get("end", seg.get("start", 0.0) + 0.3),
         })
     
-    # Add syllable segmentation
+    # Add syllable segmentation (pass original word_segments for WhisperX char mapping)
     synced_words = segment_all_words_to_syllables(
         synced_words,
         lrc_data=lyrics_data,
         whisperx_alignment=alignment_result,
+        whisperx_word_segments=word_segments,  # Pass original for char->word mapping
     )
     
     # Collect all syllables across all words

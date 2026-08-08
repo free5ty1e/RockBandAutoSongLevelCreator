@@ -102,63 +102,62 @@ def whisperx_chars_to_syllables(
     char_segments: List[dict]
 ) -> List[Syllable]:
     """
-    Group WhisperX character segments into syllables.
+    Group WhisperX character segments into syllables (one per word for now).
     
-    Simple heuristic: group consecutive characters until we hit a vowel
-    boundary or reach max syllable length. More sophisticated approaches
-    would use phonemizer, but this is a reasonable start.
+    Maps each character to its word based on timing, then groups chars by word.
     """
-    if not char_segments:
+    if not char_segments or not word_segments:
         return []
     
-    # Map character index to word index
-    char_to_word = []
-    for wi, word in enumerate(word_segments):
-        w_start = word.get("start", word.get("time", 0))
-        w_end = word.get("end", w_start + 0.3)
-        for ci, char in enumerate(char_segments):
-            if w_start <= char["start"] < w_end:
-                char_to_word.append(wi)
+    # Map each character to its word index based on timing
+    char_to_word = [-1] * len(char_segments)
+    for ci, char in enumerate(char_segments):
+        c_start = char.get("start", 0)
+        c_end = char.get("end", c_start)
+        c_mid = (c_start + c_end) / 2
+        
+        # Find the word this character belongs to
+        for wi, word in enumerate(word_segments):
+            w_start = word.get("start", word.get("time", 0))
+            w_end = word.get("end", w_start + 0.3)
+            if w_start <= c_mid < w_end:
+                char_to_word[ci] = wi
+                break
     
+    # Group consecutive characters by word
     syllables = []
-    current_syl_chars = []
-    current_syl_word_idx = None
-    
-    vowels = set('aeiouAEIOU')
+    current_chars = []
+    current_wi = None
     
     for ci, char in enumerate(char_segments):
-        c = char["char"]
-        wi = char_to_word[ci] if ci < len(char_to_word) else 0
+        wi = char_to_word[ci]
+        
+        # Skip characters that couldn't be mapped
+        if wi == -1:
+            continue
         
         # Start new syllable on word boundary
-        if current_syl_word_idx is not None and wi != current_syl_word_idx:
-            if current_syl_chars:
-                syl_text = "".join(ch["char"] for ch in current_syl_chars)
+        if current_wi is not None and wi != current_wi:
+            if current_chars:
+                syl_text = "".join(ch["char"] for ch in current_chars)
                 syllables.append(Syllable(
                     text=syl_text,
-                    start=current_syl_chars[0]["start"],
-                    end=current_syl_chars[-1]["end"],
+                    start=current_chars[0]["start"],
+                    end=current_chars[-1]["end"],
                     source="whisperx"
                 ))
-                current_syl_chars = []
+                current_chars = []
         
-        current_syl_chars.append(char)
-        current_syl_word_idx = wi
-        
-        # Heuristic: end syllable after vowel + optional consonants
-        # (This is very rough; proper syllabification needs phonemizer)
-        if c in vowels and len(current_syl_chars) >= 2:
-            # Look ahead - if next char is consonant, continue
-            # If next is vowel or end, end syllable
-            pass  # Keep it simple for now - just group by word
+        current_chars.append(char)
+        current_wi = wi
     
     # Flush last syllable
-    if current_syl_chars:
-        syl_text = "".join(ch["char"] for ch in current_syl_chars)
+    if current_chars:
+        syl_text = "".join(ch["char"] for ch in current_chars)
         syllables.append(Syllable(
             text=syl_text,
-            start=current_syl_chars[0]["start"],
-            end=current_syl_chars[-1]["end"],
+            start=current_chars[0]["start"],
+            end=current_chars[-1]["end"],
             source="whisperx"
         ))
     
@@ -266,6 +265,7 @@ def segment_all_words_to_syllables(
     synced_words: List[dict],
     lrc_data: Optional[List[dict]] = None,
     whisperx_alignment: Optional[dict] = None,
+    whisperx_word_segments: Optional[List[dict]] = None,
 ) -> List[dict]:
     """
     Add syllable segmentation to all synced words.
@@ -296,7 +296,7 @@ def segment_all_words_to_syllables(
             word_end=word["end"],
             lrc_syllables=lrc_syllables if lrc_syllables else None,
             whisperx_chars=whisperx_chars if whisperx_chars else None,
-            word_segments=synced_words if whisperx_chars else None,
+            word_segments=whisperx_word_segments if whisperx_chars else None,
         )
         word["syllables"] = [
             {"text": s.text, "start": s.start, "end": s.end, "source": s.source}

@@ -315,30 +315,48 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
 
     # Third pass: attach per-syllable pitch data from cache
     if syllable_pitches:
-        # Build a lookup: (syllable_text, start_time, end_time) -> pitch data
-        # Use approximate time matching since cache times may differ slightly
-        pitch_lookup = {}
+        # The syllable_pitches from cache already have the correct syllable
+        # segmentation with timing and pitch. Use them directly instead of
+        # re-segmenting and trying to match.
+        #
+        # Group syllable_pitches by which word they belong to based on timing.
+        word_syllables = [[] for _ in refined]
         for sp in syllable_pitches:
-            key = (sp["syllable_text"], round(sp["syllable_start"], 2), round(sp["syllable_end"], 2))
-            pitch_lookup[key] = sp
+            syl_start = sp["syllable_start"]
+            # Find the word this syllable belongs to
+            for wi, word in enumerate(refined):
+                if word["start"] - 0.1 <= syl_start <= word["end"] + 0.1:
+                    word_syllables[wi].append({
+                        "text": sp["syllable_text"],
+                        "start": sp["syllable_start"],
+                        "end": sp["syllable_end"],
+                        "source": "cache",
+                        "note_segments": sp["note_segments"],
+                        "pitch_trusted": sp["is_trusted"]
+                    })
+                    break
         
-        # Attach pitch data to syllables
-        for word in refined:
-            for syl in word.get("syllables", []):
-                key = (syl["text"], round(syl["start"], 2), round(syl["end"], 2))
-                if key in pitch_lookup:
-                    sp = pitch_lookup[key]
-                    syl["note_segments"] = sp["note_segments"]
-                    syl["pitch_trusted"] = sp["is_trusted"]
-                elif "note_segments" not in syl:
-                    # Fallback: use word-level pitch if available (backward compat)
-                    syl["note_segments"] = [{
-                        "start": syl["start"],
-                        "end": syl["end"],
+        # Attach to refined words
+        for wi, word in enumerate(refined):
+            if word_syllables[wi]:
+                # Sort by start time
+                word_syllables[wi].sort(key=lambda s: s["start"])
+                word["syllables"] = word_syllables[wi]
+            else:
+                # No cached syllables for this word - use word as single syllable
+                word["syllables"] = [{
+                    "text": word["word"],
+                    "start": word["start"],
+                    "end": word["end"],
+                    "source": "fallback",
+                    "note_segments": [{
+                        "start": word["start"],
+                        "end": word["end"],
                         "midi_note": word.get("pitch", 60),
                         "confidence": 0.5
-                    }]
-                    syl["pitch_trusted"] = False
+                    }],
+                    "pitch_trusted": False
+                }]
     else:
         # No v2 cache - fall back to old per-word pitch logic
         # (This path is for backward compatibility with old caches)
@@ -365,7 +383,16 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
         for r, p in zip(refined, pitches):
             r["pitch"] = int(max(VOCAL_MIDI_MIN, min(VOCAL_MIDI_MAX, p)))
         
-        # Attach single pitch to each syllable as fallback
+        # Run syllable segmentation for display purposes
+        lrc_data = None
+        if lrc_path and Path(lrc_path).exists():
+            lrc_data = lyrics_data.get("lyrics_data", [])
+        refined = segment_all_words_to_syllables(
+            refined,
+            lrc_data=lrc_data,
+            whisperx_alignment=alignment_result,
+            whisperx_word_segments=lyrics_data.get("word_segments", []),
+        )
         for word in refined:
             for syl in word.get("syllables", []):
                 syl["note_segments"] = [{
