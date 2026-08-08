@@ -278,14 +278,24 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
                     pitch = word.get("pitch", 60)
                     note_items.append((syl_start, syl_end, pitch, syl_text, False))
                 else:
-                    # Split syllable text into display sub-syllables using pyphen
-                    # for Rock Band lyric rendering (one sub-syllable per note segment)
-                    sub_syllables = split_syllable_for_display(syl_text, len(segs))
-                    
+                    # Make segments within the same syllable CONTIGUOUS (no gaps).
+                    # The end of segment N = start of segment N+1.
+                    # Only the last segment of a syllable can have a gap to the next syllable.
+                    contiguous_segs = []
                     for j, seg in enumerate(segs):
                         start_sec = seg.get("start", syl_start)
                         end_sec = seg.get("end", syl_end)
-                        pitch = seg.get("midi_note", 60)
+                        if j < len(segs) - 1:
+                            # Next segment's start becomes this segment's end
+                            next_start = segs[j + 1].get("start", start_sec)
+                            end_sec = next_start
+                        contiguous_segs.append((start_sec, end_sec, seg.get("midi_note", 60)))
+                    
+                    # Split syllable text into display sub-syllables using pyphen
+                    # for Rock Band lyric rendering (one sub-syllable per note segment)
+                    sub_syllables = split_syllable_for_display(syl_text, len(contiguous_segs))
+                    
+                    for j, (start_sec, end_sec, pitch) in enumerate(contiguous_segs):
                         # Assign lyric: first segment gets the sub-syllable text,
                         # subsequent segments of same syllable get empty (continues previous)
                         if j == 0 and sub_syllables:

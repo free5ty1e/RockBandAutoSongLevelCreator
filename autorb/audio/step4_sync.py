@@ -315,48 +315,70 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
 
     # Third pass: attach per-syllable pitch data from cache
     if syllable_pitches:
-        # The syllable_pitches from cache already have the correct syllable
-        # segmentation with timing and pitch. Use them directly instead of
-        # re-segmenting and trying to match.
+        # The syllable_pitches from cache are in the SAME ORDER as WhisperX
+        # word_segments (284 entries each). The refined words are also sorted
+        # from the same WhisperX word_segments. Match by INDEX, not time,
+        # because refined words have extended end times that overlap with
+        # subsequent syllables.
         #
-        # Group syllable_pitches by which word they belong to based on timing.
-        word_syllables = [[] for _ in refined]
-        for sp in syllable_pitches:
-            syl_start = sp["syllable_start"]
-            # Find the word this syllable belongs to
-            for wi, word in enumerate(refined):
-                if word["start"] - 0.1 <= syl_start <= word["end"] + 0.1:
-                    word_syllables[wi].append({
-                        "text": sp["syllable_text"],
-                        "start": sp["syllable_start"],
-                        "end": sp["syllable_end"],
-                        "source": "cache",
-                        "note_segments": sp["note_segments"],
-                        "pitch_trusted": sp["is_trusted"]
+        # Both lists should have the same length (one per WhisperX word).
+        # If lengths differ, fall back to time-based matching.
+        if len(syllable_pitches) == len(refined):
+            for wi, (word, sp) in enumerate(zip(refined, syllable_pitches)):
+                # Shift syllable timing from original WhisperX timing to
+                # refined (onset-snapped) timing.
+                shift = word["start"] - sp["syllable_start"]
+                shifted_segs = []
+                for seg in sp["note_segments"]:
+                    shifted_segs.append({
+                        "start": seg["start"] + shift,
+                        "end": seg["end"] + shift,
+                        "midi_note": seg["midi_note"],
+                        "confidence": seg["confidence"]
                     })
-                    break
-        
-        # Attach to refined words
-        for wi, word in enumerate(refined):
-            if word_syllables[wi]:
-                # Sort by start time
-                word_syllables[wi].sort(key=lambda s: s["start"])
-                word["syllables"] = word_syllables[wi]
-            else:
-                # No cached syllables for this word - use word as single syllable
                 word["syllables"] = [{
-                    "text": word["word"],
+                    "text": sp["syllable_text"],
                     "start": word["start"],
                     "end": word["end"],
-                    "source": "fallback",
-                    "note_segments": [{
+                    "source": "cache",
+                    "note_segments": shifted_segs,
+                    "pitch_trusted": sp["is_trusted"]
+                }]
+        else:
+            # Fallback: time-based matching (old behavior)
+            word_syllables = [[] for _ in refined]
+            for sp in syllable_pitches:
+                syl_start = sp["syllable_start"]
+                for wi, word in enumerate(refined):
+                    if word["start"] - 0.1 <= syl_start <= word["end"] + 0.1:
+                        word_syllables[wi].append({
+                            "text": sp["syllable_text"],
+                            "start": sp["syllable_start"],
+                            "end": sp["syllable_end"],
+                            "source": "cache",
+                            "note_segments": sp["note_segments"],
+                            "pitch_trusted": sp["is_trusted"]
+                        })
+                        break
+            
+            for wi, word in enumerate(refined):
+                if word_syllables[wi]:
+                    word_syllables[wi].sort(key=lambda s: s["start"])
+                    word["syllables"] = word_syllables[wi]
+                else:
+                    word["syllables"] = [{
+                        "text": word["word"],
                         "start": word["start"],
                         "end": word["end"],
-                        "midi_note": word.get("pitch", 60),
-                        "confidence": 0.5
-                    }],
-                    "pitch_trusted": False
-                }]
+                        "source": "fallback",
+                        "note_segments": [{
+                            "start": word["start"],
+                            "end": word["end"],
+                            "midi_note": word.get("pitch", 60),
+                            "confidence": 0.5
+                        }],
+                        "pitch_trusted": False
+                    }]
     else:
         # No v2 cache - fall back to old per-word pitch logic
         # (This path is for backward compatibility with old caches)
