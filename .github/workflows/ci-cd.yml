@@ -222,6 +222,25 @@ jobs:
           The `--build-pkg` flag generates a PS4 PKG installer via the vendored ForgeTool (requires the .NET SDK 8 + Mono toolchain; run from a git clone).
           If you get a "ForgeTool not found" error, ensure the tool is built (`tools/build_forgetool.sh`); the CLI auto-discovers it by searching the current directory, its child dirs, and its ancestors, so you can run from the clone or any folder within/near it.
 
+          ### Using the release wheel with `--build-pkg` (no editable install)
+
+          The wheel does **not** include ForgeTool (vendored source-only). To use `--build-pkg` with a wheel install:
+
+          1. `git clone` the repo (for ForgeTool source)
+          2. `cd RockBandAutoSongLevelCreator && tools/build_forgetool.sh` (build once; needs .NET SDK 8 + Mono)
+          3. From a **parent directory of the clone** (e.g., `temp/` with clone at `temp/RockBandAutoSongLevelCreator/`), run with **absolute paths**:
+
+          ```bash
+          python3 -m autorb.cli \
+            /full/path/to/song.mp3 \
+            --artist "Artist" --title "Title" --year 2024 --genre "Rock" \
+            --lyrics /full/path/to/song.lrc \
+            --output-dir /full/path/to/output \
+            --build-pkg
+          ```
+
+          **Why run from the parent?** The wheel installs `autorb` as a package. If you `cd` into the clone, Python imports the local source (shadowing the wheel), and features like the album art preview won't work. Running from outside with absolute paths uses the true wheel install. `_find_forgetool()` discovers the tool in the child dir automatically.
+
           ### Troubleshooting `python3 -m venv venv` failures (macOS/Linux)
 
           If creating the venv fails with:

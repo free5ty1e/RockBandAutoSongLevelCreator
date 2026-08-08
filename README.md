@@ -193,18 +193,29 @@ AutoRB relies on Enhanced LRC (`.lrc`) lyric files for precise word and syllable
 Once installed, convert any MP3 and lyric file into an Xbox 360 CON file and an optional PS4 PKG installer:
 
 ```bash
+# Recommended: run from a directory OUTSIDE the repo clone to avoid import shadowing
+# Use ABSOLUTE paths for all file arguments
 python3 -m autorb.cli \
-  path/to/song.mp3 \
+  /full/path/to/song.mp3 \
   --artist "Artist Name" \
   --title "Song Title" \
   --year 2024 \
   --genre "Alternative" \
-  --lyrics path/to/lyrics.lrc \
-  --output-dir ./output \
+  --lyrics /full/path/to/lyrics.lrc \
+  --output-dir /full/path/to/output \
   --build-pkg
 ```
 
-Your outputs will be generated in `./output/` (the `.con` file) and `./output/pkg/` (the PS4 `.pkg` file).
+**Why run from outside the clone?** The pip wheel installs `autorb` as a package. If you `cd` into the repo clone, Python imports the local source instead of the installed wheel (shadowing), and features like the album art preview won't work. Running from a parent/sibling directory with absolute paths uses the true wheel install.
+
+**ForgeTool discovery:** The `--build-pkg` flag requires the vendored ForgeTool (not in the wheel). `_find_forgetool()` auto-discovers it by searching:
+1. Current directory + immediate child dirs (finds `./RockBandAutoSongLevelCreator/tools/forgetool` when run from parent)
+2. All ancestor directories
+3. `sys.prefix` / `sys.base_prefix`
+
+So from `temp/` with the clone at `temp/RockBandAutoSongLevelCreator/`, it just works.
+
+Your outputs will be generated in `/full/path/to/output/` (the `.con` file + `album_art_preview.png`) and `/full/path/to/output/pkg/` (the PS4 `.pkg` file).
 
 ---
 
