@@ -7,18 +7,19 @@ import re
 
 
 def _generate_ps4_pkg_id(artist: str, title: str, custom_id: str | None = None) -> str:
-    """Generate a 16-char PS4 Content ID from artist + title.
+    """Generate a 16-char PS4 Content ID from title + artist.
     
     Format: UP8802-CUSA02084_00-XXXXXXXXXXXXXXXX (16 chars after the prefix).
-    Auto-generated from artist + title (lowercase alphanumeric only, truncated/padded).
+    Auto-generated from title + artist (lowercase alphanumeric only, truncated/padded).
+    Title first for better uniqueness (fewer songs share a title than share an artist).
     """
     if custom_id:
         # Use provided ID, pad or truncate to 16 chars
         clean = re.sub(r'[^a-zA-Z0-9]', '', custom_id)
         return clean[:16].ljust(16, '0')
     
-    # Auto-generate from artist + title
-    combined = f"{artist}{title}"
+    # Auto-generate from title + artist (title first for uniqueness)
+    combined = f"{title}{artist}"
     clean = re.sub(r'[^a-zA-Z0-9]', '', combined).lower()
     return clean[:16].ljust(16, '0')
 
