@@ -320,14 +320,26 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
         # each syllable belongs to. We use this to group syllables by their
         # parent word, which is far more reliable than timing-based matching.
         
-        # Group syllables by word_index
-        word_syllables = [[] for _ in refined]
+        # First, group syllables by word_index to compute the shift per word
+        syllables_by_word = [[] for _ in refined]
         for sp in syllable_pitches:
             wi = sp.get("word_index", -1)
             if 0 <= wi < len(refined):
-                # Shift syllable timing from original WhisperX timing to
+                syllables_by_word[wi].append(sp)
+        
+        # Group syllables by word_index and compute shifts
+        word_syllables = [[] for _ in refined]
+        for wi, word_sps in enumerate(syllables_by_word):
+            if not word_sps:
+                continue
+            
+            # Find the earliest syllable start for this word (approximates cache word start)
+            cache_word_start = min(sp["syllable_start"] for sp in word_sps)
+            shift = refined[wi]["start"] - cache_word_start
+            
+            for sp in word_sps:
+                # Shift syllable timing from original cache timing to
                 # refined (onset-snapped) timing.
-                shift = refined[wi]["start"] - sp["syllable_start"]
                 shifted_segs = []
                 for seg in sp["note_segments"]:
                     shifted_segs.append({
@@ -338,15 +350,12 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
                     })
                 word_syllables[wi].append({
                     "text": sp["syllable_text"],
-                    "start": refined[wi]["start"] + (sp["syllable_start"] - sp.get("syllable_start", 0)),
-                    "end": refined[wi]["start"] + (sp["syllable_end"] - sp.get("syllable_start", 0)),
+                    "start": sp["syllable_start"] + shift,
+                    "end": sp["syllable_end"] + shift,
                     "source": "cache",
                     "note_segments": shifted_segs,
                     "pitch_trusted": sp["is_trusted"]
                 })
-            elif "word_index" not in sp:
-                # Legacy cache without word_index - fall back to time-based
-                pass
         
         # Attach to refined words
         for wi, word in enumerate(refined):
