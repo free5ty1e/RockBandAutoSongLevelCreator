@@ -2,6 +2,9 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0.78] - 2026-08-09
+- **PS4 PKG ID format compliance (fixes CE-32957-6 install error).** The 16-char Content ID suffix must be uppercase alphanumeric per PS4 spec (`^[A-Z0-9]{16}$`). Auto-generation now uses **title + artist** (title first for uniqueness) in UPPERCASE. Custom `--ps4-pkg-id` values are sanitized: invalid chars removed, forced uppercase, truncated/padded to 16 chars with '0'.
+
 ## [0.0.77] - 2026-08-09
 - **PS4 PKG ID generation fixed (was hardcoded to `0000000000000001` for every song).** Each song now gets a unique 16-char Content ID derived from `artist` + `title` (lowercase, alphanumeric only, truncated/padded to 16 chars). New CLI flag `--ps4-pkg-id` allows manual override (padded/truncated to 16 chars). Prevents PKG collisions where installing a new song overwrites the previous one on PS4.
 - **Fixed MIDI tempo overflow crash for songs with long non-rhythmic intros.** When beat tracking only finds beats late (e.g., 61s in "Brian Wilson"), the virtual lead-in interval exceeded MIDI's 3-byte tempo max (16,777,215 µs/beat ≈ 3.58 BPM). Capped virtual interval at 1.5M µs/beat (40 BPM) and all tempo events at valid MIDI range (40-255 BPM).
