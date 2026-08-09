@@ -221,44 +221,80 @@ def segment_word_to_syllables(
     word_segments: Optional[List[dict]] = None,
 ) -> List[Syllable]:
     """
-    Segment a single word into syllables using best available source.
+    Segment a single word into syllables.
     
     Priority:
-    1. WhisperX character alignments grouped into syllables (most accurate - force-aligned to audio)
-    2. LRC syllables that overlap with this word's time range (if LRC has per-syllable timestamps)
-    3. Pyphen heuristic fallback
+    1. LRC syllables whose START falls within this word's time range (only if LRC has per-syllable timestamps for single words)
+    2. Dictionary syllables via pyphen (always used)
     """
-    # 1. WhisperX character-based (force-aligned to audio, most accurate)
-    if whisperx_chars and word_segments:
-        all_syllables = whisperx_chars_to_syllables(word_segments, whisperx_chars)
-        # Match syllables whose center falls within the word time range
-        matched = [s for s in all_syllables 
-                   if (s.start + s.end) / 2 >= word_start - 0.02 
-                   and (s.start + s.end) / 2 <= word_end + 0.02]
-        if matched:
-            return matched
-    
-    # 2. LRC syllables overlapping with word time range (only if LRC has per-syllable timestamps)
+    # 1. Try LRC syllables - only use if their start falls within this word's time range
+    # AND the LRC line was a single hyphenated word (parsed by parse_lrc_syllables)
     if lrc_syllables:
+        # Match syllables whose START is within this word's time range
+        # Use midpoint for more robust matching
         matched = [s for s in lrc_syllables 
-                   if s.end > word_start - 0.1 and s.start < word_end + 0.1]
+                   if s.start >= word_start - 0.02 and s.start <= word_end + 0.02]
         if matched:
-            # Clip matched syllables to word boundaries
-            clipped = []
-            for s in matched:
-                clipped.append(Syllable(
-                    text=s.text,
-                    start=max(s.start, word_start),
-                    end=min(s.end, word_end),
-                    source=s.source
-                ))
-            # Filter out zero-duration syllables
-            clipped = [s for s in clipped if s.end > s.start + 0.01]
-            if clipped:
-                return clipped
+            # Split each LRC syllable into dictionary syllables
+            dictionary_syllables = []
+            for base in matched:
+                sub_syllables = split_base_syllable_into_dictionary(
+                    base.text, base.start, base.end
+                )
+                for sub in sub_syllables:
+                    sub.source = base.source
+                dictionary_syllables.extend(sub_syllables)
+            return dictionary_syllables
     
-    # 3. Pyphen fallback
-    return pyphen_syllables(word_text, word_start, word_end)
+    # 2. Fallback: use pyphen directly on the word text
+    return split_base_syllable_into_dictionary(word_text, word_start, word_end)
+
+
+def split_base_syllable_into_dictionary(text: str, start: float, end: float) -> List[Syllable]:
+    """
+    Split a base syllable into dictionary syllables using pyphen.
+    
+    Distributes timing proportionally based on vowel count (vowel-weighted).
+    """
+    if not _HAS_PYPHEN:
+        return [Syllable(text=text, start=start, end=end, source="pyphen")]
+    
+    dic = pyphen.Pyphen(lang='en_GB')
+    positions = dic.positions(text)
+    
+    if not positions:
+        return [Syllable(text=text, start=start, end=end, source="pyphen")]
+    
+    # Build syllable texts from hyphenation positions
+    syllables_text = []
+    last = 0
+    for pos in positions:
+        syllables_text.append(text[last:pos])
+        last = pos
+    syllables_text.append(text[last:])
+    
+    # Weight by vowel count for timing
+    vowel_weights = [max(1, sum(1 for c in s if c.lower() in 'aeiou')) for s in syllables_text]
+    total_weight = sum(vowel_weights)
+    duration = end - start
+    
+    syllables = []
+    t = start
+    for syl_text, weight in zip(syllables_text, vowel_weights):
+        syl_duration = duration * weight / total_weight
+        syllables.append(Syllable(
+            text=syl_text,
+            start=t,
+            end=t + syl_duration,
+            source="pyphen"
+        ))
+        t += syl_duration
+    
+    # Fix rounding: last syllable ends exactly at word_end
+    if syllables:
+        syllables[-1].end = end
+    
+    return syllables
 
 
 def segment_all_words_to_syllables(

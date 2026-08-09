@@ -101,11 +101,13 @@ def process_vocals(vocal_stem_path, lrc_path, out_dir):
         whisperx_word_segments=word_segments,  # Pass original for char->word mapping
     )
     
-    # Collect all syllables across all words
+    # Collect all syllables across all words, WITH word index
     all_syllables = []
-    for word in synced_words:
+    for wi, word in enumerate(synced_words):
         for syl in word.get("syllables", []):
-            all_syllables.append(syl)
+            syl_with_index = syl.copy()
+            syl_with_index["word_index"] = wi
+            all_syllables.append(syl_with_index)
     
     click.echo(f"Segmented into {len(all_syllables)} syllables.")
     
@@ -137,6 +139,7 @@ def process_vocals(vocal_stem_path, lrc_path, out_dir):
             "syllable_end": syl.syllable_end,
             "note_segments": segs,
             "is_trusted": syl.is_trusted,
+            "word_index": syl.word_index,  # NEW: preserve word-syllable relationship
         })
     
     # Cache the extracted data (v2 format with per-syllable pitch)

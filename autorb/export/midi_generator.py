@@ -38,23 +38,23 @@ except Exception:
 
 def split_syllable_for_display(text: str, num_segments: int) -> list:
     """
-    Split a word into sub-syllables for Rock Band lyric display.
+    Split a word into display sub-syllables for Rock Band lyric rendering.
     
-    Uses pyphen hyphenation when available. If the word splits into
-    fewer syllables than note segments, repeats the last syllable.
-    If more, merges extras onto the last syllable.
+    One sub-syllable per pitch segment. If the word can't be split by pyphen,
+    only the FIRST segment gets the text; subsequent segments get empty string
+    (Rock Band continues the previous lyric).
     """
     if not text or num_segments <= 1:
         return [text] if num_segments > 0 else []
     
     if _PYPHEN_DIC is None:
-        # Fallback: repeat text for all segments
-        return [text] * num_segments
+        # Fallback: only first segment gets text
+        return [text] + [""] * (num_segments - 1)
     
     positions = _PYPHEN_DIC.positions(text)
     if not positions:
-        # Single syllable word - repeat for all segments
-        return [text] * num_segments
+        # Single syllable word - only first segment gets text
+        return [text] + [""] * (num_segments - 1)
     
     # Build syllable texts from hyphenation positions
     syllables = []
@@ -67,8 +67,8 @@ def split_syllable_for_display(text: str, num_segments: int) -> list:
     if len(syllables) == num_segments:
         return syllables
     elif len(syllables) < num_segments:
-        # Distribute extra segments: repeat last syllable
-        return syllables + [syllables[-1]] * (num_segments - len(syllables))
+        # Distribute extra segments: only first gets text, rest empty
+        return syllables + [""] * (num_segments - len(syllables))
     else:
         # More syllables than segments: merge extras onto last segment
         return syllables[:num_segments-1] + ["".join(syllables[num_segments-1:])]

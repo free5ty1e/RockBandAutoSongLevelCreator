@@ -138,31 +138,15 @@ class TestWhisperxCharsToSyllables:
 
 
 class TestSegmentWordToSyllables:
-    def test_whisperx_priority(self):
-        word_segments = [
-            {"word": "Hello", "start": 0.5, "end": 1.0},
-            {"word": "world", "start": 1.0, "end": 1.5},
-        ]
-        char_segments = [
-            {"char": "H", "start": 0.50, "end": 0.55},
-            {"char": "e", "start": 0.55, "end": 0.60},
-            {"char": "l", "start": 0.60, "end": 0.65},
-            {"char": "l", "start": 0.65, "end": 0.70},
-            {"char": "o", "start": 0.70, "end": 0.80},
-            {"char": "w", "start": 1.00, "end": 1.05},
-            {"char": "o", "start": 1.05, "end": 1.10},
-            {"char": "r", "start": 1.10, "end": 1.15},
-            {"char": "l", "start": 1.15, "end": 1.20},
-            {"char": "d", "start": 1.20, "end": 1.25},
-        ]
+    def test_pyphen_fallback(self):
+        # WhisperX is no longer used for syllable segmentation
+        # Test that pyphen fallback works correctly
         result = segment_word_to_syllables(
-            "Hello", 0.5, 1.0,
-            whisperx_chars=char_segments,
-            word_segments=word_segments,
+            "ambitious", 0.0, 1.0,
         )
-        assert len(result) == 1
-        assert result[0].text == "Hello"
-        assert result[0].source == "whisperx"
+        assert len(result) == 3
+        assert [s.text for s in result] == ["am", "bi", "tious"]
+        assert all(s.source == "pyphen" for s in result)
 
     def test_lrc_fallback(self):
         lrc_syllables = [
@@ -190,15 +174,16 @@ class TestSegmentAllWordsToSyllables:
     def test_adds_syllables_to_words(self):
         synced_words = [
             {"word": "tonight", "start": 0.0, "end": 1.0},
-            {"word": "world", "start": 1.5, "end": 2.0},  # Separate LRC line
+            {"word": "world", "start": 1.5, "end": 2.0},
         ]
         lrc_data = [
-            {"time": 0.0, "text": "[00:00.00]To-night"},
+            {"time": 0.0, "text": "[00:00.00]To-night"},  # Single hyphenated word
             {"time": 1.5, "text": "[00:01.50]world"},  # No hyphen, won't be parsed as syllables
         ]
         result = segment_all_words_to_syllables(synced_words, lrc_data=lrc_data)
         assert len(result) == 2
         assert "syllables" in result[0]
+        # "To-night" is parsed from LRC, then split by pyphen into To/night
         assert len(result[0]["syllables"]) == 2
         assert result[0]["syllables"][0]["text"] == "To"
         assert result[0]["syllables"][1]["text"] == "night"

@@ -28,6 +28,7 @@ class SyllablePitch:
     syllable_end: float
     note_segments: List[NoteSegment]
     is_trusted: bool  # whether pyin reading was trusted
+    word_index: int = -1  # NEW: which word this syllable belongs to
 
 
 # Pitch tracking constants
@@ -337,6 +338,8 @@ def compute_vocal_pitch_per_syllable(
             voiced=voiced,
             probs=probs,
         )
+        # Preserve word_index from input
+        syl_pitch.word_index = syl.get("word_index", -1)
         results.append(syl_pitch)
     
     return results

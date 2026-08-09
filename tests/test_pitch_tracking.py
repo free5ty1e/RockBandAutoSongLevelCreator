@@ -266,15 +266,15 @@ class TestSplitSyllableForDisplay:
         
     def test_unsplittable_word(self):
         from autorb.export.midi_generator import split_syllable_for_display
-        # Words pyphen doesn't split repeat full text for all segments
+        # Words pyphen doesn't split: only first segment gets text
         result = split_syllable_for_display("eighty", 2)
-        assert result == ["eighty", "eighty"]
+        assert result == ["eighty", ""]
         
     def test_more_segments_than_syllables(self):
         from autorb.export.midi_generator import split_syllable_for_display
-        # "fly" (1 syllable) with 3 segments -> ['fly', 'fly', 'fly']
+        # "fly" (1 syllable) with 3 segments -> only first gets text
         result = split_syllable_for_display("fly", 3)
-        assert result == ['fly', 'fly', 'fly']
+        assert result == ["fly", "", ""]
         
     def test_more_syllables_than_segments(self):
         from autorb.export.midi_generator import split_syllable_for_display
