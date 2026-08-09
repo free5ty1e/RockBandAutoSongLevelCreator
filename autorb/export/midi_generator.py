@@ -487,7 +487,18 @@ def _build_tempo_grid(beat_times, dynamic_bpms, bpm, ticks_per_beat=480):
     # with the audio. Prepend a virtual beat at t=0 with the first interval's
     # tempo so tick 0 == audio 0 and the real first beat lands on its true tick.
     if beats[0] > 1e-6:
-        beats = [0.0] + beats
+        # If the first detected beat is very late (>10s), the lead-in is likely
+        # a non-rhythmic intro. Cap the virtual interval at a reasonable tempo
+        # (max 1,500,000 us/beat = 40 BPM) to avoid MIDI 3-byte tempo overflow
+        # (max 16,777,215 us/beat = ~3.58 BPM).
+        first_interval = beats[0]
+        max_interval_us = 1_500_000  # 40 BPM minimum
+        if first_interval * 1_000_000 > max_interval_us:
+            # Use a virtual beat at a reasonable tempo for the lead-in
+            virtual_beat_time = max_interval_us / 1_000_000
+            beats = [0.0, virtual_beat_time] + beats
+        else:
+            beats = [0.0] + beats
 
     n = len(beats)
     # Local BPM between consecutive beats; fall back to `bpm` when missing/zero.
@@ -495,7 +506,11 @@ def _build_tempo_grid(beat_times, dynamic_bpms, bpm, ticks_per_beat=480):
     for i in range(n - 1):
         dur = beats[i + 1] - beats[i]
         if dur > 0:
-            intervals_us.append(int(60_000_000 / (60.0 / dur)))
+            us = int(60_000_000 / (60.0 / dur))
+            # Cap at MIDI tempo meta event max (3 bytes = 16,777,215 us/beat)
+            # Practical minimum: 40 BPM = 1,500,000 us/beat
+            us = min(max(us, 1_500_000), 16_777_215)
+            intervals_us.append(us)
         else:
             intervals_us.append(int(60_000_000 / (bpm if bpm and bpm > 0 else 120.0)))
 
