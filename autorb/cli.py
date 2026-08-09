@@ -3,6 +3,25 @@
 import click
 from pathlib import Path
 import torch
+import re
+
+
+def _generate_ps4_pkg_id(artist: str, title: str, custom_id: str | None = None) -> str:
+    """Generate a 16-char PS4 Content ID from artist + title.
+    
+    Format: UP8802-CUSA02084_00-XXXXXXXXXXXXXXXX (16 chars after the prefix).
+    Auto-generated from artist + title (lowercase alphanumeric only, truncated/padded).
+    """
+    if custom_id:
+        # Use provided ID, pad or truncate to 16 chars
+        clean = re.sub(r'[^a-zA-Z0-9]', '', custom_id)
+        return clean[:16].ljust(16, '0')
+    
+    # Auto-generate from artist + title
+    combined = f"{artist}{title}"
+    clean = re.sub(r'[^a-zA-Z0-9]', '', combined).lower()
+    return clean[:16].ljust(16, '0')
+
 
 @click.command()
 @click.argument('audio_file', type=click.Path(exists=True))
@@ -19,11 +38,19 @@ import torch
 @click.option('--album-art', type=click.Path(exists=True), default=None, help='Path to a custom album art image (PNG/JPG); defaults to the generated "Chris Prime Custom" art')
 @click.option('--build-pkg', is_flag=True, help='Build PS4 PKG installer from the generated CON')
 @click.option('--generate-freestyle-vocals', is_flag=True, help='Enable Rock Band 4 freestyle-vocals guide lines (Hard/Expert) by setting HasFreestyleVocals in the PS4 songdta')
-def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, generate_freestyle_vocals):
+@click.option('--ps4-pkg-id', type=str, default=None, help='Optional 16-char PS4 Content ID for the PKG (auto-generated from artist+title if omitted)')
+def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, generate_freestyle_vocals, ps4_pkg_id):
     click.echo(f"Starting AutoRB Pipeline for: {artist} - {title}")
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
     click.echo(f"Using compute device: {device}")
+    
+    # Generate PS4 PKG ID
+    pkg_id_16 = _generate_ps4_pkg_id(artist, title, ps4_pkg_id)
+    if ps4_pkg_id:
+        click.echo(f"Using custom PS4 PKG ID: {pkg_id_16}")
+    else:
+        click.echo(f"Auto-generated PS4 PKG ID: {pkg_id_16}")
     
     out_path = Path(output_dir)
     stems_dir = out_path / "stems"
@@ -61,7 +88,8 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         click.echo("\n[2/5] Extracting tempo and quantizing instruments...")
         from autorb.audio.tempo import extract_tempo_map
         # Notice we are passing out_path here now so it knows where to save the JSON
-        beat_times, dynamic_bpms = extract_tempo_map(stems["drums"], out_path)
+        # Pass vocal stem for drumless section fallback
+        beat_times, dynamic_bpms = extract_tempo_map(stems["drums"], out_path, stems["vocals"])
         
     click.echo(f"First 5 beat timestamps (seconds): {beat_times[:5]}")
     click.echo(f"First 5 dynamic tempos (BPM): {[f'{bpm:.2f}' for bpm in dynamic_bpms[:5]]}")
@@ -203,7 +231,7 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         if build_pkg:
             click.echo("\n[6/5] Building PS4 PKG installer...")
             from autorb.export.con_packer import build_ps4_pkg
-            pkg_path = build_ps4_pkg(con_output_path, out_path, song_id)
+            pkg_path = build_ps4_pkg(con_output_path, out_path, pkg_id_16)
             click.echo(f"PS4 PKG installer successfully built: {pkg_path}")
 
     except Exception as e:

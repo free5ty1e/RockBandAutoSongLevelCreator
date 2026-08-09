@@ -507,9 +507,9 @@ def _build_tempo_grid(beat_times, dynamic_bpms, bpm, ticks_per_beat=480):
         dur = beats[i + 1] - beats[i]
         if dur > 0:
             us = int(60_000_000 / (60.0 / dur))
-            # Cap at MIDI tempo meta event max (3 bytes = 16,777,215 us/beat)
-            # Practical minimum: 40 BPM = 1,500,000 us/beat
-            us = min(max(us, 1_500_000), 16_777_215)
+            # Cap at MIDI tempo meta event limits (3 bytes = 16,777,215 us/beat max)
+            # Practical range: 300,000 us/beat (200 BPM max) to 1,500,000 us/beat (40 BPM min)
+            us = min(max(us, 300_000), 1_500_000)
             intervals_us.append(us)
         else:
             intervals_us.append(int(60_000_000 / (bpm if bpm and bpm > 0 else 120.0)))

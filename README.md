@@ -265,6 +265,7 @@ python3 -m autorb.cli \
 | `--skip-vocals` | Flag | Skip WhisperX alignment and basic-pitch; loads `vocals_cache.json`. |
 | `--skip-mogg` | Flag | Skip MOGG encoding; reuses the existing `.mogg` file (which is expected to already contain the count-in lead-in). The chart is still shifted past the count-in to match the reused audio. |
 | `--generate-freestyle-vocals` | Flag | Enable Rock Band 4 **Freestyle Vocals** guide lines (Hard/Expert): writes `(freestyle_vocals 1)` into `songs.dta`, which the vendored (patched) ForgeTool carries into the PS4 `songdta_ps4` `HasFreestyleVocals` flag so the game advertises and draws the diatonic guide lanes. Off by default. Requires `--build-pkg` to take effect on PS4 (the flag lives in the PKG's songdta; the Xbox 360 CON's `songs.dta` is untouched by the game's freestyle check). |
+| `--ps4-pkg-id` | String | Optional. 16-character PS4 Content ID for the PKG (format: `UP8802-CUSA02084_00-XXXXXXXXXXXXXXXX`). Auto-generated from artist + title (lowercase alphanumeric, padded/truncated to 16 chars) if omitted. Use to ensure unique PKG IDs per song and avoid overwriting previously installed customs on PS4. |
 
 ---
 
