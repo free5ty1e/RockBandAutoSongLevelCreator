@@ -2,10 +2,11 @@
 """
 Syllable segmentation for vocal lyrics.
 
-Supports three sources of syllable boundaries (in priority order):
+Supports four sources of syllable boundaries (in priority order):
 1. LRC file with explicit syllable timestamps: [mm:ss.xx]syl-la-ble
 2. WhisperX character alignments (chars field) grouped into syllables
-3. Heuristic splitting via pyphen + proportional timing within word
+3. CMUdict pronunciation dictionary (phoneme-based syllabification)
+4. Heuristic splitting via pyphen + proportional timing within word
 """
 
 import re
@@ -18,41 +19,48 @@ try:
 except ImportError:
     _HAS_PYPHEN = False
 
-
-# Manual syllable dictionary for words that pyphen fails to split
-# but have clear dictionary syllabification for Rock Band lyrics display
-_MANUAL_SYLLABLES = {
-    "forever": ["for", "ev", "er"],
-    "eighty": ["eigh", "ty"],
-    "nowhere": ["now", "here"],
-    "everywhere": ["ev", "ry", "where"],
-    "somewhere": ["some", "where"],
-    "anywhere": ["an", "y", "where"],
-    "someone": ["some", "one"],
-    "anyone": ["an", "y", "one"],
-    "everyone": ["ev", "ry", "one"],
-    "nothing": ["noth", "ing"],
-    "something": ["some", "thing"],
-    "anything": ["an", "y", "thing"],
-    "everything": ["ev", "ry", "thing"],
-    "nobody": ["no", "bod", "y"],
-    "somebody": ["some", "bod", "y"],
-    "anybody": ["an", "y", "bod", "y"],
-    "everybody": ["ev", "ry", "bod", "y"],
-    "cannot": ["can", "not"],
-    "whatever": ["what", "ev", "er"],
-    "whenever": ["when", "ev", "er"],
-    "wherever": ["where", "ev", "er"],
-    "whoever": ["who", "ev", "er"],
-    "however": ["how", "ev", "er"],
-    "together": ["to", "geth", "er"],
-    "forevermore": ["for", "ev", "er", "more"],
-}
+# CMUdict pronunciation cache (lazy-loaded)
+_CMUDICT = None
 
 
-def _get_manual_syllables(word: str) -> list[str] | None:
-    """Return manual syllable split for known problem words."""
-    return _MANUAL_SYLLABLES.get(word.lower())
+def _load_cmudict() -> dict:
+    """Load CMUdict pronunciation dictionary for syllabification."""
+    global _CMUDICT
+    if _CMUDICT is not None:
+        return _CMUDICT
+    
+    _CMUDICT = {}
+    try:
+        # CMUdict format: WORD PHONEME1 PHONEME2 ... (single space separated)
+        # Vowels have stress markers (0,1,2) - syllable count = number of vowels
+        import urllib.request
+        url = "https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict"
+        with urllib.request.urlopen(url) as response:
+            for line in response:
+                line = line.decode('utf-8').strip()
+                if line.startswith(';;;') or not line:
+                    continue
+                parts = line.split(' ', 1)  # Single space split
+                if len(parts) == 2:
+                    word = parts[0].lower()
+                    # Remove variant suffixes like (1), (2)
+                    word = re.sub(r'\(\d+\)$', '', word)
+                    phonemes = parts[1].split()
+                    # Count syllables = phonemes with stress digits (0,1,2)
+                    syllable_count = sum(1 for p in phonemes if p[-1].isdigit())
+                    if syllable_count > 0:
+                        if word not in _CMUDICT:
+                            _CMUDICT[word] = syllable_count
+    except Exception:
+        # Network unavailable - CMUdict will be empty, fall back to pyphen only
+        pass
+    return _CMUDICT
+
+
+def _get_cmudict_syllable_count(word: str) -> Optional[int]:
+    """Get syllable count from CMUdict."""
+    cmudict = _load_cmudict()
+    return cmudict.get(word.lower())
 
 
 @dataclass
@@ -202,10 +210,10 @@ def whisperx_chars_to_syllables(
 
 def pyphen_syllables(word: str, word_start: float, word_end: float) -> List[Syllable]:
     """
-    Split a word into syllables using pyphen and distribute time proportionally.
+    Split a word into syllables using pyphen + CMUdict, distribute time proportionally.
     
-    Uses vowel count as weight for more natural timing (vowels take more time).
-    Falls back to manual syllable dictionary for words pyphen fails to split.
+    Uses CMUdict for target syllable count, pyphen for actual split.
+    Falls back to vowel-weighted pyphen split if CMUdict unavailable.
     """
     if not _HAS_PYPHEN:
         return [Syllable(text=word, start=word_start, end=word_end, source="pyphen")]
@@ -213,20 +221,25 @@ def pyphen_syllables(word: str, word_start: float, word_end: float) -> List[Syll
     dic = pyphen.Pyphen(lang='en_GB')
     positions = dic.positions(word)
     
-    # Try manual syllables first for known problem words
-    manual_syls = _get_manual_syllables(word)
-    if manual_syls:
-        syllables_text = manual_syls
-    elif not positions:
-        return [Syllable(text=word, start=word_start, end=word_end, source="pyphen")]
+    # Build syllable texts from hyphenation positions (or whole word if no split)
+    if not positions:
+        syllables_text = [word]
     else:
-        # Build syllable texts from hyphenation positions
         syllables_text = []
         last = 0
         for pos in positions:
             syllables_text.append(word[last:pos])
             last = pos
         syllables_text.append(word[last:])
+    
+    # Target syllable count from CMUdict (if available), else use pyphen's count
+    target_count = _get_cmudict_syllable_count(word) or len(syllables_text)
+    
+    # If pyphen gives wrong count, redistribute to match CMUdict
+    if len(syllables_text) != target_count and target_count > 1:
+        # Redistribute by vowel groups to match target count
+        # Each vowel group = one syllable nucleus
+        syllables_text = _redistribute_syllables(word, target_count)
     
     # Weight by vowel count for timing
     vowel_counts = [sum(1 for c in s if c.lower() in 'aeiou') for s in syllables_text]
@@ -250,6 +263,54 @@ def pyphen_syllables(word: str, word_start: float, word_end: float) -> List[Syll
     if syllables:
         syllables[-1].end = word_end
     
+    return syllables
+
+
+def _redistribute_syllables(word: str, target_count: int) -> List[str]:
+    """
+    Split word into target_count syllables based on vowel nuclei and 
+    the maximum onset principle (consonants before vowel go to that syllable).
+    """
+    vowels = set('aeiouAEIOU')
+    word_lower = word.lower()
+    
+    # Find vowel nuclei (contiguous vowels = one nucleus)
+    nuclei = []
+    i = 0
+    while i < len(word):
+        if word_lower[i] in vowels:
+            # Found vowel start - include all contiguous vowels
+            j = i
+            while j < len(word) and word_lower[j] in vowels:
+                j += 1
+            nuclei.append((i, j))
+            i = j
+        else:
+            i += 1
+    
+    if not nuclei:
+        return [word]  # No vowels
+    
+    # If we have exactly target_count nuclei, apply maximum onset principle
+    if len(nuclei) == target_count:
+        syllables = []
+        for idx, (n_start, n_end) in enumerate(nuclei):
+            # Onset: consonants before this nucleus up to previous nucleus end
+            onset_start = nuclei[idx-1][1] if idx > 0 else 0
+            # Nucleus + coda (consonants after nucleus up to next nucleus start)
+            syllable = word[onset_start:n_end]
+            syllables.append(syllable)
+        return syllables
+    
+    # More nuclei than target: need to merge some nuclei
+    # Fewer nuclei than target: need to split (rare, fallback to equal)
+    # For simplicity, distribute characters equally
+    chars_per_syl = len(word) / target_count
+    syllables = []
+    for i in range(target_count):
+        start = int(i * chars_per_syl)
+        end = int((i + 1) * chars_per_syl) if i < target_count - 1 else len(word)
+        syllables.append(word[start:end])
     return syllables
 
 
@@ -293,32 +354,30 @@ def segment_word_to_syllables(
 
 def split_base_syllable_into_dictionary(text: str, start: float, end: float) -> List[Syllable]:
     """
-    Split a base syllable into dictionary syllables using pyphen.
+    Split a base syllable into dictionary syllables using pyphen + CMUdict.
     
     Distributes timing proportionally based on vowel count (vowel-weighted).
-    Uses manual syllable dictionary for words pyphen fails to split.
+    Uses CMUdict for target syllable count, pyphen for actual split.
     """
     if not _HAS_PYPHEN:
         return [Syllable(text=text, start=start, end=end, source="pyphen")]
     
-    # Try manual syllables first for known problem words
-    manual_syls = _get_manual_syllables(text)
-    if manual_syls:
-        syllables_text = manual_syls
+    dic = pyphen.Pyphen(lang='en_GB')
+    positions = dic.positions(text)
+    
+    # Build syllable texts from hyphenation positions
+    if not positions:
+        syllables_text = [text]
     else:
-        dic = pyphen.Pyphen(lang='en_GB')
-        positions = dic.positions(text)
-        
-        if not positions:
-            return [Syllable(text=text, start=start, end=end, source="pyphen")]
-        
-        # Build syllable texts from hyphenation positions
         syllables_text = []
         last = 0
         for pos in positions:
             syllables_text.append(text[last:pos])
             last = pos
         syllables_text.append(text[last:])
+    
+    # Target syllable count from CMUdict (if available), else use pyphen's count
+    target_count = _get_cmudict_syllable_count(text) or len(syllables_text)
     
     # Weight by vowel count for timing
     vowel_weights = [max(1, sum(1 for c in s if c.lower() in 'aeiou')) for s in syllables_text]
