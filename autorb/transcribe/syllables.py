@@ -19,6 +19,42 @@ except ImportError:
     _HAS_PYPHEN = False
 
 
+# Manual syllable dictionary for words that pyphen fails to split
+# but have clear dictionary syllabification for Rock Band lyrics display
+_MANUAL_SYLLABLES = {
+    "forever": ["for", "ev", "er"],
+    "eighty": ["eigh", "ty"],
+    "nowhere": ["now", "here"],
+    "everywhere": ["ev", "ry", "where"],
+    "somewhere": ["some", "where"],
+    "anywhere": ["an", "y", "where"],
+    "someone": ["some", "one"],
+    "anyone": ["an", "y", "one"],
+    "everyone": ["ev", "ry", "one"],
+    "nothing": ["noth", "ing"],
+    "something": ["some", "thing"],
+    "anything": ["an", "y", "thing"],
+    "everything": ["ev", "ry", "thing"],
+    "nobody": ["no", "bod", "y"],
+    "somebody": ["some", "bod", "y"],
+    "anybody": ["an", "y", "bod", "y"],
+    "everybody": ["ev", "ry", "bod", "y"],
+    "cannot": ["can", "not"],
+    "whatever": ["what", "ev", "er"],
+    "whenever": ["when", "ev", "er"],
+    "wherever": ["where", "ev", "er"],
+    "whoever": ["who", "ev", "er"],
+    "however": ["how", "ev", "er"],
+    "together": ["to", "geth", "er"],
+    "forevermore": ["for", "ev", "er", "more"],
+}
+
+
+def _get_manual_syllables(word: str) -> list[str] | None:
+    """Return manual syllable split for known problem words."""
+    return _MANUAL_SYLLABLES.get(word.lower())
+
+
 @dataclass
 class Syllable:
     """A single syllable with timing and text."""
@@ -169,6 +205,7 @@ def pyphen_syllables(word: str, word_start: float, word_end: float) -> List[Syll
     Split a word into syllables using pyphen and distribute time proportionally.
     
     Uses vowel count as weight for more natural timing (vowels take more time).
+    Falls back to manual syllable dictionary for words pyphen fails to split.
     """
     if not _HAS_PYPHEN:
         return [Syllable(text=word, start=word_start, end=word_end, source="pyphen")]
@@ -176,16 +213,20 @@ def pyphen_syllables(word: str, word_start: float, word_end: float) -> List[Syll
     dic = pyphen.Pyphen(lang='en_GB')
     positions = dic.positions(word)
     
-    if not positions:
+    # Try manual syllables first for known problem words
+    manual_syls = _get_manual_syllables(word)
+    if manual_syls:
+        syllables_text = manual_syls
+    elif not positions:
         return [Syllable(text=word, start=word_start, end=word_end, source="pyphen")]
-    
-    # Build syllable texts from hyphenation positions
-    syllables_text = []
-    last = 0
-    for pos in positions:
-        syllables_text.append(word[last:pos])
-        last = pos
-    syllables_text.append(word[last:])
+    else:
+        # Build syllable texts from hyphenation positions
+        syllables_text = []
+        last = 0
+        for pos in positions:
+            syllables_text.append(word[last:pos])
+            last = pos
+        syllables_text.append(word[last:])
     
     # Weight by vowel count for timing
     vowel_counts = [sum(1 for c in s if c.lower() in 'aeiou') for s in syllables_text]
@@ -255,23 +296,29 @@ def split_base_syllable_into_dictionary(text: str, start: float, end: float) -> 
     Split a base syllable into dictionary syllables using pyphen.
     
     Distributes timing proportionally based on vowel count (vowel-weighted).
+    Uses manual syllable dictionary for words pyphen fails to split.
     """
     if not _HAS_PYPHEN:
         return [Syllable(text=text, start=start, end=end, source="pyphen")]
     
-    dic = pyphen.Pyphen(lang='en_GB')
-    positions = dic.positions(text)
-    
-    if not positions:
-        return [Syllable(text=text, start=start, end=end, source="pyphen")]
-    
-    # Build syllable texts from hyphenation positions
-    syllables_text = []
-    last = 0
-    for pos in positions:
-        syllables_text.append(text[last:pos])
-        last = pos
-    syllables_text.append(text[last:])
+    # Try manual syllables first for known problem words
+    manual_syls = _get_manual_syllables(text)
+    if manual_syls:
+        syllables_text = manual_syls
+    else:
+        dic = pyphen.Pyphen(lang='en_GB')
+        positions = dic.positions(text)
+        
+        if not positions:
+            return [Syllable(text=text, start=start, end=end, source="pyphen")]
+        
+        # Build syllable texts from hyphenation positions
+        syllables_text = []
+        last = 0
+        for pos in positions:
+            syllables_text.append(text[last:pos])
+            last = pos
+        syllables_text.append(text[last:])
     
     # Weight by vowel count for timing
     vowel_weights = [max(1, sum(1 for c in s if c.lower() in 'aeiou')) for s in syllables_text]

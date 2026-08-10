@@ -2,6 +2,10 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0.79] - 2026-08-09
+- **Fixed syllable segmentation for words pyphen fails to split.** Added manual syllable dictionary (`_MANUAL_SYLLABLES`) for common problem words like "forever" (for-ev-er), "eighty" (eigh-ty), "nowhere" (now-here), and other compound words. Both `pyphen_syllables` and `split_base_syllable_into_dictionary` now use this fallback. "forever" now correctly splits into 3 syllables with distinct pitch tracking (e.g., pitches 57, 59, 61), "eighty" into 2 syllables (eigh-ty), "nowhere" into 2 (now-here).
+- **Fixed "eighty" pitch tracking consistency.** All occurrences of "eighty" now correctly split into 2 syllables with proper pitch tracking, not just the first occurrence.
+
 ## [0.0.78] - 2026-08-09
 - **PS4 PKG ID format compliance (fixes CE-32957-6 install error).** The 16-char Content ID suffix must be uppercase alphanumeric per PS4 spec (`^[A-Z0-9]{16}$`). Auto-generation now uses **title + artist** (title first for uniqueness) in UPPERCASE. Custom `--ps4-pkg-id` values are sanitized: invalid chars removed, forced uppercase, truncated/padded to 16 chars with '0'.
 
