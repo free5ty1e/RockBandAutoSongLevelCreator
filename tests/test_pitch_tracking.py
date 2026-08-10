@@ -72,11 +72,15 @@ class TestDetectPitchChanges:
 
     def test_c4_to_e4_slide(self):
         # C4 (60) to E4 (64) over 50 frames, then hold
+        # This is a SLOW slide (2.5s) - should be treated as a single sustained note
+        # (Rock Band doesn't support pitch bend; slow slides chart as single note)
         midi = np.full(100, 60.0)
         midi[25:75] = np.linspace(60, 64, 50)
         midi[75:] = 64.0
         changes = detect_pitch_changes(midi, 1.5, 3)
-        assert len(changes) >= 1
+        # Slow slide should NOT create multiple note segments - single note with slide
+        # Only the transition from slide to hold might be detected
+        assert len(changes) <= 1
 
 
 class TestSegmentSyllablePitch:

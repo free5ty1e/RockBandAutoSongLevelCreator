@@ -32,7 +32,7 @@ class SyllablePitch:
 
 
 # Pitch tracking constants
-MIN_SEMITONE_CHANGE = 1.5      # minimum pitch change to trigger new note (semitones)
+MIN_SEMITONE_CHANGE = 1.0      # minimum pitch change to trigger new note (semitones) - lowered for more sensitivity
 MIN_SUSTAINED_FRAMES = 3       # frames that must sustain the change
 MERGE_GAP_MS = 50              # merge same-pitch segments separated by < this (ms)
 MIN_NOTE_DURATION_MS = 80      # minimum note duration (Rock Band playable limit)
@@ -218,13 +218,13 @@ def detect_pitch_changes(midi_values: np.ndarray, threshold: float, min_frames: 
         window = midi_smooth[i:i + min_frames]
         pitch_range = window.max() - window.min()
         
-        if pitch_range < 1.0:  # plateau threshold: 1 semitone range
+        if pitch_range < 0.75:  # plateau threshold: 0.75 semitone range (was 1.0) - tighter for more sensitivity
             # Extend plateau as far as possible
             j = i + min_frames
             while j < len(midi_smooth):
-                # Check if adding frame j keeps range < 1.0
+                # Check if adding frame j keeps range < 0.75
                 extended = midi_smooth[i:j+1]
-                if extended.max() - extended.min() < 1.0:
+                if extended.max() - extended.min() < 0.75:
                     j += 1
                 else:
                     break

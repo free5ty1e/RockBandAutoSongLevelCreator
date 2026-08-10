@@ -29,13 +29,13 @@ def _load_cmudict() -> dict:
     if _CMUDICT is not None:
         return _CMUDICT
     
-    _CMUDICT = {}
+    cmudict = {}
     try:
         # CMUdict format: WORD PHONEME1 PHONEME2 ... (single space separated)
         # Vowels have stress markers (0,1,2) - syllable count = number of vowels
         import urllib.request
         url = "https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict"
-        with urllib.request.urlopen(url) as response:
+        with urllib.request.urlopen(url, timeout=10) as response:
             for line in response:
                 line = line.decode('utf-8').strip()
                 if line.startswith(';;;') or not line:
@@ -49,11 +49,13 @@ def _load_cmudict() -> dict:
                     # Count syllables = phonemes with stress digits (0,1,2)
                     syllable_count = sum(1 for p in phonemes if p[-1].isdigit())
                     if syllable_count > 0:
-                        if word not in _CMUDICT:
-                            _CMUDICT[word] = syllable_count
+                        if word not in cmudict:
+                            cmudict[word] = syllable_count
     except Exception:
         # Network unavailable - CMUdict will be empty, fall back to pyphen only
         pass
+    
+    _CMUDICT = cmudict
     return _CMUDICT
 
 
@@ -241,8 +243,8 @@ def pyphen_syllables(word: str, word_start: float, word_end: float) -> List[Syll
         # Each vowel group = one syllable nucleus
         syllables_text = _redistribute_syllables(word, target_count)
     
-    # Weight by vowel count for timing
-    vowel_counts = [sum(1 for c in s if c.lower() in 'aeiou') for s in syllables_text]
+    # Weight by vowel count for timing (include 'y' as vowel)
+    vowel_counts = [sum(1 for c in s if c.lower() in 'aeiouy') for s in syllables_text]
     total_vowels = sum(vowel_counts) or len(syllables_text)
     duration = word_end - word_start
     
@@ -359,48 +361,7 @@ def split_base_syllable_into_dictionary(text: str, start: float, end: float) -> 
     Distributes timing proportionally based on vowel count (vowel-weighted).
     Uses CMUdict for target syllable count, pyphen for actual split.
     """
-    if not _HAS_PYPHEN:
-        return [Syllable(text=text, start=start, end=end, source="pyphen")]
-    
-    dic = pyphen.Pyphen(lang='en_GB')
-    positions = dic.positions(text)
-    
-    # Build syllable texts from hyphenation positions
-    if not positions:
-        syllables_text = [text]
-    else:
-        syllables_text = []
-        last = 0
-        for pos in positions:
-            syllables_text.append(text[last:pos])
-            last = pos
-        syllables_text.append(text[last:])
-    
-    # Target syllable count from CMUdict (if available), else use pyphen's count
-    target_count = _get_cmudict_syllable_count(text) or len(syllables_text)
-    
-    # Weight by vowel count for timing
-    vowel_weights = [max(1, sum(1 for c in s if c.lower() in 'aeiou')) for s in syllables_text]
-    total_weight = sum(vowel_weights)
-    duration = end - start
-    
-    syllables = []
-    t = start
-    for syl_text, weight in zip(syllables_text, vowel_weights):
-        syl_duration = duration * weight / total_weight
-        syllables.append(Syllable(
-            text=syl_text,
-            start=t,
-            end=t + syl_duration,
-            source="pyphen"
-        ))
-        t += syl_duration
-    
-    # Fix rounding: last syllable ends exactly at word_end
-    if syllables:
-        syllables[-1].end = end
-    
-    return syllables
+    return pyphen_syllables(text, start, end)
 
 
 def segment_all_words_to_syllables(

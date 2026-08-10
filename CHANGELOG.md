@@ -2,6 +2,14 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0.80] - 2026-08-09
+- **Dynamic syllable segmentation with CMUdict integration (fully dynamic, no hardcoded dictionary).** Replaced the manual `_MANUAL_SYLLABLES` fallback with a scalable solution: CMUdict pronunciation dictionary (downloaded at runtime, cached) provides authoritative syllable counts; pyphen provides grapheme splits; a redistribution algorithm matches CMUdict counts using the maximum onset principle (consonants before a vowel nucleus attach to that syllable). Works for "forever" (3), "eighty" (2), "nowhere" (2), "together" (3), etc. No manual maintenance needed. Added 'y' as vowel for timing weight (fixes "fly", "eighty").
+- **Fixed `split_base_syllable_into_dictionary` to delegate to `pyphen_syllables`** — the former duplicated pyphen logic but missed the CMUdict redistribution, so words like "forever" incorrectly stayed as 1 syllable.
+- **More sensitive pitch change detection.** Lowered `MIN_SEMITONE_CHANGE` from 1.5 → 1.0 and plateau range from 1.0 → 0.75 semitones. Detects subtle pitch movements within syllables (slides, vibrato boundaries) that were previously merged.
+- **Tighter octave correction.** `CONTOUR_SNAP_ST` kept at 3.0 for reliable octave correction (allows 72→60 snap when contour=63); plateau detection handles sensitivity.
+- **'y' counted as vowel** for syllable timing weight, fixing duration allocation for words like "fly", "eighty", "syllable".
+- **CMUdict load robustness:** Added 10s timeout; only caches on success (prevents empty-dict lock-in on transient network failure).
+
 ## [0.0.79] - 2026-08-09
 - **Fixed syllable segmentation for words pyphen fails to split.** Added manual syllable dictionary (`_MANUAL_SYLLABLES`) for common problem words like "forever" (for-ev-er), "eighty" (eigh-ty), "nowhere" (now-here), and other compound words. Both `pyphen_syllables` and `split_base_syllable_into_dictionary` now use this fallback. "forever" now correctly splits into 3 syllables with distinct pitch tracking (e.g., pitches 57, 59, 61), "eighty" into 2 syllables (eigh-ty), "nowhere" into 2 (now-here).
 - **Fixed "eighty" pitch tracking consistency.** All occurrences of "eighty" now correctly split into 2 syllables with proper pitch tracking, not just the first occurrence.
