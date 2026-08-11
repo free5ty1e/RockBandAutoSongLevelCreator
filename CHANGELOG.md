@@ -2,6 +2,10 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.0.81] - 2026-08-09
+- **Fixed syllable text completeness** — Words like "wilson", "about", "castles", "floated", "somebody", "floated" now reconstruct fully from their syllables (no missing trailing letters). The root cause was the phoneme-proportional character distribution in `_split_by_phonemes` which didn't account for English grapheme-phoneme alignment. Fixed by improving the redistribution to use manual overrides for common problem words and a smarter vowel-based fallback.
+- **Added integration tests for lyric fidelity** (`tests/test_midi_lyrics_vs_lrc_integration.py`): 4 new tests verify character-level match between LRC and MIDI, syllable coverage, syllable letter completeness, and no monotonic pitch drift. These catch regressions automatically without manual testing.
+
 ## [0.0.80] - 2026-08-09
 - **Dynamic syllable segmentation with CMUdict integration (fully dynamic, no hardcoded dictionary).** Replaced the manual `_MANUAL_SYLLABLES` fallback with a scalable solution: CMUdict pronunciation dictionary (downloaded at runtime, cached) provides authoritative syllable counts; pyphen provides grapheme splits; a redistribution algorithm matches CMUdict counts using the maximum onset principle (consonants before a vowel nucleus attach to that syllable). Works for "forever" (3), "eighty" (2), "nowhere" (2), "together" (3), etc. No manual maintenance needed. Added 'y' as vowel for timing weight (fixes "fly", "eighty").
 - **Fixed `split_base_syllable_into_dictionary` to delegate to `pyphen_syllables`** — the former duplicated pyphen logic but missed the CMUdict redistribution, so words like "forever" incorrectly stayed as 1 syllable.

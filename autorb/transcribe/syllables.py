@@ -21,15 +21,21 @@ except ImportError:
 
 # CMUdict pronunciation cache (lazy-loaded)
 _CMUDICT = None
+_CMUDICT_PHONEMES = None
 
 
-def _load_cmudict() -> dict:
-    """Load CMUdict pronunciation dictionary for syllabification."""
-    global _CMUDICT
-    if _CMUDICT is not None:
-        return _CMUDICT
+def _load_cmudict() -> tuple[dict, dict]:
+    """Load CMUdict pronunciation dictionary for syllabification.
     
-    cmudict = {}
+    Returns:
+        (syllable_counts, phoneme_sequences) - both keyed by lowercase word
+    """
+    global _CMUDICT, _CMUDICT_PHONEMES
+    if _CMUDICT is not None and _CMUDICT_PHONEMES is not None:
+        return _CMUDICT, _CMUDICT_PHONEMES
+    
+    syllable_counts = {}
+    phoneme_seqs = {}
     try:
         # CMUdict format: WORD PHONEME1 PHONEME2 ... (single space separated)
         # Vowels have stress markers (0,1,2) - syllable count = number of vowels
@@ -49,20 +55,30 @@ def _load_cmudict() -> dict:
                     # Count syllables = phonemes with stress digits (0,1,2)
                     syllable_count = sum(1 for p in phonemes if p[-1].isdigit())
                     if syllable_count > 0:
-                        if word not in cmudict:
-                            cmudict[word] = syllable_count
+                        if word not in syllable_counts:
+                            syllable_counts[word] = syllable_count
+                            # Store phonemes without stress markers for splitting
+                            clean_phonemes = [p.rstrip('012') for p in phonemes]
+                            phoneme_seqs[word] = clean_phonemes
     except Exception:
         # Network unavailable - CMUdict will be empty, fall back to pyphen only
         pass
     
-    _CMUDICT = cmudict
-    return _CMUDICT
+    _CMUDICT = syllable_counts
+    _CMUDICT_PHONEMES = phoneme_seqs
+    return _CMUDICT, _CMUDICT_PHONEMES
 
 
 def _get_cmudict_syllable_count(word: str) -> Optional[int]:
     """Get syllable count from CMUdict."""
-    cmudict = _load_cmudict()
-    return cmudict.get(word.lower())
+    counts, _ = _load_cmudict()
+    return counts.get(word.lower())
+
+
+def _get_cmudict_phonemes(word: str) -> Optional[List[str]]:
+    """Get phoneme sequence from CMUdict."""
+    _, phonemes = _load_cmudict()
+    return phonemes.get(word.lower())
 
 
 @dataclass
@@ -268,20 +284,115 @@ def pyphen_syllables(word: str, word_start: float, word_end: float) -> List[Syll
     return syllables
 
 
-def _redistribute_syllables(word: str, target_count: int) -> List[str]:
+# Manual syllable text overrides for words where CMUdict count != pyphen split
+# These are words where English orthography doesn't match pyphen's rules
+# Only used for the syllable TEXT (display), timing still uses vowel-weighting
+_MANUAL_SYLLABLE_TEXT = {
+    "forever": ["for", "ev", "er"],
+    "eighty": ["eigh", "ty"],
+    "nowhere": ["now", "here"],
+    "everything": ["eve", "ry", "thing"],
+    "broken": ["bro", "ken"],
+    "listen": ["lis", "ten"],
+    "together": ["to", "geth", "er"],
+    "whatever": ["what", "ev", "er"],
+    "ambitious": ["am", "bi", "tious"],
+    "unconditional": ["un", "con", "di", "tion", "al"],
+    "lonesome": ["lone", "some"],
+    "ambition": ["am", "bi", "tion"],
+    "condition": ["con", "di", "tion"],
+    "tradition": ["tra", "di", "tion"],
+    "position": ["po", "si", "tion"],
+    "definition": ["def", "i", "ni", "tion"],
+    "explanation": ["ex", "pla", "na", "tion"],
+    "information": ["in", "for", "ma", "tion"],
+    "education": ["ed", "u", "ca", "tion"],
+    "celebration": ["cel", "e", "bra", "tion"],
+    "imagination": ["im", "ag", "i", "na", "tion"],
+    "organization": ["or", "gan", "i", "za", "tion"],
+    "population": ["pop", "u", "la", "tion"],
+    "generation": ["gen", "er", "a", "tion"],
+    "operation": ["op", "er", "a", "tion"],
+    "invitation": ["in", "vi", "ta", "tion"],
+    "application": ["ap", "pli", "ca", "tion"],
+    "destination": ["des", "ti", "na", "tion"],
+    "investigation": ["in", "ves", "ti", "ga", "tion"],
+    "reservation": ["res", "er", "va", "tion"],
+    "conversation": ["con", "ver", "sa", "tion"],
+    "observation": ["ob", "ser", "va", "tion"],
+    "examination": ["ex", "am", "i", "na", "tion"],
+    "imagination": ["im", "ag", "i", "na", "tion"],
+    "configuration": ["con", "fig", "u", "ra", "tion"],
+    "administration": ["ad", "min", "is", "tra", "tion"],
+    "transformation": ["trans", "for", "ma", "tion"],
+    "transportation": ["trans", "por", "ta", "tion"],
+    "telecommunication": ["tel", "e", "com", "mu", "ni", "ca", "tion"],
+}
+
+
+def _split_by_phonemes(word: str, phonemes: List[str], target_count: int) -> List[str]:
     """
-    Split word into target_count syllables based on vowel nuclei and 
-    the maximum onset principle (consonants before vowel go to that syllable).
+    Split word into syllables using CMUdict phoneme sequence.
+    
+    Maps phonemes to graphemes approximately. This is an approximation since
+    English grapheme-to-phoneme mapping is many-to-many, but works well for
+    common words.
     """
-    vowels = set('aeiouAEIOU')
+    # Simple heuristic: map phonemes to characters proportionally
+    # Group phonemes by syllable (vowel phonemes)
+    vowel_phonemes = {'AA', 'AE', 'AH', 'AO', 'AW', 'AY', 'EH', 'ER', 'EY', 
+                      'IH', 'IY', 'OW', 'OY', 'UH', 'UW'}
+    
+    syllable_phonemes = []
+    current = []
+    for ph in phonemes:
+        current.append(ph)
+        if ph in vowel_phonemes:
+            syllable_phonemes.append(current)
+            current = []
+    if current:
+        if syllable_phonemes:
+            syllable_phonemes[-1].extend(current)
+        else:
+            syllable_phonemes.append(current)
+    
+    if len(syllable_phonemes) == target_count:
+        # Perfect match - distribute characters proportionally
+        return _distribute_chars_by_phonemes(word, syllable_phonemes)
+    
+    # Close enough - use the phoneme-based count
+    if abs(len(syllable_phonemes) - target_count) <= 1:
+        return _distribute_chars_by_phonemes(word, syllable_phonemes)
+    
+    # Fallback to character distribution
+    return _equal_char_split(word, target_count)
+
+
+def _distribute_chars_by_phonemes(word: str, syllable_phonemes: List[List[str]]) -> List[str]:
+    """Distribute word characters across syllables based on phoneme count."""
+    total_phonemes = sum(len(s) for s in syllable_phonemes)
+    syllables = []
+    char_idx = 0
+    for i, syl_ph in enumerate(syllable_phonemes):
+        weight = len(syl_ph) / total_phonemes
+        end_idx = int(char_idx + len(word) * weight)
+        if i == len(syllable_phonemes) - 1:
+            end_idx = len(word)
+        syllables.append(word[char_idx:end_idx])
+        char_idx = end_idx
+    return syllables
+
+
+def _redistribute_syllables_vowel_based(word: str, target_count: int) -> List[str]:
+    """Fallback: redistribute using vowel nuclei + maximum onset principle."""
+    vowels = set('aeiouAEIOUyY')
     word_lower = word.lower()
     
-    # Find vowel nuclei (contiguous vowels = one nucleus)
+    # Find vowel nuclei
     nuclei = []
     i = 0
     while i < len(word):
         if word_lower[i] in vowels:
-            # Found vowel start - include all contiguous vowels
             j = i
             while j < len(word) and word_lower[j] in vowels:
                 j += 1
@@ -291,29 +402,94 @@ def _redistribute_syllables(word: str, target_count: int) -> List[str]:
             i += 1
     
     if not nuclei:
-        return [word]  # No vowels
+        return [word]
     
-    # If we have exactly target_count nuclei, apply maximum onset principle
     if len(nuclei) == target_count:
         syllables = []
         for idx, (n_start, n_end) in enumerate(nuclei):
-            # Onset: consonants before this nucleus up to previous nucleus end
             onset_start = nuclei[idx-1][1] if idx > 0 else 0
-            # Nucleus + coda (consonants after nucleus up to next nucleus start)
             syllable = word[onset_start:n_end]
             syllables.append(syllable)
         return syllables
     
-    # More nuclei than target: need to merge some nuclei
-    # Fewer nuclei than target: need to split (rare, fallback to equal)
-    # For simplicity, distribute characters equally
-    chars_per_syl = len(word) / target_count
+    return _equal_char_split(word, target_count)
+
+
+def _equal_char_split(word: str, target_count: int) -> List[str]:
+    """Last resort: equal character split."""
     syllables = []
     for i in range(target_count):
-        start = int(i * chars_per_syl)
-        end = int((i + 1) * chars_per_syl) if i < target_count - 1 else len(word)
+        start = int(i * len(word) / target_count)
+        end = int((i + 1) * len(word) / target_count) if i < target_count - 1 else len(word)
         syllables.append(word[start:end])
     return syllables
+
+
+_MANUAL_SYLLABLE_TEXT = {
+    "forever": ["for", "ev", "er"],
+    "eighty": ["eigh", "ty"],
+    "nowhere": ["now", "here"],
+    "everything": ["eve", "ry", "thing"],
+    "broken": ["bro", "ken"],
+    "listen": ["lis", "ten"],
+    "together": ["to", "geth", "er"],
+    "whatever": ["what", "ev", "er"],
+    "ambitious": ["am", "bi", "tious"],
+    "unconditional": ["un", "con", "di", "tion", "al"],
+    "lonesome": ["lone", "some"],
+    "ambition": ["am", "bi", "tion"],
+    "condition": ["con", "di", "tion"],
+    "tradition": ["tra", "di", "tion"],
+    "position": ["po", "si", "tion"],
+    "definition": ["def", "i", "ni", "tion"],
+    "explanation": ["ex", "pla", "na", "tion"],
+    "information": ["in", "for", "ma", "tion"],
+    "education": ["ed", "u", "ca", "tion"],
+    "celebration": ["cel", "e", "bra", "tion"],
+    "imagination": ["im", "ag", "i", "na", "tion"],
+    "organization": ["or", "gan", "i", "za", "tion"],
+    "population": ["pop", "u", "la", "tion"],
+    "generation": ["gen", "er", "a", "tion"],
+    "operation": ["op", "er", "a", "tion"],
+    "invitation": ["in", "vi", "ta", "tion"],
+    "application": ["ap", "pli", "ca", "tion"],
+    "destination": ["des", "ti", "na", "tion"],
+    "investigation": ["in", "ves", "ti", "ga", "tion"],
+    "reservation": ["res", "er", "va", "tion"],
+    "conversation": ["con", "ver", "sa", "tion"],
+    "observation": ["ob", "ser", "va", "tion"],
+    "examination": ["ex", "am", "i", "na", "tion"],
+    "imagination": ["im", "ag", "i", "na", "tion"],
+    "configuration": ["con", "fig", "u", "ra", "tion"],
+    "administration": ["ad", "min", "is", "tra", "tion"],
+    "transformation": ["trans", "for", "ma", "tion"],
+    "transportation": ["trans", "por", "ta", "tion"],
+    "telecommunication": ["tel", "e", "com", "mu", "ni", "ca", "tion"],
+}
+
+
+def _get_manual_syllable_text(word: str) -> Optional[List[str]]:
+    """Return manual syllable text for known problem words."""
+    return _MANUAL_SYLLABLE_TEXT.get(word.lower())
+
+
+def _redistribute_syllables(word: str, target_count: int) -> List[str]:
+    """
+    Split word into target_count syllables using CMUdict phonemes when available,
+    otherwise fall back to vowel-based heuristic.
+    """
+    # Check manual overrides first
+    manual = _get_manual_syllable_text(word)
+    if manual and len(manual) == target_count:
+        return manual
+    
+    # Try to use CMUdict phonemes for accurate syllabification
+    phonemes = _get_cmudict_phonemes(word)
+    if phonemes:
+        return _split_by_phonemes(word, phonemes, target_count)
+    
+    # Fallback: vowel-based heuristic
+    return _redistribute_syllables_vowel_based(word, target_count)
 
 
 def segment_word_to_syllables(
