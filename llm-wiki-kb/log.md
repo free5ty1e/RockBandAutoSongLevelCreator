@@ -6,6 +6,17 @@ date: 2026-08-07
 
 Append-only ledger of changes to this knowledge base. Newest first. Each entry records: timestamp, what was added, and why (the reasoning that future agents should not have to re-derive).
 
+## 2026-08-11 — Voiced-onset snapping + LRC-line sustain fix + quality-validation suite (v0.0.82)
+
+**What:** Updated `[[vocal_alignment]]` with a new v0.0.82 section covering two `step4_sync.py` fixes and added `tests/test_quality_validation.py` (10 tests, currently 103 total passing):
+1. **Voiced-onset snapping** — `_detect_vocal_onsets` now filters onsets to those with a pyin-confident (prob > 0.5) voiced frame within 0.25s (`VOICED_ONSET_PROB`/`VOICED_ONSET_WINDOW`). Root cause: `onset_detect(backtrack=True)` places an onset on the envelope floor before the peak; for the first word of a song that floor is pre-sound silence or an unvoiced consonant, so the note led its own pitch. Open Road Song's "Tonight" was snapping to 0.232s vs its true first voiced frame at 0.488s; it now charts at 0.534s (0.076s from the LRC).
+2. **LRC-line sustain membership uses `raw_start`** — `_clip_and_extend_word_ends` extends each LRC line's last word toward the next line's timestamp, but onset snapping can pull the *next* phrase's first word before its LRC timestamp, mis-assigning it as the previous line's last word and silently disabling the sustain extension. Each refined word now records its pre-snap `raw_start` and line membership uses it.
+Also documented the debugging trap: `output/` had been overwritten by a Brian Wilson run, so the Open Road Song chart was being driven by a 291s stem/cache — check stem/cache/tempo-map durations against the source audio before trusting quality-test failures against stale artifacts.
+
+**Why:** The quality-validation suite exposed two real chart bugs (first word 0.38s early; line-final sustains chopped). The onset fix corrects what v0.0070's "charts at 0.232s ≈ the true attack" had wrongly enshrined; the raw_start fix makes the v0.0072+ sustain behavior actually engage.
+
+---
+
 ## 2026-08-07 — Album art legibility fix + CP logo (v0.0075)
 
 **What:** The default "Chris Prime Custom" album art was illegible on macOS ("scribbles") because it hardcoded the Linux-only font path `/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf`. On macOS that path doesn't exist, so `_font()` fell back to Pillow's built-in `load_default()` **with no size argument** → always returned the size-10 bitmap font. "CHRIS" rendered ~30×8px (~124 glyph px) instead of DejaVu's ~121×26px (~1858 glyph px) — unreadable when scaled on the PS4 song list. The devcontainer always had DejaVu installed, so it rendered fine; this was a latent mac-only portability bug, not a devcontainer regression (confirmed by a direct font-render test). Fix: DejaVu Sans Bold/Regular (permissive Bitstream Vera license) are now **bundled in the wheel** (`autorb/export/data/fonts/`, shipped via `[tool.setuptools.package-data]`). `_load_font()` prefers the bundled copy, then known OS paths (Homebrew/Library/macOS, `/usr/share/fonts/...`/Linux), then Pillow's scalable `load_default(size=)` (Pillow ≥ 10.1). Also added a circular "CP" monogram logo in the bottom-right corner (orange ring + white C/P strokes). New regression tests: `test_album_art_title_is_legible` (asserts thousands of white glyph pixels on 256px art) and `test_album_art_has_cp_logo` (asserts orange ring + white glyphs in bottom-right). Full suite: 42 passed.

@@ -24,6 +24,12 @@ ONSET_SEARCH_AFTER = 0.05    # max seconds after it (WhisperX is rarely early)
 ONSET_MAX_SHIFT = 0.30       # never snap more than this far (BP fallback only)
 ONSET_SNAP_EARLY_MIN = 0.03  # only snap when WhisperX is at least this late
 MIN_WORD_GAP = 0.02          # keep words from collapsing onto each other
+# A snap target must have a VOICED (pitch-bearing) frame shortly after it.
+# Over-backtracked onsets can land on the envelope floor before any sound
+# (e.g. "Tonight" snapping to the song's opening silence) or on an unvoiced
+# consonant; a Rock Band vocal note must start where the sung pitch begins.
+VOICED_ONSET_PROB = 0.5       # pyin confidence threshold for "voiced"
+VOICED_ONSET_WINDOW = 0.25    # max seconds after an onset to find voicing
 
 # Vocal MIDI range. C3..C6 (48..84) covers the sung range for the vast
 # majority of rock vocals; lower values come from sub-octave noise/guitar bleed.
@@ -52,6 +58,13 @@ def _detect_vocal_onsets(vocals_stem):
     a syllable. Both WhisperX word starts and Basic-Pitch note onsets run late
     (Basic-Pitch misses the earliest part of the attack — e.g. the first word
     of a song charted ~350ms late). Returns None when the stem cannot be read.
+
+    Onsets are kept only when a VOICED (pyin-confident, pitch-bearing) frame
+    falls within ``VOICED_ONSET_WINDOW`` seconds after them. Onset backtracking
+    can place a "start" on the envelope floor before any audible sound (song
+    opening silence) or on an unvoiced consonant ("Tonight"'s "T"); a vocal
+    note must begin where the sung pitch actually starts, so unvoiced/silent
+    onsets are dropped.
     """
     try:
         import librosa
@@ -64,7 +77,19 @@ def _detect_vocal_onsets(vocals_stem):
     onset_env = librosa.onset.onset_strength(y=y, sr=sr)
     frames = librosa.onset.onset_detect(onset_envelope=onset_env, sr=sr,
                                         backtrack=True, delta=0.05)
-    return librosa.frames_to_time(frames, sr=sr).tolist()
+    onset_times = librosa.frames_to_time(frames, sr=sr).tolist()
+    try:
+        f0, _, probs = librosa.pyin(y, fmin=librosa.note_to_hz('C3'),
+                                    fmax=librosa.note_to_hz('C6'), sr=sr,
+                                    frame_length=2048, hop_length=512)
+        f_times = librosa.times_like(f0, sr=sr, hop_length=512)
+        voiced = np.isfinite(f0) & (probs > VOICED_ONSET_PROB)
+        return [
+            t for t in onset_times
+            if np.any(voiced[(f_times >= t) & (f_times <= t + VOICED_ONSET_WINDOW)])
+        ]
+    except Exception:
+        return onset_times
 
 
 def _refine_word_timing(segment, note_events, prev_sung_end, vocal_onsets=None):
@@ -257,6 +282,73 @@ def _resolve_pitches(starts, ends, note_events, times, f0, voiced, probs):
     return pitches
 
 
+def _clip_and_extend_word_ends(refined, lyrics_data):
+    """Post-process word ends so charted notes never drift late or chop sustains.
+
+    1. Clip every word's end to the *next* word's start (no overlaps). This is
+       critical: un-clipped overlaps push every following note progressively
+       later (the PS4 drift symptom).
+    2. For the LAST word of each LRC line, extend its end to the next line's
+       timestamp (minus a small breath gap). LRC line starts are the source of
+       truth for phrase boundaries; WhisperX cuts a held final syllable
+       ("forgottennnn") at its own word boundary, chopping the sustain.
+    """
+    # --- 1) Clip to next word's start ---
+    sorted_words = sorted(refined, key=lambda w: w.get("start", 0.0))
+    for i in range(len(sorted_words) - 1):
+        curr = sorted_words[i]
+        nxt = sorted_words[i + 1]
+        curr_end = curr.get("end", curr.get("start", 0.0))
+        next_start = nxt.get("start", nxt.get("time", 0.0))
+        if curr_end > next_start:
+            curr["end"] = next_start
+
+    # --- 2) Extend last word of each LRC line toward the next line ---
+    lrc_lines = lyrics_data.get("lyrics_data", [])
+    if not lrc_lines:
+        return
+
+    # Build the set of word indices (in sorted order) that are the LAST word of
+    # an LRC line. A word is "last" if it's the last word sung before the next
+    # LRC line's timestamp. Line membership uses the RAW (pre-onset-snap) start:
+    # onset snapping legitimately pulls a phrase's first word before the LRC
+    # timestamp (the true sung attack precedes the slightly-late LRC marker),
+    # so a snapped start would mis-assign it to the previous line.
+    line_times = sorted({float(line.get("time", 0.0)) for line in lrc_lines})
+    line_times.append(float("inf"))
+
+    # For each LRC line, find its last word in the synced list: the word whose
+    # start is closest to (but before) the next line's start.
+    next_line_starts = [line_times[i + 1] for i in range(len(line_times) - 1)]
+    line_last_word = {}  # next_line_start -> word index in sorted_words
+    for li, line_time in enumerate(line_times[:-1]):
+        next_start = line_times[li + 1]
+        # Words belonging to this line: raw start >= line_time and < next_start
+        candidates = [
+            (i, w) for i, w in enumerate(sorted_words)
+            if w.get("raw_start", w.get("start", 0.0)) >= line_time - 0.01
+            and w.get("raw_start", w.get("start", 0.0)) < next_start
+        ]
+        if candidates:
+            line_last_word[next_start] = candidates[-1][0]
+
+    # Extend each line's last word end toward the next line start (minus breath).
+    BREATH_GAP = 0.10  # allow a short breath before the next phrase
+    for next_start, wi in line_last_word.items():
+        word = sorted_words[wi]
+        if next_start == float("inf"):
+            continue
+        target_end = next_start - BREATH_GAP
+        # Only extend (never shrink an already-long sustain).
+        if target_end > word.get("end", word.get("start", 0.0)):
+            word["end"] = target_end
+        # Ensure the extended end doesn't now overlap the next word's start.
+        if wi + 1 < len(sorted_words):
+            nxt_start = sorted_words[wi + 1].get("start", 0.0)
+            if word["end"] > nxt_start:
+                word["end"] = nxt_start
+
+
 def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=None):
     """
     Maps word segments to the nearest beat time.
@@ -295,11 +387,20 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
             "word": word,
             "time": start_time,
             "start": start_time,
+            "raw_start": segment.get("start", segment.get("time", 0.0)),
             "end": end_time,
             "beat_time": closest_beat,
             "beat_index": beat_index,
             "confidence_score": segment.get("score", 1.0)
         })
+
+    # Post-process word ends:
+    # 1) No word's end may overlap the next word's start (overlaps accumulate
+    #    into progressive lateness in-game).
+    # 2) The last word of each LRC line sustains toward the next line's
+    #    timestamp — the LRC line start marks the next phrase, so a held final
+    #    syllable ("forgottennnn") is never chopped at WhisperX's word boundary.
+    _clip_and_extend_word_ends(refined, lyrics_data)
 
     # Second pass: syllable segmentation
     lrc_data = None
