@@ -356,3 +356,85 @@ def test_overlapping_word_ends_do_not_push_notes_late(tmp_path: Path):
     assert all(offs[i] <= ons[i + 1] for i in range(len(ons) - 1)), (
         f"notes overlap: offs={offs} ons={ons}"
     )
+
+
+def test_first_note_of_word_anchors_to_snapped_word_start(tmp_path: Path):
+    """The first note of a word must be charted at the word's onset-snapped
+    ``start`` (the true sung onset), NOT at the first note_segment's start —
+    Basic-Pitch pitch onsets lag the sung attack by ~0.1-0.6s and, on held
+    words, land near the word's end (e.g. "salt" 152.276 vs snapped 151.678).
+    Later segments within the word keep their own pitch-change times."""
+    from autorb.export.midi_generator import _build_tempo_grid
+
+    # 120 BPM flat grid, count-in disabled: grid_to_tick(t) = t * 960 ticks/s.
+    beat_times, bpms = [], []
+    t = 0.0
+    for i in range(40):
+        beat_times.append(t)
+        bpms.append(120.0)
+        t += 0.5
+
+    # "held": word.start snapped to 1.0 but BP only detects pitch at 1.4.
+    # "slide": first segment late by 0.3, second segment is the real pitch change.
+    items = [
+        {"word": "held", "start": 1.0, "end": 3.0, "syllables": [
+            {"text": "held", "start": 1.0, "end": 3.0, "note_segments": [
+                {"start": 1.4, "end": 2.9, "midi_note": 57},
+            ]},
+        ]},
+        {"word": "slide", "start": 3.5, "end": 5.0, "syllables": [
+            {"text": "slide", "start": 3.5, "end": 5.0, "note_segments": [
+                {"start": 3.8, "end": 4.2, "midi_note": 57},
+                {"start": 4.2, "end": 4.9, "midi_note": 59},
+            ]},
+        ]},
+        {"word": "soon", "start": 5.5, "end": 6.0, "syllables": [
+            {"text": "soon", "start": 5.6, "end": 6.0, "note_segments": [
+                {"start": 5.6, "end": 6.0, "midi_note": 60},
+            ]},
+        ]},
+    ]
+    sj = tmp_path / "anchored.json"
+    sj.write_text(json.dumps({"synced_lyrics": items}))
+
+    mid_path = generate_vocal_midi(
+        sj, tmp_path, "anchored",
+        song_length_ms=10000, bpm=120.0,
+        beat_times=beat_times, dynamic_bpms=bpms,
+    )
+
+    # Recover each vocal note's (on_tick, lyric) from the raw event stream.
+    mf = mido.MidiFile(mid_path)
+    voc = next(tr for tr in mf.tracks if tr.name == "PART VOCALS")
+    abs_tick = 0
+    pending_note = None
+    notes: list[tuple[int, str]] = []
+    note_ons: list[int] = []
+    for msg in voc:
+        abs_tick += msg.time
+        if msg.type == "note_on" and msg.note < 105 and msg.velocity > 0:
+            pending_note = abs_tick
+            note_ons.append(abs_tick)
+        elif msg.type == "lyrics" and pending_note is not None:
+            notes.append((pending_note, msg.text))
+            pending_note = None
+
+    by_lyric = {text: tick for tick, text in notes}
+
+    # "held" must land at its snapped word start (1.0s), not the late segment.
+    assert abs(by_lyric["held"] - int(1.0 * 960)) <= 2, (
+        f"'held' charted at tick {by_lyric['held']}, expected ~{int(1.0*960)}"
+    )
+    # First segment of "slide" anchors to word.start (3.5s); the slide-up segment
+    # (pitch 59) still keeps its own start (4.2s).
+    assert abs(by_lyric["slide"] - int(3.5 * 960)) <= 2, (
+        f"'slide' first note at tick {by_lyric['slide']}, expected ~{int(3.5*960)}"
+    )
+    # The second segment's note must sit at its own pitch-change time.
+    assert any(abs(t - int(4.2 * 960)) <= 2 for t in note_ons), (
+        f"second slide segment missing at ~{int(4.2*960)}: note_ons={note_ons}"
+    )
+    # An already-aligned word ("soon") must be unchanged.
+    assert abs(by_lyric["soon"] - int(5.5 * 960)) <= 2, (
+        f"'soon' charted at tick {by_lyric['soon']}, expected ~{int(5.5*960)}"
+    )

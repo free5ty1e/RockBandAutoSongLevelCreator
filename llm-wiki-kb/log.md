@@ -6,6 +6,14 @@ date: 2026-08-07
 
 Append-only ledger of changes to this knowledge base. Newest first. Each entry records: timestamp, what was added, and why (the reasoning that future agents should not have to re-derive).
 
+## 2026-08-12 — Charted vocal notes anchored to onset-snapped word starts (v0.0.84)
+
+**What:** `generate_vocal_midi()` charted every note at its syllable `note_segment.start` (the Basic-Pitch pitch onset) and ignored the word's onset-snapped `start` whenever the word had syllables. Fixed by starting the first segment of a word's first syllable at `word.start`; later segments keep their own pitch-change times. Added a "Charted Note Anchored to the Onset-Snapped Word Start" section to `[[vocal_alignment]]`, plus a debugging note about reading note↔lyric pairs (capture the `FF 05` lyric meta immediately following each `note_on` at the same tick — a last-lyric accumulator lags by one).
+
+**Why:** The v0.0070/v0.0.82 onset snapping fixed the word starts but the MIDI generator never consumed them, so the chart was systematically late by exactly the BP pitch-onset lag that snapping was built to remove (median 0.000s, p90 +0.108s, worst +0.598s on "salt"). The "+4s outliers" reported earlier were an artifact of naive lyric-tracking in analysis scripts, not the chart — the chart was internally consistent but charted at the wrong onset.
+
+---
+
 ## 2026-08-11 — Robust vocal-pitch: harmonic-misread gates + outlier-rejected contour (v0.0.83)
 
 **What:** Updated `[[vocal_alignment]]` with a v0.0.83 section and re-measured the rebuilt Open Road Song chart. The trust gate (`PYIN_PROB_THRESH` per segment + mode≈median) was necessary but NOT sufficient: a harmonic/bleed *split* reading passes it per-segment while the syllable as a whole is noise. Three-part fix in `autorb/transcribe/pitch_tracking.py`:

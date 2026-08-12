@@ -267,7 +267,15 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
             lyric = word.get("word", word.get("lyric", "la"))
             note_items.append((start_sec, end_sec, pitch, lyric, False))
         else:
-            for syl in syllables:
+            # The word's onset-snapped start (the earliest voiced vocal-stem
+            # onset) is the true sung attack and anchors the word's FIRST note.
+            # Basic-Pitch's own note-segment onset can lag that by 0.2-0.6s (and
+            # occasionally lands near the word's end when pitch is only detected
+            # late in a held syllable), so the first segment starts at
+            # ``word.start`` while later segments keep their own pitch-change
+            # times.
+            word_start = word.get("start")
+            for syl_idx, syl in enumerate(syllables):
                 segs = syl.get("note_segments", [])
                 syl_text = syl.get("text", "la")
                 syl_start = syl.get("start", 0.0)
@@ -276,6 +284,8 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
                 if not segs:
                     # Fallback
                     pitch = word.get("pitch", 60)
+                    if syl_idx == 0 and word_start is not None:
+                        syl_start = word_start
                     note_items.append((syl_start, syl_end, pitch, syl_text, False))
                 else:
                     # Make segments within the same syllable CONTIGUOUS (no gaps).
@@ -289,6 +299,8 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
                             # Next segment's start becomes this segment's end
                             next_start = segs[j + 1].get("start", start_sec)
                             end_sec = next_start
+                        if syl_idx == 0 and j == 0 and word_start is not None:
+                            start_sec = word_start
                         contiguous_segs.append((start_sec, end_sec, seg.get("midi_note", 60)))
                     
                     # Split syllable text into display sub-syllables using pyphen
