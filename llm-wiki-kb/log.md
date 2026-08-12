@@ -6,6 +6,19 @@ date: 2026-08-07
 
 Append-only ledger of changes to this knowledge base. Newest first. Each entry records: timestamp, what was added, and why (the reasoning that future agents should not have to re-derive).
 
+## 2026-08-11 — Robust vocal-pitch: harmonic-misread gates + outlier-rejected contour (v0.0.83)
+
+**What:** Updated `[[vocal_alignment]]` with a v0.0.83 section and re-measured the rebuilt Open Road Song chart. The trust gate (`PYIN_PROB_THRESH` per segment + mode≈median) was necessary but NOT sufficient: a harmonic/bleed *split* reading passes it per-segment while the syllable as a whole is noise. Three-part fix in `autorb/transcribe/pitch_tracking.py`:
+1. **Multi-segment spread rule** (`MAX_SYLLABLE_SPREAD_ST=6.0`) — a syllable whose segments span > 6 st is untrusted; a real vocal slide never jumps that far inside one syllable.
+2. **Robust contour anchors** — `build_melodic_contour_from_syllables` rejects anchors that deviate > `CONTOUR_OUTLIER_ST` (7 st) from the local-median of their ±2 neighbors (`CONTOUR_ANCHOR_WINDOW`), *before* interpolating. A single contaminated anchor used to warp the whole contour (Open Road Song's "road"=72 = 3rd harmonic of A3=57 dragged the contour up and pulled untrusted neighbors like "pen"=64 with it).
+3. **Trusted contour-check** in `resolve_syllable_pitches_with_fallback` — a trusted reading survives only if its first note is within 7 st of the robust contour, else it is reclassified as untrusted and resolved via BP/contour fallbacks.
+
+Key measured results on the rebuilt chart (v0.0.83): consecutive vocal jumps ≥ 5 st **18 → 10**; vocal range **50..78 → 50..64** (72/76/78 were harmonics); first-phrase "hit eighty on the open road" `50→61→54→64→72` → `57→57→57→56`; ending "road/song" `66→78→76→52→61` → coherent `63→64→64` ascent. The low "As" dip (50 vs contour 56, dev 6.2 st) is a genuine melody element and is intentionally preserved by the 7-st threshold — do not lower the threshold expecting to catch it.
+
+**Why:** User play-tested the PS4 chart and reported vocal pitches "jump" note-to-note. The previously-documented v0.0073 fix (per-word pyin trusted on confidence+mode-consensus) stopped most jumps (61→28) but the remaining 10-18 jumps were exactly the self-consistent harmonic misreads that no per-segment check can catch. Also documented a recurring debugging trap: `output/` frequently holds a different song's build (Brian Wilson), so `test_quality_validation.py` failures against `output/` are data-dependent, not code regressions — 4 such failures exist on the pre-fix baseline too.
+
+---
+
 ## 2026-08-11 — Voiced-onset snapping + LRC-line sustain fix + quality-validation suite (v0.0.82)
 
 **What:** Updated `[[vocal_alignment]]` with a new v0.0.82 section covering two `step4_sync.py` fixes and added `tests/test_quality_validation.py` (10 tests, currently 103 total passing):

@@ -137,6 +137,32 @@ class TestSegmentSyllablePitch:
         assert len(syl.note_segments) == 0
         assert syl.is_trusted == False
 
+    def test_harmonic_split_untrusted(self):
+        # 'eigh' reads as [50, 61]: each segment is self-consistent (mode==median,
+        # high confidence) but the 11-semitone spread is a harmonic/bleed split,
+        # not a real vocal slide. The syllable must NOT be trusted.
+        times = np.linspace(0, 1.0, 200)
+        f0 = np.full_like(times, 146.83)  # D3
+        f0[times >= 0.5] = 277.18  # C#4 - spread 11 semitones (D3 50 -> C#4 61)
+        voiced = np.ones_like(times, dtype=bool)
+        probs = np.ones_like(times) * 0.9
+
+        syl = segment_syllable_pitch(0.0, 1.0, "eigh", times, f0, voiced, probs)
+        assert len(syl.note_segments) >= 2
+        assert syl.is_trusted == False
+
+    def test_real_slide_kept_trusted(self):
+        # A genuine slide within a syllable (C4 -> E4, spread 4) stays trusted.
+        times = np.linspace(0, 1.0, 200)
+        f0 = np.full_like(times, 261.63)  # C4
+        f0[times >= 0.5] = 329.63  # E4 - spread 4 semitones
+        voiced = np.ones_like(times, dtype=bool)
+        probs = np.ones_like(times) * 0.9
+
+        syl = segment_syllable_pitch(0.0, 1.0, "ah", times, f0, voiced, probs)
+        assert len(syl.note_segments) == 2
+        assert syl.is_trusted == True
+
 
 class TestOctaveSnap:
     def test_snap_up(self):
@@ -189,6 +215,34 @@ class TestBuildMelodicContour:
         assert contour(-0.5) == pytest.approx(60, abs=0.5)
         assert contour(2.0) == pytest.approx(64, abs=0.5)
 
+    def test_isolated_outlier_anchor_rejected(self):
+        # 'road'=72 is a harmonic misread sitting between real neighbors at 57 and 56.
+        # The robust contour must NOT warp up to 72 - it should stay near the local
+        # melody (and the honest low 'As'=50 dip between two 57s must survive).
+        syls = [
+            SyllablePitch("a", 0.0, 0.3, [NoteSegment(0.0, 0.3, 57, 0.9)], True),
+            SyllablePitch("b", 0.3, 0.5, [NoteSegment(0.3, 0.5, 57, 0.9)], True),
+            SyllablePitch("road", 0.5, 0.7, [NoteSegment(0.5, 0.7, 72, 0.9)], True),
+            SyllablePitch("c", 0.7, 0.9, [NoteSegment(0.7, 0.9, 56, 0.9)], True),
+            SyllablePitch("d", 0.9, 1.1, [NoteSegment(0.9, 1.1, 57, 0.9)], True),
+        ]
+        contour = build_melodic_contour_from_syllables(syls)
+        assert contour is not None
+        assert contour(0.5) == pytest.approx(57, abs=2.0)  # not warped to ~72
+
+    def test_melody_dip_survives(self):
+        # 'As'=50 dips 6-7 semitones below its neighbors (real melody). It must
+        # remain an anchor and must not be flattened to the smooth contour.
+        syls = [
+            SyllablePitch("a", 0.0, 0.3, [NoteSegment(0.0, 0.3, 57, 0.9)], True),
+            SyllablePitch("As", 0.3, 0.5, [NoteSegment(0.3, 0.5, 50, 0.9)], True),
+            SyllablePitch("b", 0.5, 0.7, [NoteSegment(0.5, 0.7, 56, 0.9)], True),
+        ]
+        contour = build_melodic_contour_from_syllables(syls)
+        assert contour is not None
+        # dip partially reflected in the local contour, not erased entirely
+        assert contour(0.4) <= 53.5
+
 
 class TestResolveWithFallback:
     def test_trusted_kept(self):
@@ -210,6 +264,30 @@ class TestResolveWithFallback:
         
         result = resolve_syllable_pitches_with_fallback(syls, bp_notes, contour)
         assert result[0].note_segments[0].midi_note == 60  # Snapped to contour
+
+    def test_trusted_harmonic_misread_reclassified(self):
+        # 'road'=72 is "trusted" by pyin (self-consistent, high confidence) but sits
+        # 15 semitones above the melodic context. It must be reclassified and snapped
+        # down to the contour instead of charting a jarring 15-semitone spike.
+        syls = [
+            SyllablePitch("a", 0.0, 0.3, [NoteSegment(0.0, 0.3, 57, 0.9)], True),
+            SyllablePitch("road", 0.3, 0.5, [NoteSegment(0.3, 0.5, 72, 0.9)], True),
+            SyllablePitch("b", 0.5, 0.7, [NoteSegment(0.5, 0.7, 57, 0.9)], True),
+        ]
+        contour = lambda t: 57
+        result = resolve_syllable_pitches_with_fallback(syls, [], contour)
+        assert result[1].note_segments[0].midi_note == 57  # Contour fallback, not 72
+
+    def test_trusted_near_contour_kept(self):
+        # 'As'=50 is a real 6-semitone melody dip - inside the outlier threshold, so it
+        # must NOT be reclassified or flattened.
+        syls = [
+            SyllablePitch("As", 0.3, 0.5, [NoteSegment(0.3, 0.5, 50, 0.9)], True),
+        ]
+        contour = lambda t: 56
+        result = resolve_syllable_pitches_with_fallback(syls, [], contour)
+        assert result[0].is_trusted == True
+        assert result[0].note_segments[0].midi_note == 50
 
 
 class TestComputeVocalPitchPerSyllable:

@@ -40,6 +40,9 @@ PYIN_PROB_THRESH = 0.5         # voiced probability threshold
 PYIN_MIN_FRAMES = 2            # minimum confident voiced frames for trust
 PYIN_MODE_AGREE_ST = 1.0       # median vs mode agreement threshold (semitones)
 VOCAL_MIDI_MIN, VOCAL_MIDI_MAX = 48, 84  # C3..C6
+MAX_SYLLABLE_SPREAD_ST = 6.0   # multi-segment syllables wider than this are harmonic splits, not real slides
+CONTOUR_OUTLIER_ST = 7.0       # trusted pyin reading this far from the melodic context is a harmonic misread
+CONTOUR_ANCHOR_WINDOW = 2      # local-median neighbor window for contour anchor rejection
 
 
 def compute_dense_pitch(vocals_stem_path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -180,6 +183,14 @@ def segment_syllable_pitch(
     segments = enforce_min_duration(segments, MIN_NOTE_DURATION_MS / 1000.0, syllable_end)
     
     is_overall_trusted = len(segments) > 0 and all(s.confidence > PYIN_PROB_THRESH for s in segments)
+    
+    # A multi-segment syllable spread wider than a real vocal slide is a harmonic/bleed
+    # split reading (e.g. 'eigh' = [50, 61], 'road' = [66, 78, 76]). Each segment can be
+    # self-consistent (mode≈median, high confidence) yet the syllable as a whole is noise.
+    if is_overall_trusted and len(segments) > 1:
+        pitches = [s.midi_note for s in segments]
+        if max(pitches) - min(pitches) > MAX_SYLLABLE_SPREAD_ST:
+            is_overall_trusted = False
     
     return SyllablePitch(
         syllable_text=syllable_text,
@@ -369,6 +380,25 @@ def build_melodic_contour_from_syllables(
     x = np.array([t for t, _ in trusted], dtype=float)
     y = np.array([p for _, p in trusted], dtype=float)
     
+    # Reject isolated outliers (harmonic misreads) before interpolating. A single
+    # contaminated anchor (e.g. 'road'=72 = 3rd harmonic of A3=57) would otherwise warp
+    # the whole contour and drag neighboring fallbacks off-melody. Compare each anchor
+    # to the local-median of its immediate neighbors instead of a global fit so genuine
+    # melody dips survive and only spikes against the local context are dropped.
+    keep = np.ones(len(x), dtype=bool)
+    for i in range(len(x)):
+        lo, hi = max(0, i - CONTOUR_ANCHOR_WINDOW), min(len(x), i + CONTOUR_ANCHOR_WINDOW + 1)
+        window = [j for j in range(lo, hi) if j != i]
+        if not window:
+            continue
+        median = float(np.median(y[window]))
+        if abs(y[i] - median) > CONTOUR_OUTLIER_ST:
+            keep[i] = False
+    x, y = x[keep], y[keep]
+    
+    if len(x) < 2:
+        return None
+    
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         fn = interp1d(x, y, kind="linear", fill_value="extrapolate")
@@ -398,7 +428,17 @@ def resolve_syllable_pitches_with_fallback(
     """
     for syl in syllable_pitches:
         if syl.is_trusted and syl.note_segments:
-            continue
+            # A trusted reading can still be a single-segment harmonic/octave misread
+            # (e.g. 'road'=72 while the melodic context is A3=57). Anything that far
+            # from the robust contour is reclassified and sent through the fallbacks.
+            if melodic_contour is not None:
+                first = syl.note_segments[0].midi_note
+                if abs(first - melodic_contour(syl.syllable_start)) > CONTOUR_OUTLIER_ST:
+                    syl.is_trusted = False
+                else:
+                    continue
+            else:
+                continue
         
         # Try Basic-Pitch fallback: find BP note overlapping this syllable
         bp_pitch = None
