@@ -22,6 +22,45 @@ class NumpyEncoder(json.JSONEncoder):
 from autorb.pitch.inference import predict
 import whisperx
 
+# whisperx.align pushes each segment's whole audio window through the wav2vec2
+# alignment model in ONE forward pass (and builds a CTC trellis from the full
+# text), so a segment that spans too much audio exhausts CPU memory (~291s of
+# audio OOMs on a 7GB box while ~198s survives). Chunks of ~60s keep each
+# forward pass small while leaving whisperx free to align every word inside.
+ALIGN_CHUNK_SECONDS = 60.0
+
+
+def _build_alignment_transcript(lyrics_data, audio_duration):
+    """Build the coarse whisperx transcript segments (LRC times = suggestions).
+
+    Groups lyric lines into ~60s chunks by their (suggested) LRC timestamps.
+    WhisperX freely aligns each chunk's text within its audio window, so a
+    badly late LRC line can no longer drag its whole phrase late — only a line
+    within ~a second of a chunk boundary could land in the neighbouring chunk,
+    which the downstream onset snapping absorbs.
+    """
+    segments = []
+    line_idx = 0
+    chunk_start = 0.0
+    while chunk_start < audio_duration and line_idx < len(lyrics_data):
+        chunk_end = min(chunk_start + ALIGN_CHUNK_SECONDS, audio_duration)
+        chunk_lines = []
+        while line_idx < len(lyrics_data):
+            line_time = lyrics_data[line_idx]["time"]
+            if line_time >= chunk_end:
+                break
+            chunk_lines.append(lyrics_data[line_idx])
+            line_idx += 1
+        if chunk_lines:
+            segments.append({
+                "text": " ".join(line["text"] for line in chunk_lines),
+                "start": chunk_start,
+                "end": chunk_end,
+            })
+        chunk_start = chunk_end
+    return segments
+
+
 def process_vocals(vocal_stem_path, lrc_path, out_dir):
     """
     Parses the LRC file, force-aligns words via WhisperX, extracts vocal pitches,
@@ -55,11 +94,20 @@ def process_vocals(vocal_stem_path, lrc_path, out_dir):
     audio = whisperx.load_audio(str(vocal_stem_path))
     audio_duration = len(audio) / 16000.0
 
-    whisperx_transcript = []
-    for i, line in enumerate(lyrics_data):
-        start_time = line["time"]
-        end_time = lyrics_data[i+1]["time"] if i + 1 < len(lyrics_data) else audio_duration
-        whisperx_transcript.append({"text": line["text"], "start": start_time, "end": end_time})
+    # The MP3 and the .lrc come from different sources, so LRC timestamps are
+    # suggestions only — they carry a global offset and occasionally a badly
+    # late line. Feeding whisperx one segment *per LRC line* is dangerous:
+    # whisperx.align() slices the audio at each segment["start"] (a hard
+    # boundary), so a late LRC line drags its entire phrase late and out of
+    # the onset-snap recovery window downstream. Instead we hand whisperx a
+    # handful of COARSE segments (one per ~60s of audio, grouped by LRC line
+    # time) spanning the whole track; whisperx then freely aligns every word
+    # to the actual vocal audio within each chunk, and the LRC timestamps are
+    # used later only as phrase hints. (A single segment spanning the whole
+    # track is ideal but pushes the whole song through the wav2vec2 align
+    # model in one forward pass, which exhausts CPU memory on longer songs —
+    # e.g. 291s dies silently while 198s survives.)
+    whisperx_transcript = _build_alignment_transcript(lyrics_data, audio_duration)
 
     model_a, metadata = whisperx.load_align_model(language_code="en", device=device)
     

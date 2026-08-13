@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import warnings
 import numpy as np
 from pathlib import Path
@@ -19,10 +20,14 @@ def load_json(filepath):
 # real onset — but constrained so a word can never snap back into the previous
 # word's sung region (Basic-Pitch often merges a fast following word, e.g.
 # "Tonight I", into a single sustained note).
-ONSET_SEARCH_BEFORE = 0.90   # max seconds before the WhisperX start to look.
+ONSET_SEARCH_BEFORE = 1.50  # max seconds before the WhisperX start to look.
                              # LRC timestamps are only a SUGGESTION and can be
-                             # offset from the MP3 by >0.45s, so a wide window
-                             # lets the true (audio-derived) attack win.
+                             # offset from the MP3 by >0.45s, and a badly late
+                             # LRC line can drag a whisperx phrase late, so a
+                             # wide window lets the true (audio-derived) attack
+                             # win. Safe because the snap rule only ever picks
+                             # the LATEST onset at-or-before the boundary and
+                             # the previous-word floor blocks backtracking.
 ONSET_SEARCH_AFTER = 0.05    # max seconds after it (WhisperX is rarely early)
 ONSET_MAX_SHIFT = 0.30       # never snap more than this far (BP fallback only)
 ONSET_SNAP_EARLY_MIN = 0.03  # only snap when WhisperX is at least this late
@@ -404,6 +409,52 @@ def _audio_word_end(start, next_start, times, f0, voiced, probs, rms_t, rms):
     return end
 
 
+def _dedup_consecutive_words(word_segments, min_gap=0.35):
+    """Drop WhisperX word duplications (same word emitted twice back-to-back).
+
+    WhisperX occasionally emits the same word twice in a row — two segments with
+    nearly identical text and timestamps for ONE sung word. A genuinely repeated
+    lyric is sung with a real gap; a duplicate is two segments spaced under
+    ``min_gap`` seconds apart. This runs BEFORE timing refinement so a duplicated
+    word is never charted twice (which doubles the on-screen lyric, e.g.
+    "crack crack a window").
+    """
+    norm = lambda w: re.sub(r"[^a-z0-9]", "", (w or "").lower())
+    out = []
+    for seg in sorted(word_segments, key=lambda s: s.get("start", s.get("time", 0.0))):
+        s = seg.get("start", seg.get("time", 0.0))
+        if out:
+            prev = out[-1]
+            ps = prev.get("start", prev.get("time", 0.0))
+            if norm(seg.get("word")) == norm(prev.get("word")) and (s - ps) < min_gap:
+                continue
+        out.append(seg)
+    return out
+
+
+def _dedup_final_synced(synced_words, min_gap=0.15):
+    """Drop final-chart near-simultaneous duplicate words (post onset-snap).
+
+    Runs AFTER snapping, syllable segmentation, and pitch attachment (whole
+    word dicts are dropped wholesale, so nothing dangles). A whisperx
+    melisma-split of one sung word charted as the same lyric twice within
+    ``min_gap`` seconds ("Well I'm-I'm lyin'") becomes two notes ~0.08s apart
+    once both snap to the shared attack — that's an artifact, not a re-sung
+    word, and it renders as a doubled lyric. Genuine repeats are re-articulated
+    and land ≥ ~0.25s apart ("fun fun fun"), so they survive.
+    """
+    norm = lambda w: re.sub(r"[^a-z0-9]", "", (w or "").lower())
+    out = []
+    for w in synced_words:
+        if out:
+            prev = out[-1]
+            if norm(w.get("word")) == norm(prev.get("word")) and \
+               w.get("start", 0.0) - prev.get("start", 0.0) < min_gap:
+                continue
+        out.append(w)
+    return out
+
+
 def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=None):
     """
     Maps word segments to the nearest beat time.
@@ -415,7 +466,7 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
     ``lrc_path`` (optional) is the path to the LRC file for syllable-level timing.
     """
     beat_times = beats_data.get("beat_times", [])
-    word_segments = lyrics_data.get("word_segments", [])
+    word_segments = _dedup_consecutive_words(lyrics_data.get("word_segments", []))
     note_events = lyrics_data.get("note_events", [])
     alignment_result = lyrics_data.get("alignment_result", {})
     
@@ -617,7 +668,7 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
             "total_beats": len(beat_times),
             "total_words": len(refined)
         },
-        "synced_lyrics": refined
+        "synced_lyrics": _dedup_final_synced(refined)
     }
 
 

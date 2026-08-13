@@ -10,6 +10,9 @@
 .opencode/node_modules/
 input/
 output/
+output_fresh/
+output_fresh_bw/
+output_ors/
 
 # Python build artifacts
 *.egg-info/

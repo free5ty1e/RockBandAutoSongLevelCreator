@@ -159,6 +159,116 @@ def lrc_syllables_to_timed(
     return syllables
 
 
+def _norm_word(w: str) -> str:
+    """Normalize a word for comparison (lowercase, strip punctuation)."""
+    return re.sub(r"[^a-z0-9]", "", (w or "").lower())
+
+
+def _flatten_raw_words(
+    whisperx_alignment: Optional[dict],
+    whisperx_word_segments: Optional[List[dict]],
+) -> List[dict]:
+    """Return the raw WhisperX word boundaries in order.
+
+    Prefers ``whisperx_word_segments`` (the flattened list the pipeline already
+    built) and falls back to flattening ``alignment_result["segments"][i][
+    "words"]``.
+    """
+    if whisperx_word_segments:
+        return whisperx_word_segments
+    raw = []
+    if whisperx_alignment and "segments" in whisperx_alignment:
+        for seg in whisperx_alignment["segments"]:
+            for w in seg.get("words", []):
+                raw.append({
+                    "word": w.get("word", ""),
+                    "start": w.get("start", w.get("time", 0.0)),
+                    "end": w.get("end", 0.0),
+                })
+    return raw
+
+
+def _match_raw_word(raw_words: List[dict], word_text: str, anchor: float):
+    """Find the raw WhisperX word matching ``word_text`` nearest ``anchor``.
+
+    Repeated words appear many times in the raw list, so we pick the match whose
+    raw start is closest to the (onset-snapped) charted anchor.
+    """
+    target = _norm_word(word_text)
+    best = None
+    for rw in raw_words:
+        if _norm_word(rw.get("word")) == target:
+            score = abs(rw.get("start", rw.get("time", 0.0)) - anchor)
+            if best is None or score < best[0]:
+                best = (score, rw)
+    return best[1] if best else None
+
+
+def _chars_in_range(chars: List[dict], raw_start: float, raw_end: float) -> List[dict]:
+    """Chars whose midpoint falls inside the raw word's time range."""
+    out = []
+    for ch in chars:
+        c_start = ch.get("start", 0.0)
+        c_end = ch.get("end", c_start)
+        c_mid = (c_start + c_end) / 2
+        if raw_start - 0.05 <= c_mid <= raw_end + 0.05:
+            out.append(ch)
+    return out
+
+
+def _syllable_times_from_chars(
+    syllable_texts: List[str],
+    chars: List[dict],
+    raw_start: float,
+    raw_end: float,
+    word_start: float,
+    word_end: float,
+) -> Optional[List[Tuple[str, float, float]]]:
+    """Timing for each syllable text, derived from WhisperX char alignments.
+
+    Matches each syllable's text into the reconstructed char string, reads the
+    char timestamps at the boundaries, then rescales the whole word onto the
+    (possibly onset-snapped) charted ``[word_start, word_end]`` so relative
+    syllable rhythm comes from the audio while the note still lands on the true
+    sung onset. Returns None when the char data doesn't cover the word.
+    """
+    if not chars or not syllable_texts:
+        return None
+    ctext = "".join(ch.get("char", "") for ch in chars)
+    if not ctext.strip():
+        return None
+    positions = []
+    pos = 0
+    for syl in syllable_texts:
+        match = re.search(re.escape(_norm_word(syl)), _norm_word(ctext)[pos:])
+        if not match:
+            return None
+        start_idx = pos + match.start()
+        end_idx = pos + match.end()
+        if end_idx <= start_idx or end_idx > len(chars):
+            return None
+        positions.append((start_idx, end_idx))
+        pos = end_idx
+
+    raw_dur = max(1e-6, (raw_end or word_end) - (raw_start or word_start))
+    word_dur = max(1e-6, word_end - word_start)
+    out = []
+    for (si, ei), syl in zip(positions, syllable_texts):
+        lo = (chars[si]["start"] + chars[si]["end"]) / 2
+        hi = (chars[ei - 1]["start"] + chars[ei - 1]["end"]) / 2
+        if ei < len(chars):
+            next_mid = (chars[ei]["start"] + chars[ei]["end"]) / 2
+            hi = (hi + next_mid) / 2
+        frac_start = (lo - raw_start) / raw_dur
+        frac_end = (hi - raw_start) / raw_dur
+        t_start = word_start + min(1.0, max(0.0, frac_start)) * word_dur
+        t_end = word_start + min(1.0, max(0.0, frac_end)) * word_dur
+        if t_end < t_start:
+            t_end = t_start
+        out.append((syl, t_start, t_end))
+    return out
+
+
 def whisperx_chars_to_syllables(
     word_segments: List[dict],
     char_segments: List[dict]
@@ -502,10 +612,12 @@ def segment_word_to_syllables(
 ) -> List[Syllable]:
     """
     Segment a single word into syllables.
-    
+
     Priority:
     1. LRC syllables whose START falls within this word's time range (only if LRC has per-syllable timestamps for single words)
-    2. Dictionary syllables via pyphen (always used)
+    2. WhisperX character alignments grouped into the dictionary syllables
+       (audio-derived syllable start/end instead of vowel-weighted proportion)
+    3. Dictionary syllables via pyphen (always used as fallback)
     """
     # 1. Try LRC syllables - only use if their start falls within this word's time range
     # AND the LRC line was a single hyphenated word (parsed by parse_lrc_syllables)
@@ -525,8 +637,26 @@ def segment_word_to_syllables(
                     sub.source = base.source
                 dictionary_syllables.extend(sub_syllables)
             return dictionary_syllables
-    
-    # 2. Fallback: use pyphen directly on the word text
+
+    # 2. WhisperX character alignments: derive syllable start/end from the audio.
+    #    The dictionary syllable TEXT still comes from pyphen/CMUdict/manual
+    #    overrides; only the TIMING is audio-derived.
+    if whisperx_chars and word_segments:
+        # Find the raw WhisperX word for this (possibly onset-snapped) word and
+        # derive syllable timing from its character alignments.
+        raw = _match_raw_word(word_segments, word_text, word_start)
+        if raw is not None:
+            raw_start = raw.get("start", raw.get("time", 0.0))
+            raw_end = raw.get("end", word_end)
+            chars = _chars_in_range(whisperx_chars, raw_start, raw_end)
+            texts = [s.text for s in split_base_syllable_into_dictionary(word_text, word_start, word_end)]
+            timed = _syllable_times_from_chars(texts, chars, raw_start, raw_end,
+                                               word_start, word_end)
+            if timed:
+                return [Syllable(text=t, start=s, end=e, source="whisperx")
+                        for t, s, e in timed]
+
+    # 3. Fallback: use pyphen directly on the word text
     return split_base_syllable_into_dictionary(word_text, word_start, word_end)
 
 
@@ -566,7 +696,12 @@ def segment_all_words_to_syllables(
         for seg in whisperx_alignment["segments"]:
             if seg.get("chars"):
                 whisperx_chars.extend(seg["chars"])
-    
+
+    # Raw WhisperX word boundaries, used to map chars to the right word.
+    raw_words = _flatten_raw_words(whisperx_alignment, whisperx_word_segments)
+    if not raw_words:
+        whisperx_chars = []
+
     # Segment each word
     for word in synced_words:
         syllables = segment_word_to_syllables(
@@ -575,7 +710,7 @@ def segment_all_words_to_syllables(
             word_end=word["end"],
             lrc_syllables=lrc_syllables if lrc_syllables else None,
             whisperx_chars=whisperx_chars if whisperx_chars else None,
-            word_segments=whisperx_word_segments if whisperx_chars else None,
+            word_segments=raw_words if whisperx_chars else None,
         )
         word["syllables"] = [
             {"text": s.text, "start": s.start, "end": s.end, "source": s.source}

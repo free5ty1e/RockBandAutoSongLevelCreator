@@ -348,15 +348,21 @@ class TestSplitSyllableForDisplay:
         
     def test_unsplittable_word(self):
         from autorb.export.midi_generator import split_syllable_for_display
-        # Words pyphen doesn't split: only first segment gets text
+        # Words pyphen doesn't split get split at vowel boundaries so every
+        # segment has non-empty text (Rock Band doubles a word whose note has
+        # empty lyric text -> "eighty eighty").
         result = split_syllable_for_display("eighty", 2)
-        assert result == ["eighty", ""]
-        
+        assert result == ["ei", "ghty"]
+        assert "".join(result) == "eighty"
+        assert all(part for part in result)
+
     def test_more_segments_than_syllables(self):
         from autorb.export.midi_generator import split_syllable_for_display
-        # "fly" (1 syllable) with 3 segments -> only first gets text
+        # "fly" (1 syllable) with 3 segments -> char-level fallback, never empty
         result = split_syllable_for_display("fly", 3)
-        assert result == ["fly", "", ""]
+        assert result == ["f", "l", "y"]
+        assert "".join(result) == "fly"
+        assert all(part for part in result)
         
     def test_more_syllables_than_segments(self):
         from autorb.export.midi_generator import split_syllable_for_display

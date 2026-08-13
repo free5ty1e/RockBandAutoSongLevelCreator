@@ -36,26 +36,78 @@ except Exception:
     _PYPHEN_DIC = None
 
 
+def _split_part_at_vowel(part: str):
+    """Split a word part at a vowel-cluster boundary, roughly at its midpoint.
+
+    Returns ``[left, right]`` (both non-empty) or ``None`` when the part has no
+    usable vowel boundary (e.g. all consonants).
+    """
+    n = len(part)
+    if n < 2:
+        return None
+    vowels = set("aeiouyAEIOUY")
+    mid = n // 2
+    best = None
+    for i in range(n - 1):
+        if part[i] in vowels:
+            idx = i + 1
+            score = abs(idx - mid)
+            if best is None or score < best[0]:
+                best = (score, idx)
+    if best is None:
+        return None
+    idx = best[1]
+    return [part[:idx], part[idx:]]
+
+
+def _expand_syllables_to_segments(syllables: list, num_segments: int) -> list:
+    """Expand a syllable list into exactly ``num_segments`` non-empty parts.
+
+    Keeps pyphen's real syllable boundaries and only splits further (at vowel
+    boundaries, then char-level as a last resort) when a single-syllable word
+    has more pitch segments than syllables. Never pads with empty strings
+    unless the word has fewer characters than segments (physically impossible
+    to split further).
+    """
+    parts = list(syllables)
+    while len(parts) < num_segments:
+        idx = max(range(len(parts)), key=lambda i: len(parts[i]))
+        if len(parts[idx]) < 2:
+            break
+        split = _split_part_at_vowel(parts[idx])
+        if split is None:
+            half = len(parts[idx]) // 2
+            split = [parts[idx][:half], parts[idx][half:]]
+        parts = parts[:idx] + split + parts[idx + 1:]
+    if len(parts) < num_segments:
+        parts = parts + [""] * (num_segments - len(parts))
+    return parts
+
+
 def split_syllable_for_display(text: str, num_segments: int) -> list:
     """
     Split a word into display sub-syllables for Rock Band lyric rendering.
-    
-    One sub-syllable per pitch segment. If the word can't be split by pyphen,
-    only the FIRST segment gets the text; subsequent segments get empty string
-    (Rock Band continues the previous lyric).
+
+    One sub-syllable per pitch segment. Rock Band re-renders the *previous*
+    lyric on notes with empty text, which turns a single-syllable word with two
+    pitch segments (e.g. "eighty" or "crack" carrying vibrato/slide segments)
+    into an audible doubled word ("crack crack"). So every segment always gets
+    non-empty text: pyphen's real syllable boundaries are preferred, and when
+    there are more pitch segments than syllables the word is split further at
+    vowel boundaries (never leaving an empty segment unless the word has fewer
+    characters than segments).
     """
     if not text or num_segments <= 1:
         return [text] if num_segments > 0 else []
-    
+
     if _PYPHEN_DIC is None:
-        # Fallback: only first segment gets text
-        return [text] + [""] * (num_segments - 1)
-    
+        return _expand_syllables_to_segments([text], num_segments)
+
     positions = _PYPHEN_DIC.positions(text)
     if not positions:
-        # Single syllable word - only first segment gets text
-        return [text] + [""] * (num_segments - 1)
-    
+        # Single syllable word with multiple pitch segments: expand, don't pad
+        return _expand_syllables_to_segments([text], num_segments)
+
     # Build syllable texts from hyphenation positions
     syllables = []
     last = 0
@@ -63,12 +115,12 @@ def split_syllable_for_display(text: str, num_segments: int) -> list:
         syllables.append(text[last:pos])
         last = pos
     syllables.append(text[last:])
-    
+
     if len(syllables) == num_segments:
         return syllables
     elif len(syllables) < num_segments:
-        # Distribute extra segments: only first gets text, rest empty
-        return syllables + [""] * (num_segments - len(syllables))
+        # More segments than syllables: expand the syllable parts further
+        return _expand_syllables_to_segments(syllables, num_segments)
     else:
         # More syllables than segments: merge extras onto last segment
         return syllables[:num_segments-1] + ["".join(syllables[num_segments-1:])]
