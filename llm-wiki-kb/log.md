@@ -6,6 +6,14 @@ date: 2026-08-07
 
 Append-only ledger of changes to this knowledge base. Newest first. Each entry records: timestamp, what was added, and why (the reasoning that future agents should not have to re-derive).
 
+## 2026-08-13 — Audio is the source of truth for word timing (v0.0.85)
+
+**What:** Added "Audio Is the Source of Truth for Word Timing (v0.0.85)" to `[[vocal_alignment]]` and annotated the old v0.0070 section that its snap window/rule/filter are superseded. Word starts: `_detect_vocal_onsets` now keeps an onset if a voiced frame (`prob>0.3`) appears within 0.40s OR RMS rises 1.6× above the song's relative noise floor within 0.30s; snap window widened 0.45s→0.90s; snap rule changed from "earliest onset in window" to "latest onset at-or-before the WhisperX boundary"; the previous-word floor is now the prev word's TRUE onset + `MIN_WORD_SEP` (0.08s), not its over-extended end. Word ends: `_clip_and_extend_word_ends` no longer extends the last word of an LRC line toward the next line's timestamp — `_audio_word_end` sets each end to the last voiced/RMS-energetic frame of its own region, then clips to the next word's start.
+
+**Why:** The LRC and the MP3 come from different sources, so LRC/WhisperX timestamps are only suggestions carrying a global offset (measured median −0.35s) plus WhisperX's ~80-400ms lateness. The v0.0070 snap (earliest onset, 0.45s window, strict voiced gate at 51% onset retention) left ~83% of words unsnapped and charted late; sustains using LRC line timestamps chopped "forgottennnn" and over-held "bored"/"mirror"/"alone". Measured fix on Open Road Song: starts mean −0.069s earlier; bored 22.80→21.01, mirror 34.56→32.88, floor 11.52→9.87; forgotten 168.67→169.15; no overlaps. Missing-lyrics feature deferred to roadmap with plan at `.ai_memory/plans/missing_lyrics_detection_and_filling.md`.
+
+---
+
 ## 2026-08-12 — Charted vocal notes anchored to onset-snapped word starts (v0.0.84)
 
 **What:** `generate_vocal_midi()` charted every note at its syllable `note_segment.start` (the Basic-Pitch pitch onset) and ignored the word's onset-snapped `start` whenever the word had syllables. Fixed by starting the first segment of a word's first syllable at `word.start`; later segments keep their own pitch-change times. Added a "Charted Note Anchored to the Onset-Snapped Word Start" section to `[[vocal_alignment]]`, plus a debugging note about reading note↔lyric pairs (capture the `FF 05` lyric meta immediately following each `note_on` at the same tick — a last-lyric accumulator lags by one).

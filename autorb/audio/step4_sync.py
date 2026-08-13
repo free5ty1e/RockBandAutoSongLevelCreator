@@ -19,17 +19,28 @@ def load_json(filepath):
 # real onset — but constrained so a word can never snap back into the previous
 # word's sung region (Basic-Pitch often merges a fast following word, e.g.
 # "Tonight I", into a single sustained note).
-ONSET_SEARCH_BEFORE = 0.45   # max seconds before the WhisperX start to look
+ONSET_SEARCH_BEFORE = 0.90   # max seconds before the WhisperX start to look.
+                             # LRC timestamps are only a SUGGESTION and can be
+                             # offset from the MP3 by >0.45s, so a wide window
+                             # lets the true (audio-derived) attack win.
 ONSET_SEARCH_AFTER = 0.05    # max seconds after it (WhisperX is rarely early)
 ONSET_MAX_SHIFT = 0.30       # never snap more than this far (BP fallback only)
 ONSET_SNAP_EARLY_MIN = 0.03  # only snap when WhisperX is at least this late
 MIN_WORD_GAP = 0.02          # keep words from collapsing onto each other
-# A snap target must have a VOICED (pitch-bearing) frame shortly after it.
-# Over-backtracked onsets can land on the envelope floor before any sound
-# (e.g. "Tonight" snapping to the song's opening silence) or on an unvoiced
-# consonant; a Rock Band vocal note must start where the sung pitch begins.
-VOICED_ONSET_PROB = 0.5       # pyin confidence threshold for "voiced"
-VOICED_ONSET_WINDOW = 0.25    # max seconds after an onset to find voicing
+MIN_WORD_SEP = 0.08          # minimum separation between consecutive charted
+                             # starts (avoids zero-length notes when "I hit"
+                             # shares one sung attack)
+# A snap target must have AUDIBLE ENERGY (and ideally a voiced frame) shortly
+# after it. Requiring only pyin voicing at a high confidence dropped most real
+# attacks (e.g. "hit", "My", "pile" are plosives whose voiced vowel follows the
+# onset late), leaving ~83% of words unsnapped and therefore charted late. We
+# keep an onset if a voiced frame appears within the window OR the RMS energy
+# rises above the (relative) noise floor — so unvoiced attacks are still kept
+# while silence-floor backtracking and pure bleed are rejected.
+VOICED_ONSET_PROB = 0.3       # pyin confidence threshold for "voiced"
+VOICED_ONSET_WINDOW = 0.40    # max seconds after an onset to find voicing
+ONSET_RMS_WINDOW = 0.30       # max seconds after an onset to find RMS energy
+ONSET_RMS_FACTOR = 1.6        # onset is "real" if RMS peak > floor*this
 
 # Vocal MIDI range. C3..C6 (48..84) covers the sung range for the vast
 # majority of rock vocals; lower values come from sub-octave noise/guitar bleed.
@@ -59,12 +70,12 @@ def _detect_vocal_onsets(vocals_stem):
     (Basic-Pitch misses the earliest part of the attack — e.g. the first word
     of a song charted ~350ms late). Returns None when the stem cannot be read.
 
-    Onsets are kept only when a VOICED (pyin-confident, pitch-bearing) frame
-    falls within ``VOICED_ONSET_WINDOW`` seconds after them. Onset backtracking
-    can place a "start" on the envelope floor before any audible sound (song
-    opening silence) or on an unvoiced consonant ("Tonight"'s "T"); a vocal
-    note must begin where the sung pitch actually starts, so unvoiced/silent
-    onsets are dropped.
+    Onsets are kept only when AUDIBLE sound follows shortly after: a voiced
+    (pyin-confident, pitch-bearing) frame within ``VOICED_ONSET_WINDOW``, OR an
+    RMS peak above the (relative) noise floor within ``ONSET_RMS_WINDOW``. This
+    rejects backtracking onto the envelope floor before any sound (song opening
+    silence) and pure instrument bleed, while still keeping unvoiced attacks
+    ("hit", "My", "pile") whose voiced vowel follows the onset late.
     """
     try:
         import librosa
@@ -84,9 +95,18 @@ def _detect_vocal_onsets(vocals_stem):
                                     frame_length=2048, hop_length=512)
         f_times = librosa.times_like(f0, sr=sr, hop_length=512)
         voiced = np.isfinite(f0) & (probs > VOICED_ONSET_PROB)
+        # Relative noise floor from a coarse RMS envelope (energy can be loud
+        # or soft from song to song, so the threshold is relative, not absolute).
+        hop_rms = int(0.025 * sr)
+        rms = librosa.feature.rms(y=y, frame_length=hop_rms * 2,
+                                  hop_length=hop_rms)[0]
+        rms_t = librosa.frames_to_time(np.arange(len(rms)), sr=sr,
+                                       hop_length=hop_rms)
+        floor = np.percentile(rms, 25) * ONSET_RMS_FACTOR
         return [
             t for t in onset_times
             if np.any(voiced[(f_times >= t) & (f_times <= t + VOICED_ONSET_WINDOW)])
+            or np.any(rms[(rms_t >= t) & (rms_t <= t + ONSET_RMS_WINDOW)] > floor)
         ]
     except Exception:
         return onset_times
@@ -95,14 +115,20 @@ def _detect_vocal_onsets(vocals_stem):
 def _refine_word_timing(segment, note_events, prev_sung_end, vocal_onsets=None):
     """Returns ``(start, end)`` for one word, snapped to the real sung onset.
 
-    ``prev_sung_end`` is the charted end of the previous word; candidate onsets
-    before it are rejected so the word cannot snap into a neighbour's note.
+    ``prev_sung_end`` is the FLOOR for candidate onsets: any onset before it
+    belongs to a neighbour's sung region and is rejected. The caller passes the
+    PREVIOUS word's true (snapped) onset plus a small separation — NOT the
+    previous word's possibly over-extended end — so an over-sustained previous
+    word (e.g. an LRC-timestamp hold) can never block this word from snapping
+    to its own true attack.
 
     When ``vocal_onsets`` (the vocal stem's true attacks) is available, snap the
-    start to the EARLIEST onset in the search window — that is the actual sung
-    attack, correcting WhisperX's systematic lateness AND Basic-Pitch's own lag
-    (which left the first word of a song ~350ms late). Without it, fall back to
-    snapping to the nearest Basic-Pitch onset (legacy behaviour).
+    start to the LATEST onset at-or-before the WhisperX boundary — the nearest
+    real sung attack, correcting WhisperX's systematic lateness AND Basic-Pitch's
+    own lag (which left the first word of a song ~350ms late). The window is wide
+    (``ONSET_SEARCH_BEFORE``) because LRC/WhisperX timestamps are only
+    suggestions and can be offset from the MP3. Without it, fall back to snapping
+    to the nearest Basic-Pitch onset (legacy behaviour).
     """
     start_time = segment.get("start", segment.get("time", 0.0))
     end_time = segment.get("end", start_time + 0.3)
@@ -111,15 +137,22 @@ def _refine_word_timing(segment, note_events, prev_sung_end, vocal_onsets=None):
     best_diff = ONSET_MAX_SHIFT
 
     if vocal_onsets:
+        # Snap to the LATEST onset at-or-before the WhisperX start — the nearest
+        # real sung attack on the early side. This corrects WhisperX/BP lateness
+        # (true attack is right before the late boundary) WITHOUT over-reaching:
+        # a wide ONSET_SEARCH_BEFORE absorbs large LRC/WhisperX offsets (the
+        # timestamp is only a suggestion), but unrelated earlier attacks from the
+        # previous phrase (e.g. 0.50 when the attack is 1.00) stay out of range
+        # because we take the nearest, not the earliest, candidate.
         early_candidates = [
             o for o in vocal_onsets
             if start_time - ONSET_SEARCH_BEFORE <= o <= start_time + ONSET_SEARCH_AFTER
             and o >= prev_sung_end - MIN_WORD_GAP
         ]
         if early_candidates:
-            earliest = min(early_candidates)
-            if start_time - earliest >= ONSET_SNAP_EARLY_MIN:
-                best_start = earliest
+            nearest = max(early_candidates)
+            if start_time - nearest >= ONSET_SNAP_EARLY_MIN:
+                best_start = nearest
     else:
         # Legacy fallback: snap to the nearest Basic-Pitch onset within range.
         for note in note_events:
@@ -282,18 +315,40 @@ def _resolve_pitches(starts, ends, note_events, times, f0, voiced, probs):
     return pitches
 
 
-def _clip_and_extend_word_ends(refined, lyrics_data):
-    """Post-process word ends so charted notes never drift late or chop sustains.
+def _clip_and_extend_word_ends(refined, lyrics_data, audio_times=None,
+                               audio_f0=None, audio_voiced=None, audio_probs=None,
+                               audio_rms_t=None, audio_rms=None):
+    """Post-process word ends so charted notes follow the AUDIO, not the LRC.
 
-    1. Clip every word's end to the *next* word's start (no overlaps). This is
+    The LRC/WhisperX timestamps are only suggestions; the true sung END of a
+    word is the last audible (voiced or RMS-energetic) frame of its region.
+
+    1. Set each word's end to its true sung end:
+       - a voiced frame (prob > 0.25) and/or an RMS peak above the relative
+         noise floor, within the word's own region [start, next_start).
+       This is the fix for sustains that were wrong because they used LRC line
+       timestamps: "forgottennnn" was CHOPPED short (under-sustain) while
+       "bored"/"mirror"/"alone" were HELD ~1.8s too long (over-sustain).
+    2. Clip every word's end to the *next* word's start (no overlaps). This is
        critical: un-clipped overlaps push every following note progressively
        later (the PS4 drift symptom).
-    2. For the LAST word of each LRC line, extend its end to the next line's
-       timestamp (minus a small breath gap). LRC line starts are the source of
-       truth for phrase boundaries; WhisperX cuts a held final syllable
-       ("forgottennnn") at its own word boundary, chopping the sustain.
+
+    When no audio signals are available (e.g. pure unit tests / no stem), fall
+    back to the WhisperX-provided end, only clipping overlaps.
     """
-    # --- 1) Clip to next word's start ---
+    # --- 1) Set each word's end from the audio tail ---
+    if audio_times is not None:
+        for i, w in enumerate(sorted(refined, key=lambda w: w.get("start", 0.0))):
+            start = w.get("start", w.get("time", 0.0))
+            next_start = (sorted(refined, key=lambda w: w.get("start", 0.0))[i + 1]
+                          ["start"] if i + 1 < len(refined) else None)
+            end = _audio_word_end(start, next_start, audio_times, audio_f0,
+                                  audio_voiced, audio_probs,
+                                  audio_rms_t, audio_rms)
+            if end is not None:
+                w["end"] = end
+
+    # --- 2) Clip to next word's start ---
     sorted_words = sorted(refined, key=lambda w: w.get("start", 0.0))
     for i in range(len(sorted_words) - 1):
         curr = sorted_words[i]
@@ -302,51 +357,51 @@ def _clip_and_extend_word_ends(refined, lyrics_data):
         next_start = nxt.get("start", nxt.get("time", 0.0))
         if curr_end > next_start:
             curr["end"] = next_start
+    # The last word must not end before its own start.
+    last = sorted_words[-1]
+    if last.get("end", 0.0) < last.get("start", 0.0):
+        last["end"] = last.get("start", 0.0) + 0.2
 
-    # --- 2) Extend last word of each LRC line toward the next line ---
-    lrc_lines = lyrics_data.get("lyrics_data", [])
-    if not lrc_lines:
-        return
 
-    # Build the set of word indices (in sorted order) that are the LAST word of
-    # an LRC line. A word is "last" if it's the last word sung before the next
-    # LRC line's timestamp. Line membership uses the RAW (pre-onset-snap) start:
-    # onset snapping legitimately pulls a phrase's first word before the LRC
-    # timestamp (the true sung attack precedes the slightly-late LRC marker),
-    # so a snapped start would mis-assign it to the previous line.
-    line_times = sorted({float(line.get("time", 0.0)) for line in lrc_lines})
-    line_times.append(float("inf"))
+def _audio_word_end(start, next_start, times, f0, voiced, probs, rms_t, rms):
+    """Return the true sung END of a word: the last voiced/RMS-energetic frame
+    in ``[start, next_start)``. Returns None when there is no signal to judge by.
 
-    # For each LRC line, find its last word in the synced list: the word whose
-    # start is closest to (but before) the next line's start.
-    next_line_starts = [line_times[i + 1] for i in range(len(line_times) - 1)]
-    line_last_word = {}  # next_line_start -> word index in sorted_words
-    for li, line_time in enumerate(line_times[:-1]):
-        next_start = line_times[li + 1]
-        # Words belonging to this line: raw start >= line_time and < next_start
-        candidates = [
-            (i, w) for i, w in enumerate(sorted_words)
-            if w.get("raw_start", w.get("start", 0.0)) >= line_time - 0.01
-            and w.get("raw_start", w.get("start", 0.0)) < next_start
-        ]
-        if candidates:
-            line_last_word[next_start] = candidates[-1][0]
-
-    # Extend each line's last word end toward the next line start (minus breath).
-    BREATH_GAP = 0.10  # allow a short breath before the next phrase
-    for next_start, wi in line_last_word.items():
-        word = sorted_words[wi]
-        if next_start == float("inf"):
-            continue
-        target_end = next_start - BREATH_GAP
-        # Only extend (never shrink an already-long sustain).
-        if target_end > word.get("end", word.get("start", 0.0)):
-            word["end"] = target_end
-        # Ensure the extended end doesn't now overlap the next word's start.
-        if wi + 1 < len(sorted_words):
-            nxt_start = sorted_words[wi + 1].get("start", 0.0)
-            if word["end"] > nxt_start:
-                word["end"] = nxt_start
+    Uses the later of (last voiced frame) and (last RMS frame above a relative
+    floor), so both quiet tails (RMS) and low-confidence-but-present voicing are
+    respected. The region is bounded by the next word's start so a sustain never
+    leaks into the neighbour's sung region.
+    """
+    if times is None:
+        return None
+    end_bound = next_start if next_start is not None else times[-1] + 0.2
+    if end_bound - start < 0.05:
+        return None
+    last_voiced = None
+    if f0 is not None:
+        m = (times >= start) & (times <= end_bound) & np.isfinite(f0) \
+            & (probs is None or probs > 0.25)
+        idx = np.where(m)[0]
+        if len(idx):
+            last_voiced = float(times[idx[-1]])
+    last_rms = None
+    if rms is not None and len(rms):
+        seg = rms[(rms_t >= start) & (rms_t <= end_bound)]
+        if len(seg) and seg.max() > 0:
+            floor = float(np.percentile(rms, 25)) * 1.5
+            above = rms_t[(rms_t >= start) & (rms_t <= end_bound) & (rms > floor)]
+            if len(above):
+                last_rms = float(above[-1])
+    cand = [x for x in (last_voiced, last_rms) if x is not None]
+    if not cand:
+        return None
+    end = max(cand)
+    # never stretch into the next word (and never a zero/negative length)
+    if next_start is not None and end >= next_start:
+        end = next_start - 0.02
+    if end < start + 0.05:
+        return None
+    return end
 
 
 def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=None):
@@ -371,14 +426,43 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
     if vocal_onsets:
         print(f"Detected {len(vocal_onsets)} vocal-stem onsets for word-start snapping.")
 
+    # Audio-derived timing signals (source of truth). LRC/WhisperX timestamps are
+    # only SUGGESTIONS: the true sung onset is a vocal-stem attack and the true
+    # sung END is the last voiced/RMS-energetic frame of the word's region.
+    audio_times = audio_f0 = audio_voiced = audio_probs = None
+    audio_rms_t = audio_rms = None
+    if vocals_stem:
+        try:
+            import librosa
+            y, sr = librosa.load(str(vocals_stem), sr=22050, mono=True)
+            audio_f0, audio_voiced, audio_probs = librosa.pyin(
+                y, fmin=librosa.note_to_hz("C3"), fmax=librosa.note_to_hz("C6"),
+                sr=sr, frame_length=2048, hop_length=512)
+            audio_times = librosa.times_like(audio_f0, sr=sr, hop_length=512)
+            hop_rms = int(0.025 * sr)
+            audio_rms = librosa.feature.rms(y=y, frame_length=hop_rms * 2,
+                                            hop_length=hop_rms)[0]
+            audio_rms_t = librosa.frames_to_time(np.arange(len(audio_rms)),
+                                                 sr=sr, hop_length=hop_rms)
+        except Exception:
+            audio_times = audio_f0 = audio_voiced = audio_probs = None
+            audio_rms_t = audio_rms = None
+
     # First pass: refine timings and collect word windows.
     refined = []
-    prev_sung_end = float("-inf")
+    # The snapping FLOOR for the next word is the PREVIOUS word's TRUE onset
+    # plus a minimum separation — NOT its (possibly over-extended) end. This is
+    # the fix for e.g. "salt" end 155.77 blocking "I search" from snapping to
+    # its true attack (~155.6).
+    prev_true_start = float("-inf")
     for segment in sorted(word_segments, key=lambda s: s.get("start", s.get("time", 0.0))):
         word = segment["word"]
-        start_time, end_time = _refine_word_timing(segment, note_events,
-                                                   prev_sung_end, vocal_onsets)
-        prev_sung_end = max(prev_sung_end, end_time)
+        start_time, _ = _refine_word_timing(segment, note_events,
+                                            prev_true_start, vocal_onsets)
+        # Enforce a minimum separation so "I hit" (one shared sung attack) still
+        # yields two non-zero-length notes instead of overlapping at one onset.
+        start_time = max(start_time, prev_true_start + MIN_WORD_SEP)
+        prev_true_start = start_time
 
         closest_beat = min(beat_times, key=lambda b: abs(b - start_time))
         beat_index = beat_times.index(closest_beat)
@@ -388,19 +472,22 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
             "time": start_time,
             "start": start_time,
             "raw_start": segment.get("start", segment.get("time", 0.0)),
-            "end": end_time,
+            "end": segment.get("end", start_time + 0.3),
             "beat_time": closest_beat,
             "beat_index": beat_index,
             "confidence_score": segment.get("score", 1.0)
         })
 
-    # Post-process word ends:
-    # 1) No word's end may overlap the next word's start (overlaps accumulate
+    # Post-process word starts AND ends using the AUDIO as the source of truth:
+    # 1) Each word's end is set to the true sung end (last voiced/RMS frame in
+    #    its region) so sustains follow the audio — neither chopped short by a
+    #    late WhisperX boundary ("forgottennnn") nor held too long by a far-away
+    #    LRC line timestamp ("bored", "mirror", "alone").
+    # 2) No word's end may overlap the next word's start (overlaps accumulate
     #    into progressive lateness in-game).
-    # 2) The last word of each LRC line sustains toward the next line's
-    #    timestamp — the LRC line start marks the next phrase, so a held final
-    #    syllable ("forgottennnn") is never chopped at WhisperX's word boundary.
-    _clip_and_extend_word_ends(refined, lyrics_data)
+    _clip_and_extend_word_ends(refined, lyrics_data,
+                               audio_times, audio_f0, audio_voiced, audio_probs,
+                               audio_rms_t, audio_rms)
 
     # Second pass: syllable segmentation
     lrc_data = None
