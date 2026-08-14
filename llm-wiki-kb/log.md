@@ -96,6 +96,14 @@ Also documented the debugging trap: `output/` had been overwritten by a Brian Wi
 
 ---
 
+## 2026-08-14 — Definitive per-platform wheel-install docs (v0.0.91)
+
+**What:** Added a README section — "Installing from the release wheel (exact commands per platform)" — with copy-paste venv commands for macOS Apple Silicon (`/opt/homebrew/bin/python3.12 -m venv venv`), macOS Intel (`/usr/local/bin/python3.12`), Windows (`py -3.12 -m venv venv` / `.\venv\Scripts\Activate.ps1`), and Linux Debian/Ubuntu (`python3.12-venv`), each with a Python-version assert (`assert (3, 11) <= sys.version_info < (3, 14)`) and `pip3 install ./autorb-*.whl`. The existing "Troubleshooting `Package 'autorb' requires a different Python` (macOS)" section now points at those exact commands, and the Prerequisites macOS bullet covers both failure directions (stock 3.9.6 too old; 3.14 too new).
+
+**Why:** Triggered by a real Mac tester hitting the by-design wheel rejection (`requires a different Python: 3.14.6 not in '<3.14,>=3.11'`) when their system `python3` was 3.14 — the previous docs covered only the "too old" 3.9.6 direction and scattered the wheel commands. The user asked for one definitive section with exact commands per platform. Because the release notes are generated from the README, the section flows into the published notes and the bundled `RELEASE_NOTES.txt` automatically.
+
+---
+
 ## 2026-08-14 — macOS wheel-install troubleshooting (Python 3.14) documented (v0.0.91)
 
 **What:** Added a README troubleshooting section — "Troubleshooting `Package 'autorb' requires a different Python` (macOS)" — for the by-design wheel rejection on Python 3.14 (WhisperX caps at `<3.14`), triggered when a real Mac tester hit it installing the `autorb-0.0.91+v0.0.91test03` wheel with a system `python3` of 3.14.6. The fix documented: `brew install python@3.12`, `rm -rf venv`, then `/opt/homebrew/bin/python3.12 -m venv venv` (Apple Silicon) or `/usr/local/bin/python3.12` (Intel) — bare `python3` only re-creates the venv on 3.14. The Prerequisites macOS bullet now covers both failure directions (stock 3.9.6 too old; 3.14 too new).

@@ -134,6 +134,47 @@ pip3 install -e .
   * **Linux (Debian/Ubuntu):** `sudo apt install mono-devel libgdiplus` (libgdiplus is bundled with mono on Linux but installed explicitly to be safe; Debian 12 / Ubuntu 22.04+ ships mono 6.8+/6.12+) and the [.NET 8 SDK installer](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) (`wget https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh && chmod +x /tmp/dotnet-install.sh && /tmp/dotnet-install.sh --channel 8.0 --install-dir /tmp/dotnet`).
   * `tools/build_forgetool.sh` checks for `dotnet`, `mono`, and `libgdiplus`, prints these install instructions if any is missing, and resolves mono's `4.7.1-api` reference-assembly path automatically (it must find `mscorlib.dll` under a `4.7.1-api` directory). Verify with `mono --version` (should be ≥ 6.0) and `dotnet --version` (should be 8.x).
 
+### Installing from the release wheel (exact commands per platform)
+
+Prefer the wheel for a quick install without the source tree. The release artifacts are `autorb-*.whl` (and `autorb-*.tar.gz`). The one step that trips people up is creating the venv with a **supported Python (3.11–3.13)** — bare `python3` on macOS is often the wrong version (stock 3.9.6 too old, or a newer 3.14 too new). Use the exact commands for your platform:
+
+**macOS (Apple Silicon):**
+```bash
+brew install python@3.12                       # skip if already installed
+/opt/homebrew/bin/python3.12 -m venv venv      # NOT bare python3 — that re-creates the venv on the wrong version
+source venv/bin/activate
+python3.12 -c "import sys; assert (3, 11) <= sys.version_info < (3, 14), 'Need Python 3.11–3.13 — recreate the venv'"
+pip3 install ./autorb-*.whl
+```
+
+**macOS (Intel):**
+```bash
+brew install python@3.12                       # skip if already installed
+/usr/local/bin/python3.12 -m venv venv
+source venv/bin/activate
+python3.12 -c "import sys; assert (3, 11) <= sys.version_info < (3, 14), 'Need Python 3.11–3.13 — recreate the venv'"
+pip3 install ./autorb-*.whl
+```
+
+**Windows (PowerShell):**
+```powershell
+py -3.12 -m venv venv                          # the py launcher picks Python 3.12 (install from python.org if missing)
+.\venv\Scripts\Activate.ps1
+python -c "import sys; assert (3, 11) <= sys.version_info < (3, 14), 'Need Python 3.11-3.13 — recreate the venv'"
+pip install .\autorb-*.whl
+```
+
+**Linux (Debian/Ubuntu)** — if `python3 --version` is already 3.11+ you can use `python3` in place of `python3.12`:
+```bash
+sudo apt install python3.12 python3.12-venv python3.12-pip   # or: sudo apt install python3 python3-venv python3-pip
+python3.12 -m venv venv
+source venv/bin/activate
+python3.12 -c "import sys; assert (3, 11) <= sys.version_info < (3, 14), 'Need Python 3.11–3.13 — recreate the venv'"
+pip3 install ./autorb-*.whl
+```
+
+Then run the pipeline (see [Quick Start](#-quick-start--usage)). The first install pulls the ML dependencies (PyTorch, Demucs, WhisperX, Basic-Pitch), so it takes a few minutes. On a bare wheel, everything except `--build-pkg` / the PS4 freestyle-vocals flag works out of the box; those need the vendored ForgeTool source — see the [Feature Support Matrix](#feature-support-matrix-where-each-feature-works) and the `--build-pkg` note above.
+
 ### Feature Support Matrix (where each feature works)
 
 ForgeTool is vendored as **source only** — the compiled `.exe`/`.dll` binaries are gitignored and never shipped in the wheel. AutoRB patches to the ForgeTool source (e.g. `HasFreestyleVocals` for `--generate-freestyle-vocals`) therefore only reach users who build the tool from the vendored source. Everything that does not require ForgeTool works everywhere.
@@ -193,7 +234,7 @@ pip3 install ./autorb-*.whl
 If installing the wheel fails with something like:
 `ERROR: Package 'autorb' requires a different Python: 3.14.6 not in '<3.14,>=3.11'`
 
-Your `python3` is newer than AutoRB supports (Python 3.14 — WhisperX, a hard dependency, caps at `<3.14`, so the wheel's `Requires-Python` deliberately rejects it to fail fast instead of breaking later). This is not a broken wheel — the venv was just created with the wrong Python. Fix it by recreating the venv with a supported Python (3.11/3.12/3.13) using the **explicit Homebrew path**, since bare `python3` will only re-create the venv on 3.14:
+Your `python3` is newer than AutoRB supports (Python 3.14 — WhisperX, a hard dependency, caps at `<3.14`, so the wheel's `Requires-Python` deliberately rejects it to fail fast instead of breaking later). This is not a broken wheel — the venv was just created with the wrong Python. Use the exact per-platform venv commands in [Installing from the release wheel](#installing-from-the-release-wheel-exact-commands-per-platform) (macOS Apple Silicon / Intel shown above) — the key is using the **explicit Homebrew path**, since bare `python3` will only re-create the venv on 3.14:
 
 ```bash
 brew install python@3.12          # skip if already installed
