@@ -226,15 +226,15 @@ def _find_forgetool() -> Path:
     )
 
 
-def build_ps4_pkg(con_path: Path, output_dir: Path, song_id: str) -> Path:
+def build_ps4_pkg(con_path: Path, output_dir: Path, pkg_id_16: str) -> Path:
     pkg_dir = output_dir / "pkg"
     pkg_dir.mkdir(parents=True, exist_ok=True)
     forgetool = _find_forgetool()
     cmd = [
         str(forgetool),
         "con2pkg",
-        "--id", "0000000000000001",
-        "--desc", f"Custom Song - {song_id}",
+        "--id", pkg_id_16,
+        "--desc", f"Custom Song - {pkg_id_16}",
         str(con_path),
         str(pkg_dir)
     ]
@@ -243,5 +243,5 @@ def build_ps4_pkg(con_path: Path, output_dir: Path, song_id: str) -> Path:
     if result.returncode != 0:
         click.echo(f"Error during PKG conversion: {result.stderr}", err=True)
         raise RuntimeError(f"ForgeTool failed to build PKG: {result.stderr}")
-    pkg_file = pkg_dir / f"{song_id}.pkg"
+    pkg_file = pkg_dir / f"{pkg_id_16}.pkg"
     return pkg_file

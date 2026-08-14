@@ -300,3 +300,94 @@ def test_pitch_resolution_uses_vocal_stem(tmp_path):
     # 440Hz -> MIDI 69; 220Hz -> MIDI 57
     assert out[0]["pitch"] == 69, f"expected pyin 69, got {out[0]['pitch']}"
     assert out[1]["pitch"] == 57, f"expected pyin 57, got {out[1]['pitch']}"
+
+
+# ---------------------------------------------------------------------------
+# Audio-derived timing: LRC/WhisperX timestamps are SUGGESTIONS only. The true
+# sung onset (vocal-stem attack) and true sung end (voiced/RMS tail) drive the
+# chart, so large LRC offsets and over-extended WhisperX word ends cannot leave
+# words late or chop/mislead sustains.
+# ---------------------------------------------------------------------------
+
+def _write_sine_wav(path, segments, sr=22050):
+    """Write a mono 16-bit WAV with consecutive (start, end, freq_hz) sine runs."""
+    import wave
+    total = max(e for _, e, _ in segments)
+    samples = np.zeros(int(total * sr), dtype=np.int16)
+    for start, end, hz in segments:
+        i0, i1 = int(start * sr), int(end * sr)
+        t = np.arange(i1 - i0) / sr
+        if i1 > i0:
+            samples[i0:i1] = (0.5 * np.sin(2 * np.pi * hz * t) * 32767).astype(np.int16)
+    with wave.open(str(path), "w") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(samples.tobytes())
+
+
+def test_vocal_onsets_snap_large_lrc_offset():
+    """A word whose WhisperX/LRC start is far late (0.7s) still snaps to the
+    true vocal-stem attack — the LRC timestamp is only a suggestion."""
+    seg = {"start": 2.00, "end": 2.50, "word": "w"}
+    onsets = [1.30]  # true attack 0.70s before the late WhisperX boundary
+    start, _ = _refine_word_timing(seg, [[1.35, 2.00, 60]], float("-inf"), onsets)
+    assert start == pytest.approx(1.30), (
+        f"large LRC offset must snap to true attack 1.30, got {start}"
+    )
+
+
+def test_audio_sustain_extends_to_audio_tail(tmp_path):
+    """A held word is sustained to its true sung end (voiced/RMS tail), NOT to
+    the WhisperX end (which chops it) nor a far-away next-line LRC timestamp."""
+    # word "a" sung 0.0-0.8s (long sustain), but WhisperX says it ends at 0.40.
+    wav = tmp_path / "vocals.wav"
+    _write_sine_wav(wav, [(0.0, 0.80, 440.0)])
+    beats = [0.0, 0.5, 1.0]
+    lyrics = {"word_segments": [{"start": 0.05, "end": 0.40, "word": "a"}],
+              "note_events": [[0.05, 0.80, 69]], "beat_times": beats}
+    out = sync_lyrics_to_beats({"beat_times": beats}, lyrics,
+                               vocals_stem=str(wav))["synced_lyrics"][0]
+    assert out["end"] >= 0.75, (
+        f"sustain must reach the audio tail, got end={out['end']:.3f}"
+    )
+
+
+def test_audio_sustain_clipped_to_audio_end(tmp_path):
+    """A word whose WhisperX/LRC end is far LATE must NOT over-sustain past the
+    actual sung end (no long empty hold), e.g. 'bored' held 1.8s too long."""
+    # word "a" sung only 0.0-0.4s, but WhisperX says end 0.90 (or next-line LRC far).
+    wav = tmp_path / "vocals.wav"
+    _write_sine_wav(wav, [(0.0, 0.40, 440.0)])
+    beats = [0.0, 0.5, 1.0]
+    lyrics = {"word_segments": [{"start": 0.05, "end": 0.90, "word": "a"}],
+              "note_events": [[0.05, 0.90, 69]], "beat_times": beats}
+    out = sync_lyrics_to_beats({"beat_times": beats}, lyrics,
+                               vocals_stem=str(wav))["synced_lyrics"][0]
+    assert out["end"] <= 0.45, (
+        f"over-sustain must be clipped to the audio end, got end={out['end']:.3f}"
+    )
+
+
+def test_snap_not_blocked_by_overextended_prev_word(tmp_path):
+    """A word must snap to its true onset even when the PREVIOUS word's end is
+    over-extended past it (e.g. 'salt' end 155.77 blocked 'I search' from
+    snapping to ~155.6). The floor is the prev word's TRUE onset, not its end."""
+    # word a: sung 0.0-0.3s, but WhisperX end over-extended to 0.90
+    # word b: sung 0.5-0.8s, WhisperX start 0.70 (0.2s late)
+    wav = tmp_path / "vocals.wav"
+    _write_sine_wav(wav, [(0.0, 0.30, 220.0), (0.50, 0.80, 330.0)])
+    beats = [0.0, 0.5, 1.0]
+    lyrics = {
+        "word_segments": [
+            {"start": 0.03, "end": 0.90, "word": "a"},
+            {"start": 0.70, "end": 0.85, "word": "b"},
+        ],
+        "note_events": [[0.03, 0.30, 57], [0.50, 0.80, 64]],
+        "beat_times": beats,
+    }
+    out = sync_lyrics_to_beats({"beat_times": beats}, lyrics,
+                               vocals_stem=str(wav))["synced_lyrics"]
+    assert out[1]["start"] < 0.55, (
+        f"word b must snap to its true onset (~0.50), got start={out[1]['start']:.3f}"
+    )

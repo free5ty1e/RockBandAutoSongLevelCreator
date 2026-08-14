@@ -25,6 +25,7 @@ If you are new, read in this order:
 | [[mogg_audio_format]] | MOGG container layout, Ogg page-size constraints, channel layout, song_length. |
 | [[forgetool_compat]] | ForgeTool / LibForge CON->PKG compatibility: crashes fixed, interleave-aware I/O, freestyle patch. |
 | [[ps4-environment]] | The live PS4 RB4DX test environment, ground-truth findings, and open questions. |
+| [[local_preview_and_testing]] | No-PS4 preview & rapid-testing loop: Clone Hero export (`--build-clone-hero`), lyrics .srt, alignment report + spectrograms, automation. |
 
 ## How this wiki is maintained
 

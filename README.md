@@ -1,14 +1,15 @@
 # AutoRB 🎸 (MP3 -> CON)
+## (MP3 + LRC -> CON, PS4 RB4 US PKG, Clone Hero)
 
 **Automated Rock Band 3 CON File Generator using Machine Learning & Signal Processing.**
 
-`autorb` is an end-to-end Python CLI tool designed to take raw audio files and optional lyric files and transform them into fully playable, synchronized Xbox 360 CON (STFS) files for *Rock Band 3*. 
+`autorb` is an end-to-end Python CLI tool designed to take raw audio files and optional lyric files and transform them into fully playable, synchronized Xbox 360 CON (STFS) files for *Rock Band 3*.  (This pipeline will also optionally output a Clone Hero song folder and a PS4 Rock Band 4 US DLC PKG installer)
 
 By leveraging modern AI models for stem separation, pitch detection, and vocal alignment, AutoRB automates the complex manual workflow traditionally required to create custom Rock Band tracks.
 
-NOTE: The v0.0.75 release is a **vocal-only MVP** — it produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart (see [Known Limitations](#-known-limitations)). Instrument charts and the remaining roadmap items are still under active development - there are a lot of features missing but the concept is now demonstrated and definitely sound.
+NOTE: The v0.0.91 alpha release is a **vocal-only MVP** — it produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart (see [Known Limitations](#-known-limitations)). Instrument charts and the remaining roadmap items are still under active development - there are a lot of features missing but the concept is now demonstrated and definitely sound.
 
-Quick demo video of an MP3 + LRC file conversion to Rock Band CON + PS4 PKG on Rock Band 4 Deluxe PS4 converted with the v0.0.75 release
+Quick demo video of an MP3 + LRC file conversion to Rock Band CON + PS4 PKG on Rock Band 4 Deluxe PS4 converted with the v0.0.91 alpha release
 https://youtu.be/lcFGsQfb9tg
 
 ---
@@ -20,26 +21,30 @@ https://youtu.be/lcFGsQfb9tg
 * **Smart Lyrics & Vocal Alignment:** 
   * Parses **Enhanced LRC (.lrc)** files for word/syllable-level timing.
   * Falls back to **WhisperX** for automated speech-to-text alignment if no LRC file is supplied.
-  * **Onset-snapped timing:** WhisperX word boundaries are systematically late (median ~80ms, tail ~400ms), and Basic-Pitch's own note onsets can lag the true sung attack by another ~300ms (measured: the first word of "Open Road Song" was charted ~350ms late). Each word's start is now snapped to the **earliest vocal-stem attack onset** (librosa onset detection on the vocal stem) inside the search window — the true sung onset — never back into the previous word or beyond its own window, and multi-syllable word ends extend across all notes inside the word's own span.
-  * **Overlap-free note ends:** a word's stretched end time frequently runs past the *next* word's start ("Tonight" ends at 0.94s while "I" starts at 0.85s). If each note's duration is emitted as-is, every overlapping pair pushes the following note later and the pushes accumulate — charted notes drift progressively later than the audio (first word right-on, then late), which is the PS4 symptom that survived the v0.0071 tempo-map change. Each note's duration is now **clipped to the next note's charted start**, so every `note_on` lands exactly on its true sung onset and consecutive notes never overlap.
+  * **LRC timestamps are suggestions only — WhisperX decides where each lyric lands.** The MP3 and the `.lrc` come from different sources, so LRC line times carry a global offset and can be badly late. Instead of slicing the audio at each LRC line (which forced whole phrases late — Brian Wilson's worst word charted +1.8s late), the pipeline feeds WhisperX a handful of coarse ~60s chunks spanning the track and lets it freely align every word to the actual vocal audio (single whole-track alignment would be ideal but exhausts CPU memory on longer songs). On a fresh "Open Road Song" build: word starts median 0.000s, p90 +0.027s, **0 words > 1s late** (the previous tested build had 9).
+  * **Audio-derived word starts & ends:** WhisperX word boundaries run ~80-400ms late, so each word's **start** is snapped to the latest true vocal-stem attack onset at-or-before its WhisperX boundary (librosa onset detection on the vocal stem, kept when a pyin-confident voiced frame or an RMS energy rise follows it within the search window, backtracking to the envelope floor once charted the first word 0.38s before its LRC timestamp and never back into the previous word or beyond its own window; the 1.5s search window absorbs badly late LRC/WhisperX phrases), and each word's **end** is the last voiced/RMS-energetic frame of its own region — so over-sustains are clipped ("bored" 22.8s→21.0s, "mirror" 34.6s→32.9s, "floor" 11.5s→9.9s) and under-sustains extend ("forgottennnn" now reaches its true sung tail). **The charted note lands on that snapped word start**, not Basic-Pitch's pitch onset: `generate_vocal_midi()` anchors the first note of each word at `word.start` (BP pitch onsets can lag the attack by 0.1-0.6s and, on held words, land near the word's *end*), while later segments within the word keep their own pitch-change times so syllable-internal slides and vibrato survive.
+  * **Audio-true syllable timing & no doubled lyrics:** syllable starts/ends come from WhisperX character alignments when available (vowel-weighted proportion only as fallback), so syllable-internal notes follow the sung rhythm. Words with more pitch segments than syllables are never split into an empty-lyric note (Rock Band re-renders the previous lyric on empty text — the old "crack crack" doubling); they're split at vowel boundaries instead ("eighty" → "ei"/"ghty"). WhisperX word duplications (and melisma splits like "I'm-I'm") are deduplicated so one sung word is never charted twice.
+  * **Audio-derived note ends:** LRC/WhisperX ends are not trusted (they're only suggestions and over/under-shoot the real sustain). Each note's end is set to the **last voiced/RMS-energetic frame of its own region** (`_audio_word_end`) and clipped to the **next note's charted start**, so every `note_on` lands exactly on its true sung onset, consecutive notes never overlap, and sustains follow the audio — no more progressive drift, no chopped ("forgottennnn") or over-held ("bored", "mirror", "floor") final syllables.
+  * **Phrase-gap & late-word re-anchors (v0.0.87):** a word WhisperX glued onto the *previous* phrase's tail moves to its own phrase's true attack only when the **next word starts ≥ 1.0s away AND the `[start+0.20, +0.80]` window is vocally silent** (no voiced frame, no RMS above the floor — the 0.20s grace skips the previous word's own voiced tail) — "And" 20.94→23.80, "'Cause" 32.72→35.11. A word WhisperX pushed *late* re-anchors to the **earliest voiced-validated onset** in `(prev_end, start]` (bounded by a 2.0s window; the onset is kept only if a confident voiced frame follows within 0.15s, rejecting instrument-bleed attacks — "out" 143.6→142.15), or to a **settled pitch boundary** when the singer changed pitch and held the new note (`_last_pitch_unit_boundary`: a frame whose pitch is ≥ 3.5 semitones from the median of the stable pitch it settles into ~0.25s later, skipping in-progress descents and vibrato; it then prefers a real onset within ±0.15s when guarded by the neighbouring words) — "be"/"alone" split at the 63.37 drop. Word **ends** are now **voiced-primary** (break on voiced gaps > 0.20s; RMS only as fallback; the attack-to-voicing lead-in no longer false-triggers a break), so "it" no longer holds 1.8s past its sung tail and "listen"/"road"/"out" sustains clip to the true tail. Ends are re-ingested **between** the gap and late passes (a moved word's neighbour must see its corrected end or it re-snags the moved word).
 * **Automatic Transcription:** Converts pitch and transient audio into quantized 5-lane instrument tracks (`PART GUITAR`, `PART BASS`, `PART DRUMS`) using Spotify's **Basic-Pitch** and signal processing.
-* **Robust Vocal Pitch:** The sung pitch per word is chosen from the most reliable source. **librosa pyin is primary** — a word is trusted only when its (next-word-clipped) window has ≥ 2 confident voiced frames whose rounded mode agrees with the median (rejecting harmonics/bleed split readings while keeping real vibrato/slides). Words without a trusted pyin reading fall back to a **Basic-Pitch note octave-snapped to a melodic contour** interpolated through the trusted words, and then to the contour itself — so octave-flipped or contaminated BP notes become sane, in-key pitches. Measured on "Open Road Song": consecutive jumps ≥ 4 semitones **61 → 28/283**, range **50..83 → 50..78**, **0/284 notes off the A-major scale**, and repeated phrases sing the same notes.
+* **Robust Vocal Pitch:** The sung pitch per word is chosen from the most reliable source. **librosa pyin is primary** — a word is trusted only when its (next-word-clipped) window has ≥ 2 confident voiced frames whose rounded mode agrees with the median (rejecting harmonics/bleed split readings while keeping real vibrato/slides), its note segments don't span more than 6 semitones (a real slide never jumps that far inside one syllable), and its first note sits within 7 semitones of the outlier-rejected **robust melodic contour** (so a single harmonic misread — e.g. "road"=72, the 3rd harmonic of A3 — can't stay charted or warp the contour). Words without a trusted pyin reading fall back to a **Basic-Pitch note octave-snapped to the melodic contour** interpolated through the trusted words, and then to the contour itself — so octave-flipped or contaminated BP notes become sane, in-key pitches. Measured on "Open Road Song": consecutive jumps ≥ 4 semitones **61 → 28/283**, range **50..83 → 50..78** (and the remaining wild first-phrase/ending jumps ≥ 5 st further cut **18 → 10** in v0.0.83), **0/284 notes off the A-major scale**, and repeated phrases sing the same notes while genuine melody dips (the low "As") are preserved.
 * **Automatic Difficulty Ratings:** Computes per-instrument Rock Band difficulty (`rank`) values from chart note density (per-instrument level bands 1-6, `band` = hardest charted instrument) instead of a hardcoded value that rendered every song as "1 of 6".
 * **Stock-like Measure-Level Tempo Map:** The MIDI tempo track carries a sparse, smooth `set_tempo` map (one event per measure, tempo = that bar's mean beat interval, ~90-100 events for a 3-minute song) instead of a dense jittery per-beat map. A 1-event-per-beat map (with its ~±3 BPM per-beat oscillation) makes the game drift progressively late — the symptom we measured against the working references (stock 311 - Down DLC: 69 smooth events; Smells Like Nirvana custom: 86) — so every note tick is now derived from the *inverse* of the tempo map the file carries, keeping chart and map self-consistent (no drift by construction).
 * **Mandatory Count-In:** Automatically prepends a silent count-in (3 measures at the song's opening tempo) to the multi-channel MOGG and shifts the chart past it, mirroring stock RB3 DLC's ~5s lead-in so the game gets a real pre-roll and the first vocal phrase survives ForgeTool's 640-tick offset (which previously underflowed and broke the vocal guide).
 * **Direct CON Packaging:** Assembles multi-channel audio (`.mogg`), `notes.mid`, `songs.dta`, and album artwork into an Xbox 360 STFS CON container directly—no legacy tools required.
 * **Freestyle Vocals (RB4, opt-in):** `--generate-freestyle-vocals` writes `(freestyle_vocals 1)` into `songs.dta`, which the vendored (patched) ForgeTool carries into the PS4 `songdta_ps4` `HasFreestyleVocals` flag so Rock Band 4 draws the diatonic Freestyle Vocals guide lines on Hard/Expert (the game computes the guide scale from the charted vocal notes).
+* **Clone Hero Export (`--build-clone-hero`):** Builds a standard, Clone Hero-compliant song folder (`song.ini` + `notes.chart` *and* `notes.mid` + `song.ogg` + `album.png`) so the vocal/lyric chart can be playtested on a PC in Clone Hero — no PS4, no CON packaging. The chart is re-generated **count-in free** (note ticks == audio time exactly), so any sync judgment made in Clone Hero transfers directly to the Rock Band chart (same data shifted past its count-in). Both chart files are written because CH accepts either and its `.chart` reader is the most battle-tested import path; lyrics ride as `[Events]` `phrase_start`/`phrase_end`/`lyric <text>` events exactly as Moonscraper writes them.
+* **No-PS4 Sync Validation & Preview:** Every run now also emits `preview_mix.wav` (summed stereo stems), `lyrics_preview.srt` (karaoke subtitles from charted word timings — load both in VLC/MPV for a rewindable lyric-sync check), `alignment_report.json` (per-word charted start vs nearest vocal-stem onset: median/p90/max delta + late/early flags), and annotated waveform/spectrogram PNGs of the worst outliers — a quantitative signal for iterating on sync accuracy without a game console.
 
 ---
 
 ## ⚠️ Known Limitations
 
-The v0.0.75 release is a **vocal-only MVP** — the pipeline produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart. Be aware of what is and isn't supported yet:
+The v0.0.76 release is a **vocal-only MVP** — the pipeline produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart. Be aware of what is and isn't supported yet:
 
 - **Solo vocals only.** There are no real guitar, bass, or drum charts. `PART GUITAR` / `PART BASS` / `PART DRUMS` are *placeholder tracks* (one note per difficulty) so the game loads cleanly and ForgeTool's CON→PKG conversion doesn't crash — they are **not** playable instrument charts.
 - **Instrument transcription is not functional yet.** `Basic-Pitch` is used only for vocal pitch; automatic transcription into real 5-lane instrument tracks is still on the roadmap.
-- **Per-word sync has outliers.** Onset-snapped timing eliminated the progressive drift (first word right-on, then late), but individual words can still be a bit early or late, and lyrics must come from a good `.lrc` file — words missing from the LRC don't get charted.
-- **Vocal phrases are wrong.** Phrase boundaries currently fall back to fixed 2-bar measure windows on the beat grid, not the song's real phrasing — so the in-game phrase regions and vocal scoring feel all wrong. Each timestamped line in the `.lrc` file marks the **start of one vocal phrase** and should be the source of truth (falling back to the 2-bar windows only when the `.lrc` is missing or doesn't make phrasing obvious). This is the highest-priority roadmap item (see [Next Steps](#-next-steps--roadmap)).
+- **Per-word sync has outliers.** Word starts and ends are now driven by the vocal-stem audio (onset attacks + voiced/RMS tails), correcting the LRC's global offset and WhisperX's lateness, but individual words can still be slightly early or late where the onset/voicing signal is ambiguous, and lyrics must come from a good `.lrc` file — words missing from the LRC don't get charted (detecting & filling those is on the roadmap).- **Vocal phrases are wrong.** Phrase boundaries currently fall back to fixed 2-bar measure windows on the beat grid, not the song's real phrasing — so the in-game phrase regions and vocal scoring feel all wrong. Each timestamped line in the `.lrc` file marks the **start of one vocal phrase** and should be the source of truth (falling back to the 2-bar windows only when the `.lrc` is missing or doesn't make phrasing obvious). This is the highest-priority roadmap item (see [Next Steps](#-next-steps--roadmap)).
 - **PS4 song-list preview audio is silent** on Rock Band 4 Deluxe, even though all preview metadata (`songdta_ps4`, `rbmid_ps4`, MOGG seek table) and the 10-channel audio layout (mirroring stock "311 - Down") are verified correct. This is suspected to be game-side (RB4DX caching/behavior) rather than file-side.
 - **Freestyle Vocals guide lines do not render on PS4** yet, despite `HasFreestyleVocals=1` being written to the PKG. Both gates the RB4 manual documents are satisfied, so the failure is likely RB4DX-side (how it commits/reads the flag).
 - **`--build-pkg` and the PS4 freestyle-vocals flag require a `git clone`** (or the devcontainer), not a bare wheel: ForgeTool is vendored as **source** (`tools/libforge/`) and rebuilt by `tools/build_forgetool.sh` (needs .NET SDK 8 + `mono-devel`). On a wheel, `--build-pkg` fails fast with a clear pointer, and the freestyle flag is a no-op for PS4.
@@ -60,7 +65,7 @@ Beyond the vocal-only MVP, the roadmap (see `ROADMAP.md`) includes:
 - **Vocal gender detection** (`'male'`/`'female'`) for `songs.dta` metadata.
 - **Tambourine detection** — map vocal-free instrumental breaks to microphone "Tambourine" sections.
 - **Multi-harmony vocals** — extract harmony + melody parts for Rock Band's up-to-3-mic harmony system.
-- **Clone Hero export (`--build-clone-hero`)** — also emit a Clone Hero-format song (`.chart`/`.mid` + audio) reusing the same chart and mix, without the Xbox 360 CON packaging or Rock Band count-in.
+- **Robust tempo detection (stem fallback chain)** — beat tracking currently runs on the drums stem and only falls back to vocals for drumless sections; songs without a usable drums stem (all-break intros, instrumentals) get a wrong/missing tempo map. Planned: fall back **drums → bass → vocals → other** with per-stem validation and per-section merging, and record which stem drove each section in `tempo_map.json`.
 
 ---
 
@@ -92,7 +97,7 @@ AutoRB runs on **macOS, Windows, and Linux**. Because AutoRB leverages heavy mac
 
 ### 1. Prerequisites (All Operating Systems)
 * **Python 3.11, 3.12, or 3.13** installed on your system. **Python 3.14 is NOT supported** — WhisperX (a hard dependency for vocal alignment) caps at `<3.14`, and the only whisperx release without an upper bound pins `ctranslate2==4.4.0`, which ships no Python 3.14 wheel. The wheel's `Requires-Python` now enforces `>=3.11,<3.14`, so pip refuses early with a clear message instead of failing with `No matching distribution found for ctranslate2==4.4.0`.
-  * **macOS users:** your system `python3` is likely **3.9.6** (too old — installs will fail with "requires a different Python: 3.9.6 not in '>=3.11'"). Install a current Python first: `brew install python@3.12`, or download from [python.org](https://www.python.org/downloads/). Then use `python3.12` in place of `python3` below. Verify with `python3 --version`.
+  * **macOS users:** your system `python3` may be the wrong version in either direction — macOS ships an old **3.9.6** (too old — installs fail with "requires a different Python: 3.9.6 not in '>=3.11'"), and newer macOS releases / upgraded setups can resolve `python3` to **3.14.x** (too new — the wheel's `Requires-Python` is `>=3.11,<3.14`, so pip refuses with "Package 'autorb' requires a different Python: 3.14.x"). Install a supported Python: `brew install python@3.12`, or download from [python.org](https://www.python.org/downloads/). Then use `python3.12` in place of `python3` below — i.e. create the venv with `/opt/homebrew/bin/python3.12 -m venv venv`, **not** with bare `python3` (which would just re-create the venv on the wrong version). Verify with `python3.12 --version`.
 * **FFmpeg** installed and available on your system PATH (`ffmpeg -version` should succeed). **Important:** AutoRB needs the `libvorbis` encoder to build the multi-channel MOGG. Homebrew's standard `ffmpeg` formula dropped libvorbis in ffmpeg 8 — if your run fails with `Unknown encoder 'libvorbis'`, install a libvorbis-capable build (see below) and confirm with `ffmpeg -encoders 2>&1 | grep vorbis` (should list `libvorbis`).
   * **Windows:** Download FFmpeg from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) or install via Chocolatey (`choco install ffmpeg`). The full/essentials builds include libvorbis.
   * **macOS:** Install `brew install ffmpeg-full` (which includes libvorbis; it is keg-only, so put its `bin` on PATH first — e.g. `export PATH="/opt/homebrew/opt/ffmpeg-full/bin:$PATH"` on Apple Silicon). Alternatively use a [ffmpeg.org](https://ffmpeg.org/download.html) macOS static build, which includes libvorbis. (Plain `brew install ffmpeg` since ffmpeg 8 lacks libvorbis.)
@@ -129,6 +134,47 @@ pip3 install -e .
   * **Linux (Debian/Ubuntu):** `sudo apt install mono-devel libgdiplus` (libgdiplus is bundled with mono on Linux but installed explicitly to be safe; Debian 12 / Ubuntu 22.04+ ships mono 6.8+/6.12+) and the [.NET 8 SDK installer](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) (`wget https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh && chmod +x /tmp/dotnet-install.sh && /tmp/dotnet-install.sh --channel 8.0 --install-dir /tmp/dotnet`).
   * `tools/build_forgetool.sh` checks for `dotnet`, `mono`, and `libgdiplus`, prints these install instructions if any is missing, and resolves mono's `4.7.1-api` reference-assembly path automatically (it must find `mscorlib.dll` under a `4.7.1-api` directory). Verify with `mono --version` (should be ≥ 6.0) and `dotnet --version` (should be 8.x).
 
+### Installing from the release wheel (exact commands per platform)
+
+Prefer the wheel for a quick install without the source tree. The release artifacts are `autorb-*.whl` (and `autorb-*.tar.gz`). The one step that trips people up is creating the venv with a **supported Python (3.11–3.13)** — bare `python3` on macOS is often the wrong version (stock 3.9.6 too old, or a newer 3.14 too new). Use the exact commands for your platform:
+
+**macOS (Apple Silicon):**
+```bash
+brew install python@3.12                       # skip if already installed
+/opt/homebrew/bin/python3.12 -m venv venv      # NOT bare python3 — that re-creates the venv on the wrong version
+source venv/bin/activate
+python3.12 -c "import sys; assert (3, 11) <= sys.version_info < (3, 14), 'Need Python 3.11–3.13 — recreate the venv'"
+pip3 install ./autorb-*.whl
+```
+
+**macOS (Intel):**
+```bash
+brew install python@3.12                       # skip if already installed
+/usr/local/bin/python3.12 -m venv venv
+source venv/bin/activate
+python3.12 -c "import sys; assert (3, 11) <= sys.version_info < (3, 14), 'Need Python 3.11–3.13 — recreate the venv'"
+pip3 install ./autorb-*.whl
+```
+
+**Windows (PowerShell):**
+```powershell
+py -3.12 -m venv venv                          # the py launcher picks Python 3.12 (install from python.org if missing)
+.\venv\Scripts\Activate.ps1
+python -c "import sys; assert (3, 11) <= sys.version_info < (3, 14), 'Need Python 3.11-3.13 — recreate the venv'"
+pip install .\autorb-*.whl
+```
+
+**Linux (Debian/Ubuntu)** — if `python3 --version` is already 3.11+ you can use `python3` in place of `python3.12`:
+```bash
+sudo apt install python3.12 python3.12-venv python3.12-pip   # or: sudo apt install python3 python3-venv python3-pip
+python3.12 -m venv venv
+source venv/bin/activate
+python3.12 -c "import sys; assert (3, 11) <= sys.version_info < (3, 14), 'Need Python 3.11–3.13 — recreate the venv'"
+pip3 install ./autorb-*.whl
+```
+
+Then run the pipeline (see [Quick Start](#-quick-start--usage)). The first install pulls the ML dependencies (PyTorch, Demucs, WhisperX, Basic-Pitch), so it takes a few minutes. On a bare wheel, everything except `--build-pkg` / the PS4 freestyle-vocals flag works out of the box; those need the vendored ForgeTool source — see the [Feature Support Matrix](#feature-support-matrix-where-each-feature-works) and the `--build-pkg` note above.
+
 ### Feature Support Matrix (where each feature works)
 
 ForgeTool is vendored as **source only** — the compiled `.exe`/`.dll` binaries are gitignored and never shipped in the wheel. AutoRB patches to the ForgeTool source (e.g. `HasFreestyleVocals` for `--generate-freestyle-vocals`) therefore only reach users who build the tool from the vendored source. Everything that does not require ForgeTool works everywhere.
@@ -138,6 +184,7 @@ ForgeTool is vendored as **source only** — the compiled `.exe`/`.dll` binaries
 | CON generation (`.con`), stems, tempo, vocals, difficulty, count-in, MOGG, `songs.dta` | ✅ | ✅ | ✅ |
 | `--build-pkg` (PS4 PKG) | ❌* | ✅ | ✅ |
 | `--generate-freestyle-vocals` — PS4 guide lines | ❌* | ✅ | ✅ |
+| `--build-clone-hero` (Clone Hero folder) + no-PS4 validation artifacts (`preview_mix.wav`, `lyrics_preview.srt`, `alignment_report.json`, `alignment_specs/`) | ✅ | ✅ | ✅ |
 
 \* On a bare wheel install, `--build-pkg` fails fast with a clear message pointing you to `git clone` + `tools/build_forgetool.sh` (the wheel contains only the `autorb.*` Python packages; `_find_forgetool()` searches for `tools/forgetool` under the CWD, its parent, `sys.prefix`, and `sys.base_prefix`, so running the CLI from a clone's root also works against a wheel-installed `autorb`). `--generate-freestyle-vocals` still writes `(freestyle_vocals 1)` into the CON's `songs.dta` on a wheel, but that line has **no effect on PS4 without the patched ForgeTool** carrying it into the `songdta_ps4` `HasFreestyleVocals` flag — so on a wheel it is effectively a no-op for the intended feature.
 
@@ -181,6 +228,24 @@ Then install the wheel as usual:
 ```bash
 pip3 install ./autorb-*.whl
 ```
+
+### Troubleshooting `Package 'autorb' requires a different Python` (macOS)
+
+If installing the wheel fails with something like:
+`ERROR: Package 'autorb' requires a different Python: 3.14.6 not in '<3.14,>=3.11'`
+
+Your `python3` is newer than AutoRB supports (Python 3.14 — WhisperX, a hard dependency, caps at `<3.14`, so the wheel's `Requires-Python` deliberately rejects it to fail fast instead of breaking later). This is not a broken wheel — the venv was just created with the wrong Python. Use the exact per-platform venv commands in [Installing from the release wheel](#installing-from-the-release-wheel-exact-commands-per-platform) (macOS Apple Silicon / Intel shown above) — the key is using the **explicit Homebrew path**, since bare `python3` will only re-create the venv on 3.14:
+
+```bash
+brew install python@3.12          # skip if already installed
+rm -rf venv
+/opt/homebrew/bin/python3.12 -m venv venv
+source venv/bin/activate
+python3 -c "import sys; print(sys.version)"   # should print 3.12.x
+pip3 install ./autorb-*.whl
+```
+
+(The same check fires when `python3` is too *old* — macOS's stock 3.9.6 — with the message "3.9.6 not in '>=3.11'". On Intel Macs the Homebrew path is `/usr/local/bin/python3.12`; on Apple Silicon it is `/opt/homebrew/bin/python3.12`. `python3.13` also works if you have it installed.)
 
 ### 3. Preparing Lyrics (`.lrc` Files)
 AutoRB relies on Enhanced LRC (`.lrc`) lyric files for precise word and syllable timing. 
@@ -265,6 +330,8 @@ python3 -m autorb.cli \
 | `--skip-vocals` | Flag | Skip WhisperX alignment and basic-pitch; loads `vocals_cache.json`. |
 | `--skip-mogg` | Flag | Skip MOGG encoding; reuses the existing `.mogg` file (which is expected to already contain the count-in lead-in). The chart is still shifted past the count-in to match the reused audio. |
 | `--generate-freestyle-vocals` | Flag | Enable Rock Band 4 **Freestyle Vocals** guide lines (Hard/Expert): writes `(freestyle_vocals 1)` into `songs.dta`, which the vendored (patched) ForgeTool carries into the PS4 `songdta_ps4` `HasFreestyleVocals` flag so the game advertises and draws the diatonic guide lanes. Off by default. Requires `--build-pkg` to take effect on PS4 (the flag lives in the PKG's songdta; the Xbox 360 CON's `songs.dta` is untouched by the game's freestyle check). |
+| `--build-clone-hero` | Flag | Also export a **Clone Hero**-format song folder (`<output-dir>/clone_hero/<Artist> - <Title>/` with `song.ini` + `notes.chart` *and* `notes.mid` + `song.ogg` + `album.png`) for computer-based playtest — load the folder into Clone Hero (Settings → Open Default Songs Folder → Scan Songs) to review the vocal/lyric chart synced to audio without a PS4. The chart is count-in free so sync judgments transfer directly to the Rock Band chart. |
+| `--ps4-pkg-id` | String | Optional. 16-character PS4 Content ID for the PKG (format: `UP8802-CUSA02084_00-XXXXXXXXXXXXXXXX`). Auto-generated from artist + title (lowercase alphanumeric, padded/truncated to 16 chars) if omitted. Use to ensure unique PKG IDs per song and avoid overwriting previously installed customs on PS4. |
 
 ---
 
@@ -278,7 +345,21 @@ To sum the separated audio tracks back together into a single audio file to hear
 python -m autorb.audio.mix_preview
 ```
 
-Your stems in `output/stems` will be summed into `output/preview_mix.mp3`
+Your stems in `output/stems` will be summed into `output/preview_mix.wav`
+
+### No-PS4 sync validation & Clone Hero playtest
+
+Every run emits local preview/validation artifacts — `preview_mix.wav`, `lyrics_preview.srt`, `alignment_report.json`, and annotated spectrograms in `alignment_specs/` (see [Key Features](#-key-features)). To playtest the chart on a PC:
+
+```bash
+python3 -m autorb.cli input/eve6-openRoadSong.mp3 \
+  --artist "Eve 6" --title "Open Road Song" --year 1998 --genre "Alternative" \
+  --lyrics input/eve6-openRoadSong.lrc \
+  --output-dir ./output \
+  --build-clone-hero
+```
+
+The song folder lands in `./output/clone_hero/Eve 6 - Open Road Song/` (`song.ini` + `notes.chart` + `notes.mid` + `song.ogg` + `album.png`). In Clone Hero: *Settings → General → Open Default Songs Folder*, copy the folder in, then *Settings → General → Scan Songs*. If it still doesn't appear, check the `badsongs.txt` file Clone Hero generates (it names the exact file it couldn't load) — after adding songs you must always press **Scan Songs** for changes to take effect. The `notes.chart` tempo markers are written as **integer plain-BPM** (drift-compensated) because Clone Hero's reader — a fork of Moonscraper's `ChartReader` — parses the `B` field with `uint.TryParse` and silently drops any fractional value, which would leave the chart with no tempo map and the song invisible. Full procedure in `llm-wiki-kb/local_preview_and_testing.md`.
 
 ## Using Original Master Stems (For Bands/Artists)
 
@@ -388,12 +469,17 @@ The generated MIDI chart always includes `BEAT`, `EVENTS`, `PART VOCALS`, and pl
 This repository uses GitHub Actions (`.github/workflows/ci-cd.yml`) to:
 * Automatically run test suites on every `push` and `pull_request` to `main`.
 * Build a Python source distribution and wheel (`python -m build`) and automatically draft a **GitHub Release** whenever a tag matching `v*.*.*` is pushed.
+* Generate the release notes from user-facing sources (`tools/gen_release_notes.py`): a "What's Changed" section from this version's `CHANGELOG.md` entry, followed by the current README's Features / Known Limitations / Roadmap / Installation / Quick Start / Previewing / Master-Stems sections — so the notes always describe how to actually use the release. The same content ships as `RELEASE_NOTES.txt` inside the wheel and sdist (see `[tool.setuptools.data-files]` in `pyproject.toml`).
 
 ```bash
-# Trigger a build release (tag MUST match the version in autorb/version.py,
-# pyproject.toml, and CHANGELOG.md — currently 0.0064)
-git tag v0.0064
-git push origin v0.0064
+# Trigger a build release (the tag PREFIX must match the version in autorb/version.py,
+# pyproject.toml, and CHANGELOG.md — currently 0.0.91; a free-form SUFFIX is allowed,
+# e.g. v0.0.91test02, for test releases of the same version — the suffix is baked into
+# the wheel/sdist filenames as a PEP 440 local version so test releases never collide
+# with the final one)
+git tag v0.0.91
+git tag v0.0.91test02   # optional: a test release without bumping the version
+git push origin v0.0.91
 ```
 
 ---
