@@ -65,6 +65,47 @@ PYIN_MODE_AGREE_ST = 1.0   # median vs rounded mode must be within 1 semitone
 # copy that best follows the melodic contour derived from trusted pyin words.
 CONTOUR_SNAP_ST = 3.0
 
+# --- Audio-derived word END rules (the sung sustain must not bleed across a
+# real phrase gap into the next word's energy). A word's charted end is the end
+# of the contiguous active (voiced or RMS-energetic) run that begins at its
+# start; once the voice stays below the energy/voicing floor for
+# ``AUDIO_END_MAX_GAP`` seconds the word has ENDED, so a sustain can never ring
+# into the next phrase ("here" into "I hear", "road" into "This", "listen"
+# into "My", "it" into "out").
+AUDIO_END_MAX_GAP = 0.20     # sustained inactive run that ends a word
+AUDIO_END_VOICED_PROB = 0.25  # pyin confidence for a "voiced" frame
+
+# --- Audio-derived word START fixes ---------------------------------------
+# (1) GAP words: WhisperX occasionally glues the FIRST word of a phrase onto the
+# PREVIOUS phrase's tail, charting it in vocal silence ("And"@20.9 sung at
+# ~23.8, "'Cause"@32.7 sung at ~35.1). A start whose next word is
+# ``GAP_WORD_MIN_NEXT``+ seconds away and whose region stays vocally SILENT for
+# a grace window (allowing the previous word's sung tail to fade) is re-anchored
+# to the first real vocal onset inside the gap.
+GAP_WORD_MIN_NEXT = 1.00     # ... only when the next word is at least this far
+GAP_WORD_GRACE = 0.20        # skip the previous word's decaying tail
+GAP_WORD_SILENCE = 0.60      # ... then require this long of true vocal silence
+GAP_WORD_BACKOFF = 0.12      # breathing room before the next word
+# (2) LATE words: WhisperX can push the last word of a held phrase LATE ("alone"
+# @63.96 sung at ~63.5, "out"@143.2 sung at ~142.15). A start sitting deep into
+# an already-sung region is re-anchored to that region's true attack.
+LATE_START_THRESH = 0.30     # a start this deep into a sung run is "late"
+LATE_START_MOVE_MIN = 0.15   # only actually move when the correction is audible
+LATE_START_RUN_GAP = 0.25    # voiced gaps under this stay inside one sung run
+LATE_START_SEARCH = 2.00     # rule 1 only hunts onsets this close to the start
+#                            # (a WhisperX gap across an instrumental break —
+#                            # "forgotten"->"My"@169.2, "song"->"I"@121.2 — is a
+#                            # real break, NOT a late word to pull back 3s+)
+PITCH_UNIT_JUMP_ST = 3.5     # sustained pitch jump => new word/vowel boundary
+PITCH_UNIT_PERSIST = 0.25    # the new pitch must hold this long to count
+PITCH_UNIT_AGREE_ST = 1.5    # ... and stay within this of the post-jump pitch
+PITCH_UNIT_WINDOW_GAP = 0.10  # start the "settled" window this long ahead of
+#                             # each frame (skips an in-progress gradual descent
+#                             # — the be/alone drop spans ~8 frames/0.19s)
+ONSET_VOICED_AFTER = 0.15    # an onset is a real sung attack only when a
+#                             # confident voiced frame follows within this long
+#                             # (kills instrumental-bleed onsets in silences)
+
 
 def _detect_vocal_onsets(vocals_stem):
     """Return the true vocal-attack onsets (source-time seconds) for a stem.
@@ -352,6 +393,13 @@ def _clip_and_extend_word_ends(refined, lyrics_data, audio_times=None,
                                   audio_rms_t, audio_rms)
             if end is not None:
                 w["end"] = end
+            elif next_start is not None:
+                # No audio signal in this region (quiet pickup word, or the
+                # START moved AFTER an earlier end pass — "And" pulled from
+                # 20.9 to 23.8 leaves its stale 21.0 end behind). The word can
+                # never validly extend past its neighbour, so default to just
+                # before the next word instead of keeping a stale value.
+                w["end"] = next_start - 0.02
 
     # --- 2) Clip to next word's start ---
     sorted_words = sorted(refined, key=lambda w: w.get("start", 0.0))
@@ -366,47 +414,237 @@ def _clip_and_extend_word_ends(refined, lyrics_data, audio_times=None,
     last = sorted_words[-1]
     if last.get("end", 0.0) < last.get("start", 0.0):
         last["end"] = last.get("start", 0.0) + 0.2
+    # Any word whose end still lands before its own start (a stale pre-move end
+    # with no next word, e.g. the final word after a gap-word shift) becomes a
+    # valid short note instead of a negative-length one.
+    for w in sorted_words:
+        if w.get("end", 0.0) < w.get("start", 0.0):
+            w["end"] = w.get("start", 0.0) + 0.2
 
 
 def _audio_word_end(start, next_start, times, f0, voiced, probs, rms_t, rms):
-    """Return the true sung END of a word: the last voiced/RMS-energetic frame
-    in ``[start, next_start)``. Returns None when there is no signal to judge by.
+    """Return the true sung END of a word: the end of the contiguous active
+    (voiced OR RMS-energetic) run that begins at the word's start.
 
-    Uses the later of (last voiced frame) and (last RMS frame above a relative
-    floor), so both quiet tails (RMS) and low-confidence-but-present voicing are
-    respected. The region is bounded by the next word's start so a sustain never
-    leaks into the neighbour's sung region.
+    Walking forward from ``start``, the end is the last active frame BEFORE the
+    first sustained inactive run (``AUDIO_END_MAX_GAP``). Once the voice drops
+    below the energy/voicing floor for that long the word has ENDED — so a
+    sustain can never bleed into the next phrase's energy ("here" ringing into
+    "I hear", "road" into "This", "listen" into "My", "it" swallowing "out").
+    The old rule (last active frame anywhere in the region) crossed those gaps
+    and over-held every word that preceded a re-rise.
+
+    Returns None when there is no signal to judge by (caller keeps the
+    WhisperX/LRC end). The region is bounded by the next word's start so a
+    sustain never leaks into the neighbour's sung region.
     """
     if times is None:
         return None
     end_bound = next_start if next_start is not None else times[-1] + 0.2
     if end_bound - start < 0.05:
         return None
-    last_voiced = None
+    # VOICED is primary: the word's sung end is the last confident voiced frame
+    # before a sustained voiced gap (``AUDIO_END_MAX_GAP``). Using voicing rather
+    # than RMS keeps the low-level reverb bleed of the PREVIOUS word from
+    # bridging a real phrase gap ("listen" ringing into "My" at 138.29, "it"
+    # into "out" at 141.84, "road" into "This" at 186.39, "here" into "I hear").
+    # Words with NO voiced content at all (breathy/unvoiced) fall back to RMS.
     if f0 is not None:
-        m = (times >= start) & (times <= end_bound) & np.isfinite(f0) \
-            & (probs is None or probs > 0.25)
-        idx = np.where(m)[0]
-        if len(idx):
-            last_voiced = float(times[idx[-1]])
-    last_rms = None
-    if rms is not None and len(rms):
-        seg = rms[(rms_t >= start) & (rms_t <= end_bound)]
-        if len(seg) and seg.max() > 0:
+        vmask = np.isfinite(f0) & (probs is None or probs > AUDIO_END_VOICED_PROB)
+        lo = int(np.searchsorted(times, start))
+        hi = int(np.searchsorted(times, end_bound))
+        if np.any(vmask[lo:hi]):
+            grid = times
+            in_run = vmask
+        elif rms is not None and len(rms):
             floor = float(np.percentile(rms, 25)) * 1.5
-            above = rms_t[(rms_t >= start) & (rms_t <= end_bound) & (rms > floor)]
-            if len(above):
-                last_rms = float(above[-1])
-    cand = [x for x in (last_voiced, last_rms) if x is not None]
-    if not cand:
+            in_run = np.interp(times, rms_t, rms) > floor
+            grid = times
+        else:
+            return None
+    elif rms is not None and len(rms):
+        floor = float(np.percentile(rms, 25)) * 1.5
+        in_run = rms > floor
+        grid = rms_t
+    else:
         return None
-    end = max(cand)
+    lo = int(np.searchsorted(grid, start))
+    hi = int(np.searchsorted(grid, end_bound))
+    last_active = None
+    gap_start = None
+    # The word's start is its onset (attack); the voiced vowel can take a
+    # moment to develop, so an inactive LEAD-IN at the very start of the region
+    # must not count as a gap. The timer only starts after the first active
+    # frame ("it"@140.156 is onset-snapped, but pyin voicing starts 0.22s later).
+    for i in range(lo, hi):
+        if in_run[i]:
+            last_active = float(grid[i])
+            gap_start = None
+        elif last_active is not None:
+            if gap_start is None:
+                gap_start = float(grid[i])
+            elif grid[i] - gap_start > AUDIO_END_MAX_GAP:
+                break
+    if last_active is None:
+        return None
     # never stretch into the next word (and never a zero/negative length)
-    if next_start is not None and end >= next_start:
-        end = next_start - 0.02
-    if end < start + 0.05:
+    if next_start is not None and last_active >= next_start:
+        last_active = next_start - 0.02
+    if last_active < start + 0.05:
         return None
-    return end
+    return last_active
+
+
+def _reanchor_gap_words(refined, grid, f0, probs, rms, rms_t, onsets):
+    """Re-anchor a phrase-initial word that WhisperX glued onto the PREVIOUS
+    phrase's tail, charting it in vocal silence ("And"@20.9 sung at ~23.8,
+    "'Cause"@32.7 sung at ~35.1).
+
+    A word whose next word is ``GAP_WORD_MIN_NEXT``+ seconds away AND whose
+    region stays truly silent for the grace+sweep window sits in the gap BETWEEN
+    phrases. The grace window skips the previous word's decaying sung tail (the
+    "bored"/"mirror" over-sustains ARE still voiced up to 21.0/32.9, so a naive
+    "no energy at the start" test never fires). Its real sung position is the
+    first vocal-stem onset after that silence — the phrase's true attack — or,
+    with no onset, just before the next word. Generalizable by construction: it
+    never targets a song, only this (gap, far-next-word) pattern.
+    """
+    has_voice = grid is not None and f0 is not None
+    has_rms = rms is not None and len(rms)
+    if (not has_voice and not has_rms) or not onsets:
+        return
+    floor = float(np.percentile(rms, 25)) * 1.5 if has_rms else 0.0
+    words = sorted(refined, key=lambda w: w.get("start", 0.0))
+    for i, w in enumerate(words[:-1]):
+        start = w.get("start", 0.0)
+        nxt = words[i + 1].get("start", 0.0)
+        if nxt - start < GAP_WORD_MIN_NEXT:
+            continue
+        g0 = start + GAP_WORD_GRACE
+        g1 = g0 + GAP_WORD_SILENCE
+        if has_voice:
+            if np.any((grid >= g0) & (grid <= g1) & np.isfinite(f0)
+                      & (probs > AUDIO_END_VOICED_PROB)):
+                continue
+        if has_rms:
+            if np.any((rms_t >= g0) & (rms_t <= g1) & (rms > floor)):
+                continue
+        cand = [o for o in onsets if g0 < o <= nxt]
+        new = min(cand) if cand else nxt - 0.28
+        new = min(new, nxt - GAP_WORD_BACKOFF)
+        new = max(new, start + 0.02)
+        w["start"] = w["time"] = new
+
+
+def _last_pitch_unit_boundary(run_start, wstart, grid, f0, probs):
+    """Return the last sustained pitch jump inside ``(run_start, wstart)`` — the
+    point where the singer changed pitch and HELD the new note (a new word or
+    vowel). A frame counts when its pitch is ``PITCH_UNIT_JUMP_ST``+ semitones
+    from the MEDIAN of the pitch it SETTLES into over the next
+    ``PITCH_UNIT_PERSIST`` seconds (measured from ``PITCH_UNIT_WINDOW_GAP`` ahead
+    so an in-progress gradual descent — the be/alone drop spans ~8 frames/0.19s —
+    is skipped, not averaged into the settled window), and that settled window is
+    STABLE (peak-to-peak under ~2st, rejecting vibrato/fast slides). Returns the
+    LAST such frame; ``None`` when none exists.
+    """
+    lo = int(np.searchsorted(grid, run_start))
+    hi = int(np.searchsorted(grid, wstart))
+    if hi - lo < 8:
+        return None
+    mask = np.isfinite(f0[lo:hi]) & (probs[lo:hi] > AUDIO_END_VOICED_PROB)
+    t = grid[lo:hi][mask]
+    m = 69.0 + 12.0 * np.log2(f0[lo:hi][mask] / 440.0)
+    if len(m) < 8:
+        return None
+    boundary = None
+    for j in range(len(m)):
+        rel = t[j:] - t[j]
+        fut = (rel >= PITCH_UNIT_WINDOW_GAP) & (rel <= PITCH_UNIT_PERSIST + PITCH_UNIT_WINDOW_GAP)
+        if fut.sum() < 4:
+            continue
+        fut_m = m[j:][fut]
+        fut_med = float(np.median(fut_m))
+        if abs(m[j] - fut_med) < PITCH_UNIT_JUMP_ST:
+            continue
+        if np.ptp(fut_m) > 2.0:
+            continue
+        boundary = float(t[j])
+    return boundary
+
+
+def _reanchor_late_words(refined, grid, f0, probs, onsets):
+    """Re-anchor a word WhisperX placed LATE (its start deep inside an
+    already-sung region) back to that region's true attack.
+
+    Two independent, generalizable signals correct the lateness (whichever wins
+    lands on a real sung boundary):
+      1. GAP-ONSET: a start sitting ``LATE_START_THRESH``+ seconds after the
+         PREVIOUS word's audio-derived end, with real onsets in between, moves
+         to the EARLIEST such onset ("out" swallowed by "it": charted @143.2
+         but sung @142.15).
+      2. PITCH-BOUNDARY: a start sitting ``LATE_START_THRESH``+ seconds after
+         the last sustained pitch jump inside the previous word's WhisperX span
+         moves to that jump — WhisperX pushed the be/alone boundary late
+         ("alone" charted @63.96 but its held note starts @63.5).
+    """
+    words = sorted(refined, key=lambda w: w.get("start", 0.0))
+    for i in range(1, len(words)):
+        w = words[i]
+        prev = words[i - 1]
+        start = w.get("start", 0.0)
+        prev_end = prev.get("end", prev.get("start", 0.0))
+        candidates = []
+        # 1) earliest real onset after the previous word's true sung end. An
+        #    onset only counts when a confident voiced frame follows it within
+        #    ``ONSET_VOICED_AFTER`` — the 40.9/41.0/41.3 onsets before "I"@41.54
+        #    are instrumental bleed in a true silence (no voiced pitch follows),
+        #    while "out"'s 142.15 onset IS the sung attack.
+        if onsets and start - prev_end >= LATE_START_THRESH:
+            voiced_t = None
+            if grid is not None and f0 is not None:
+                voiced_t = grid[np.isfinite(f0) & (probs > AUDIO_END_VOICED_PROB)]
+            search_lo = max(prev_end, start - LATE_START_SEARCH)
+            for o in sorted(onsets):
+                if search_lo < o <= start:
+                    if voiced_t is not None and not np.any(
+                            (voiced_t >= o) & (voiced_t <= o + ONSET_VOICED_AFTER)):
+                        continue
+                    candidates.append(o)
+                    break
+        # 2) last sustained pitch jump before the word's start (searching into
+        #    the NEXT word's territory too — the be/alone drop's "settled" pitch
+        #    only stabilises after be's WhisperX end, so the future window must
+        #    be able to see alone's hold to confirm the drop)
+        prev_raw_end = prev.get("raw_end")
+        if grid is not None and f0 is not None:
+            b = _last_pitch_unit_boundary(prev.get("start", 0.0),
+                                          start,
+                                          grid, f0, probs)
+            if b is not None and 0.25 <= (start - b) <= 0.80 and b >= prev.get("end", 0) - 0.02:
+                # Prefer a real vocal-stem attack near the pitch boundary when
+                # one exists (the pitch boundary marks the note's start, but an
+                # onset is more precise — "on"@46.63 sits 90ms before its 46.72
+                # attack). Guarded: never past the next word or behind the
+                # previous word, so a legato word with no attack ("I"@58.17,
+                # whose next onset belongs to the next word) keeps its boundary.
+                b_snap = b
+                if onsets:
+                    nxt_start = (words[i + 1].get("start", start + 1.0)
+                                 if i + 1 < len(words) else start + 1.0)
+                    for o in onsets:
+                        if (b - 0.15 <= o <= b + 0.15
+                                and prev.get("start", 0.0) <= o
+                                and o <= nxt_start and o < start):
+                            b_snap = o
+                            break
+                candidates.append(b_snap)
+        if not candidates:
+            continue
+        new = min(candidates)
+        new = max(new, prev.get("start", 0.0) + MIN_WORD_SEP)
+        if start - new < LATE_START_MOVE_MIN:
+            continue
+        w["start"] = w["time"] = new
 
 
 def _dedup_consecutive_words(word_segments, min_gap=0.35):
@@ -523,6 +761,7 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
             "time": start_time,
             "start": start_time,
             "raw_start": segment.get("start", segment.get("time", 0.0)),
+            "raw_end": segment.get("end", start_time + 0.3),
             "end": segment.get("end", start_time + 0.3),
             "beat_time": closest_beat,
             "beat_index": beat_index,
@@ -536,6 +775,39 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
     #    LRC line timestamp ("bored", "mirror", "alone").
     # 2) No word's end may overlap the next word's start (overlaps accumulate
     #    into progressive lateness in-game).
+    _clip_and_extend_word_ends(refined, lyrics_data,
+                               audio_times, audio_f0, audio_voiced, audio_probs,
+                               audio_rms_t, audio_rms)
+
+    # Start-level corrections driven by the audio, applied AFTER the first end
+    # pass so they can consult the previous word's true (gap-aware) sung end:
+    #  - Gap words (first word of a phrase glued onto the previous phrase's
+    #    tail, charted in vocal silence) move to their phrase's true attack.
+    #  - Late words (WhisperX pushed the last word of a held phrase late) move
+    #    back to the region's real pitch/onset boundary.
+    # Then re-derive ends + re-clip with the corrected starts.
+    if (audio_rms is not None and len(audio_rms)) or audio_f0 is not None:
+        _reanchor_gap_words(refined, audio_times, audio_f0, audio_probs,
+                            audio_rms, audio_rms_t, vocal_onsets or [])
+    # Re-derive ends AFTER the gap-word moves so a moved word's neighbour gets a
+    # fresh region bound (otherwise "And"@23.8 sees "bored"'s end clipped by the
+    # OLD too-early next-start and pulls the bored-tail onset back onto itself).
+    if audio_f0 is not None:
+        _reanchor_late_words(refined, audio_times, audio_f0, audio_probs,
+                             vocal_onsets or [])
+    # Enforce that no word starts before the previous word's true end + sep,
+    # preventing onset-snap from placing words inside the previous word's
+    # sung region (which causes syllable interleaving and lyrical jumbling
+    # such as "eve Thatry thing" instead of "everything that").
+    for i in range(1, len(refined)):
+        prev = refined[i - 1]
+        w = refined[i]
+        min_start = prev.get("end", prev.get("start", 0.0)) + MIN_WORD_SEP
+        if w.get("start", 0.0) < min_start:
+            w["start"] = w["time"] = min_start
+
+    # Re-derive ends consistent with any start adjustments above.
+
     _clip_and_extend_word_ends(refined, lyrics_data,
                                audio_times, audio_f0, audio_voiced, audio_probs,
                                audio_rms_t, audio_rms)
@@ -663,6 +935,28 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
                 }]
                 syl["pitch_trusted"] = False
 
+
+    # Clamp syllable timing to word regions, preventing syllables from
+    # overlapping the next word's start (fixes cache staleness and
+    # onset-snap interleaving bugs).
+    def _clamp_syllable_regions(refined):
+        for i, word in enumerate(refined):
+            region_end = word.get("end", word.get("start", 0.0))
+            if i + 1 < len(refined):
+                nxt_start = refined[i+1].get("start", word.get("start", 0.0) + 1.0)
+                region_end = min(region_end, nxt_start - MIN_WORD_SEP)
+            if region_end <= word.get("start", 0.0):
+                region_end = word.get("start", 0.0) + 0.05
+            for syl in word.get("syllables", []):
+                if syl.get("start", 0) < word.get("start", 0):
+                    syl["start"] = word.get("start", 0)
+                if syl.get("end", 0) > region_end:
+                    syl["end"] = region_end
+                if syl.get("end", 0) < syl.get("start", 0):
+                    syl["end"] = syl.get("start", 0) + 0.05
+        return refined
+    
+    refined = _clamp_syllable_regions(refined)
     return {
         "metadata": {
             "total_beats": len(beat_times),

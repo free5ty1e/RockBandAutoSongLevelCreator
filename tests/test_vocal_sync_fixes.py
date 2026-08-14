@@ -27,6 +27,7 @@ from autorb.audio.step4_sync import (
     _dedup_consecutive_words,
     _dedup_final_synced,
     _detect_vocal_onsets,
+    _last_pitch_unit_boundary,
 )
 from autorb.export.midi_generator import split_syllable_for_display
 from autorb.transcribe.syllables import segment_word_to_syllables
@@ -194,7 +195,10 @@ class TestSyllableTimingFromWhisperxChars:
 class TestChartedWordsLandOnAudioOnsets:
     def test_every_word_start_snaps_to_real_onset(self):
         """Every charted word start must coincide with a real vocal-stem attack
-        within tolerance (audio is the source of truth, not the LRC)."""
+        within tolerance (audio is the source of truth, not the LRC). A word
+        that sits at a sustained PITCH boundary (the rule-2 re-anchor — "Drove"
+        209.930->209.258, whose 65.1->76.8 drop has no onset in the vocal stem)
+        is also a real sung boundary, so it counts as valid too."""
         import librosa
 
         stem = OUTPUT_DIR / "stems" / "vocals.wav"
@@ -203,17 +207,38 @@ class TestChartedWordsLandOnAudioOnsets:
         data = json.load(open(OUTPUT_DIR / "synced_track.json"))
         words = data.get("synced_lyrics", []) or data
         onsets = _detect_vocal_onsets(str(stem))
-        # A charted word start must sit on a real vocal-stem attack. Allow a
-        # little tolerance: onsets can be detected a frame late and whisperx can
-        # land a merged word slightly early ("as I hit"), so words up to ~80ms
-        # early or ~120ms late are inaudible. The regression this guards against
-        # is words landing 0.3-1.8s LATE (LRC-gated whisperx phrases), which is
-        # far outside this window.
+        # Pitch-boundary validation needs pyin + the frame time grid.
+        grid = f0 = probs = None
+        try:
+            y, sr = librosa.load(str(stem), sr=22050, mono=True)
+            f0, _, probs = librosa.pyin(y, fmin=librosa.note_to_hz('C3'),
+                                        fmax=librosa.note_to_hz('C6'), sr=sr,
+                                        frame_length=2048, hop_length=512)
+            grid = librosa.times_like(f0, sr=sr, hop_length=512)
+        except Exception:
+            pass
+        # A charted word start must sit on a real vocal-stem attack (or a pitch
+        # boundary). Allow a little tolerance: onsets can be detected a frame
+        # late and whisperx can land a merged word slightly early ("as I hit"),
+        # so words up to ~80ms early or ~120ms late are inaudible. The regression
+        # this guards against is words landing 0.3-1.8s LATE (LRC-gated whisperx
+        # phrases), which is far outside this window.
         late = []
-        for w in words:
+        for i, w in enumerate(words):
             start = w.get("start", w.get("time", 0.0))
-            if not any(onset - 0.08 <= start <= onset + 0.12
-                       for onset in onsets):
+            if any(onset - 0.08 <= start <= onset + 0.12
+                   for onset in onsets):
+                continue
+            on_boundary = False
+            if (i > 0 and grid is not None and f0 is not None
+                    and w.get("raw_start")):
+                # Rule-2 evaluated the boundary against the ORIGINAL (raw) start,
+                # so reproduce that call to accept a legit re-anchor.
+                b = _last_pitch_unit_boundary(
+                    words[i - 1].get("start", 0.0), w.get("raw_start", start),
+                    grid, f0, probs)
+                on_boundary = b is not None and abs(b - start) < 0.12
+            if not on_boundary:
                 late.append((w.get("word"), round(start, 3)))
         assert len(late) <= 3, f"words not on a real onset: {late[:10]}"
 
