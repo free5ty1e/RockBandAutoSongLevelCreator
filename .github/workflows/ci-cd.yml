@@ -124,16 +124,26 @@ jobs:
     - name: Verify tag matches version
       run: |
         VERSION=$(python -c "exec(open('autorb/version.py').read()); print(__version__)")
-        if [ "${{ github.ref_name }}" != "v$VERSION" ]; then
-          echo "::error::tag '${{ github.ref_name }}' does not match autorb/version.py (v$VERSION) — bump autorb/version.py and add a CHANGELOG.md entry before tagging"
-          exit 1
-        fi
-        echo "tag v$VERSION matches autorb/version.py"
+        TAG="${{ github.ref_name }}"
+        PREFIX="v$VERSION"
+        # The tag's PREFIX must match autorb/version.py (e.g. v0.0.91...). The SUFFIX is free-form
+        # (v0.0.91test02, v0.0.91-test02, ...) so test releases can be tagged without bumping the
+        # version each time. A suffix must NOT start with a digit, so a tag like v0.0.911 can't
+        # sneak past a version of 0.0.9/0.0.91 ambiguity.
+        case "$TAG" in
+          "$PREFIX")
+            echo "tag $TAG exactly matches autorb/version.py (v$VERSION)" ;;
+          "$PREFIX"[^0-9]*)
+            echo "tag $TAG matches autorb/version.py prefix v$VERSION (suffix '${TAG#"$PREFIX"}')" ;;
+          *)
+            echo "::error::tag '$TAG' does not match autorb/version.py (v$VERSION) — bump autorb/version.py and add a CHANGELOG.md entry before tagging, or keep the tag prefix as v$VERSION with an optional suffix"
+            exit 1 ;;
+        esac
     - name: Extract release notes from CHANGELOG
       run: |
         python - <<'PYEOF'
         import re, sys
-        version = "${{ github.ref_name }}".lstrip("v")
+        version = "${{ needs.build.outputs.version }}"
         text = open("CHANGELOG.md", encoding="utf-8").read()
         m = re.search(rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)", text, re.M | re.S)
         if not m:

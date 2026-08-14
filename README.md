@@ -412,10 +412,14 @@ This repository uses GitHub Actions (`.github/workflows/ci-cd.yml`) to:
 * Build a Python source distribution and wheel (`python -m build`) and automatically draft a **GitHub Release** whenever a tag matching `v*.*.*` is pushed.
 
 ```bash
-# Trigger a build release (tag MUST match the version in autorb/version.py,
-# pyproject.toml, and CHANGELOG.md — currently 0.0.87)
-git tag v0.0.87
-git push origin v0.0.86
+# Trigger a build release (the tag PREFIX must match the version in autorb/version.py,
+# pyproject.toml, and CHANGELOG.md — currently 0.0.91; a free-form SUFFIX is allowed,
+# e.g. v0.0.91test02, for test releases of the same version — the suffix is baked into
+# the wheel/sdist filenames as a PEP 440 local version so test releases never collide
+# with the final one)
+git tag v0.0.91
+git tag v0.0.91test02   # optional: a test release without bumping the version
+git push origin v0.0.91
 ```
 
 ---
