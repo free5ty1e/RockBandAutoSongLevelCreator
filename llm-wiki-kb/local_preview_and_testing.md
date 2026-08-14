@@ -152,6 +152,12 @@ same invariants as CI so regressions surface without any human playtest.
 - Stem preview CLI: `autorb/audio/preview.py` (`python -m autorb.audio.preview`).
 - Stem mixing: `autorb/audio/mix_preview.py`.
 - CLI option reference: `../README.md` (CLI options table).
+- **Headless in-container Clone Hero audit (planned):** `.ai_memory/plans/clone_hero_devcontainer_playtesting.md` —
+  install/persist the official Unity Linux build in the devcontainer (pinned tar + sha256, baked into the image),
+  launch it under Xvfb + Mesa llvmpipe + a PulseAudio null sink using CH's official CLI args
+  (`-s/--song <folder>` auto-loads and plays — no menu automation needed), then capture the playthrough and
+  OCR/diff the lyric-highlight bar per word to measure real in-game sync. Until it ships, Method C below
+  is the agent's automated signal.
 
 ## Why the folder has two chart files
 

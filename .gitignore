@@ -13,6 +13,7 @@ output/
 output_fresh/
 output_fresh_bw/
 output_ors/
+output_test/
 
 # Python build artifacts
 *.egg-info/
