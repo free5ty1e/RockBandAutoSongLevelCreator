@@ -96,6 +96,14 @@ Also documented the debugging trap: `output/` had been overwritten by a Brian Wi
 
 ---
 
+## 2026-08-14 — macOS wheel-install troubleshooting (Python 3.14) documented (v0.0.91)
+
+**What:** Added a README troubleshooting section — "Troubleshooting `Package 'autorb' requires a different Python` (macOS)" — for the by-design wheel rejection on Python 3.14 (WhisperX caps at `<3.14`), triggered when a real Mac tester hit it installing the `autorb-0.0.91+v0.0.91test03` wheel with a system `python3` of 3.14.6. The fix documented: `brew install python@3.12`, `rm -rf venv`, then `/opt/homebrew/bin/python3.12 -m venv venv` (Apple Silicon) or `/usr/local/bin/python3.12` (Intel) — bare `python3` only re-creates the venv on 3.14. The Prerequisites macOS bullet now covers both failure directions (stock 3.9.6 too old; 3.14 too new).
+
+**Why:** The user asked for the steps to be written down for future Mac users. Because the release notes are generated from the README (`tools/gen_release_notes.py`), the section flows into the published notes and the bundled `RELEASE_NOTES.txt` automatically — no separate notes edit needed.
+
+---
+
 ## 2026-08-14 — User-facing release notes restored + bundled in wheel/sdist (v0.0.91)
 
 **What:** New `tools/gen_release_notes.py` composes the GitHub Release body from user-facing sources: a "What's Changed" section (the CHANGELOG entry for the version) followed by the current README's Features / Known Limitations / Roadmap / Installation / Quick Start / Previewing / Master-Stems sections (internal sections like Architecture & Pipeline and the duplicate "Usage" block are excluded). The identical content is written to `RELEASE_NOTES.txt`, which `pyproject.toml` now bundles into the wheel and sdist via `[tool.setuptools.data-files] "." = ["RELEASE_NOTES.txt"]`. The CI `build` job runs the generator (tag-aware only on tag triggers, so branch builds don't get a bogus "test release" note) and the wheel-content check now asserts `RELEASE_NOTES.txt` is present and mentions the version; the `release` job's old "Extract release notes from CHANGELOG" step was replaced with the same generator writing `RELEASE_BODY.md`. `RELEASE_NOTES.txt` is gitignored (build-time artifact).

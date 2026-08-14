@@ -97,7 +97,7 @@ AutoRB runs on **macOS, Windows, and Linux**. Because AutoRB leverages heavy mac
 
 ### 1. Prerequisites (All Operating Systems)
 * **Python 3.11, 3.12, or 3.13** installed on your system. **Python 3.14 is NOT supported** — WhisperX (a hard dependency for vocal alignment) caps at `<3.14`, and the only whisperx release without an upper bound pins `ctranslate2==4.4.0`, which ships no Python 3.14 wheel. The wheel's `Requires-Python` now enforces `>=3.11,<3.14`, so pip refuses early with a clear message instead of failing with `No matching distribution found for ctranslate2==4.4.0`.
-  * **macOS users:** your system `python3` is likely **3.9.6** (too old — installs will fail with "requires a different Python: 3.9.6 not in '>=3.11'"). Install a current Python first: `brew install python@3.12`, or download from [python.org](https://www.python.org/downloads/). Then use `python3.12` in place of `python3` below. Verify with `python3 --version`.
+  * **macOS users:** your system `python3` may be the wrong version in either direction — macOS ships an old **3.9.6** (too old — installs fail with "requires a different Python: 3.9.6 not in '>=3.11'"), and newer macOS releases / upgraded setups can resolve `python3` to **3.14.x** (too new — the wheel's `Requires-Python` is `>=3.11,<3.14`, so pip refuses with "Package 'autorb' requires a different Python: 3.14.x"). Install a supported Python: `brew install python@3.12`, or download from [python.org](https://www.python.org/downloads/). Then use `python3.12` in place of `python3` below — i.e. create the venv with `/opt/homebrew/bin/python3.12 -m venv venv`, **not** with bare `python3` (which would just re-create the venv on the wrong version). Verify with `python3.12 --version`.
 * **FFmpeg** installed and available on your system PATH (`ffmpeg -version` should succeed). **Important:** AutoRB needs the `libvorbis` encoder to build the multi-channel MOGG. Homebrew's standard `ffmpeg` formula dropped libvorbis in ffmpeg 8 — if your run fails with `Unknown encoder 'libvorbis'`, install a libvorbis-capable build (see below) and confirm with `ffmpeg -encoders 2>&1 | grep vorbis` (should list `libvorbis`).
   * **Windows:** Download FFmpeg from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) or install via Chocolatey (`choco install ffmpeg`). The full/essentials builds include libvorbis.
   * **macOS:** Install `brew install ffmpeg-full` (which includes libvorbis; it is keg-only, so put its `bin` on PATH first — e.g. `export PATH="/opt/homebrew/opt/ffmpeg-full/bin:$PATH"` on Apple Silicon). Alternatively use a [ffmpeg.org](https://ffmpeg.org/download.html) macOS static build, which includes libvorbis. (Plain `brew install ffmpeg` since ffmpeg 8 lacks libvorbis.)
@@ -187,6 +187,24 @@ Then install the wheel as usual:
 ```bash
 pip3 install ./autorb-*.whl
 ```
+
+### Troubleshooting `Package 'autorb' requires a different Python` (macOS)
+
+If installing the wheel fails with something like:
+`ERROR: Package 'autorb' requires a different Python: 3.14.6 not in '<3.14,>=3.11'`
+
+Your `python3` is newer than AutoRB supports (Python 3.14 — WhisperX, a hard dependency, caps at `<3.14`, so the wheel's `Requires-Python` deliberately rejects it to fail fast instead of breaking later). This is not a broken wheel — the venv was just created with the wrong Python. Fix it by recreating the venv with a supported Python (3.11/3.12/3.13) using the **explicit Homebrew path**, since bare `python3` will only re-create the venv on 3.14:
+
+```bash
+brew install python@3.12          # skip if already installed
+rm -rf venv
+/opt/homebrew/bin/python3.12 -m venv venv
+source venv/bin/activate
+python3 -c "import sys; print(sys.version)"   # should print 3.12.x
+pip3 install ./autorb-*.whl
+```
+
+(The same check fires when `python3` is too *old* — macOS's stock 3.9.6 — with the message "3.9.6 not in '>=3.11'". On Intel Macs the Homebrew path is `/usr/local/bin/python3.12`; on Apple Silicon it is `/opt/homebrew/bin/python3.12`. `python3.13` also works if you have it installed.)
 
 ### 3. Preparing Lyrics (`.lrc` Files)
 AutoRB relies on Enhanced LRC (`.lrc`) lyric files for precise word and syllable timing. 
