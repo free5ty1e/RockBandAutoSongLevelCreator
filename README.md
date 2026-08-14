@@ -1,8 +1,9 @@
 # AutoRB 🎸 (MP3 -> CON)
+## (MP3 + LRC -> CON, PS4 RB4 US PKG, Clone Hero)
 
 **Automated Rock Band 3 CON File Generator using Machine Learning & Signal Processing.**
 
-`autorb` is an end-to-end Python CLI tool designed to take raw audio files and optional lyric files and transform them into fully playable, synchronized Xbox 360 CON (STFS) files for *Rock Band 3*. 
+`autorb` is an end-to-end Python CLI tool designed to take raw audio files and optional lyric files and transform them into fully playable, synchronized Xbox 360 CON (STFS) files for *Rock Band 3*.  (This pipeline will also optionally output a Clone Hero song folder and a PS4 Rock Band 4 US DLC PKG installer)
 
 By leveraging modern AI models for stem separation, pitch detection, and vocal alignment, AutoRB automates the complex manual workflow traditionally required to create custom Rock Band tracks.
 
