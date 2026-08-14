@@ -410,6 +410,7 @@ The generated MIDI chart always includes `BEAT`, `EVENTS`, `PART VOCALS`, and pl
 This repository uses GitHub Actions (`.github/workflows/ci-cd.yml`) to:
 * Automatically run test suites on every `push` and `pull_request` to `main`.
 * Build a Python source distribution and wheel (`python -m build`) and automatically draft a **GitHub Release** whenever a tag matching `v*.*.*` is pushed.
+* Generate the release notes from user-facing sources (`tools/gen_release_notes.py`): a "What's Changed" section from this version's `CHANGELOG.md` entry, followed by the current README's Features / Known Limitations / Roadmap / Installation / Quick Start / Previewing / Master-Stems sections — so the notes always describe how to actually use the release. The same content ships as `RELEASE_NOTES.txt` inside the wheel and sdist (see `[tool.setuptools.data-files]` in `pyproject.toml`).
 
 ```bash
 # Trigger a build release (the tag PREFIX must match the version in autorb/version.py,

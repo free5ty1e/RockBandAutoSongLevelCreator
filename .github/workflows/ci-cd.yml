@@ -52,14 +52,24 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
+    - name: Generate RELEASE_NOTES.txt (user-facing)
+      run: |
+        if [[ "${{ github.ref_type }}" == "tag" ]]; then
+          python tools/gen_release_notes.py --tag "${{ github.ref_name }}"
+        else
+          python tools/gen_release_notes.py
+        fi
     - name: Build Source Package and Wheel
       run: |
         python -m pip install --upgrade pip build
         python -m build --sdist --wheel
     - name: Verify wheel contains template assets
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
       run: |
         python -c "
-        import zipfile, sys, glob
+        import os, zipfile, sys, glob
+        version = os.environ['VERSION']
         whl = glob.glob('dist/*.whl')[0]
         with zipfile.ZipFile(whl) as z:
             names = z.namelist()
@@ -82,6 +92,17 @@ jobs:
                     print(f'FAIL: {required} not found in wheel', file=sys.stderr)
                     sys.exit(1)
                 print(f'OK: {required}')
+            # The user-facing release notes must ship in the wheel and mention the
+            # release version.
+            rel = [n for n in names if n.endswith('RELEASE_NOTES.txt')]
+            if not rel:
+                print('FAIL: RELEASE_NOTES.txt not found in wheel', file=sys.stderr)
+                sys.exit(1)
+            data = z.read(rel[0]).decode('utf-8', 'replace')
+            if version not in data:
+                print(f'FAIL: RELEASE_NOTES.txt does not mention version {version}', file=sys.stderr)
+                sys.exit(1)
+            print(f'OK: {rel[0]} (mentions {version})')
         "
     - name: Upload dist artifacts
       uses: actions/upload-artifact@v4
@@ -139,21 +160,13 @@ jobs:
             echo "::error::tag '$TAG' does not match autorb/version.py (v$VERSION) — bump autorb/version.py and add a CHANGELOG.md entry before tagging, or keep the tag prefix as v$VERSION with an optional suffix"
             exit 1 ;;
         esac
-    - name: Extract release notes from CHANGELOG
+    - name: Generate user-facing release notes (release body)
       run: |
-        python - <<'PYEOF'
-        import re, sys
-        version = "${{ needs.build.outputs.version }}"
-        text = open("CHANGELOG.md", encoding="utf-8").read()
-        m = re.search(rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)", text, re.M | re.S)
-        if not m:
-            sys.stderr.write(f"::error::no CHANGELOG entry for v{version} — add one before tagging\n")
-            sys.exit(1)
-        header = (f"# AutoRB v{version}\n\n"
-                  "Automated Rock Band 3 CON & PS4 PKG Generator using Machine Learning & Signal Processing.\n\n"
-                  "See the README for full install/usage instructions. Changelog for this release:\n\n")
-        open("RELEASE_BODY.md", "w", encoding="utf-8").write(header + m.group(1).strip() + "\n")
-        PYEOF
+        # Same generator as the build job, so the GitHub Release body and the
+        # RELEASE_NOTES.txt bundled in the wheel/sdist are identical. The tag suffix
+        # (e.g. test02) is shown as a test-release note but the version stays the
+        # autorb/version.py value, so v0.0.91test02 publishes the 0.0.91 notes.
+        python tools/gen_release_notes.py --out RELEASE_BODY.md --tag "${{ github.ref_name }}"
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
