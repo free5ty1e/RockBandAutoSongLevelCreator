@@ -32,6 +32,8 @@ https://youtu.be/lcFGsQfb9tg
 * **Mandatory Count-In:** Automatically prepends a silent count-in (3 measures at the song's opening tempo) to the multi-channel MOGG and shifts the chart past it, mirroring stock RB3 DLC's ~5s lead-in so the game gets a real pre-roll and the first vocal phrase survives ForgeTool's 640-tick offset (which previously underflowed and broke the vocal guide).
 * **Direct CON Packaging:** Assembles multi-channel audio (`.mogg`), `notes.mid`, `songs.dta`, and album artwork into an Xbox 360 STFS CON container directly—no legacy tools required.
 * **Freestyle Vocals (RB4, opt-in):** `--generate-freestyle-vocals` writes `(freestyle_vocals 1)` into `songs.dta`, which the vendored (patched) ForgeTool carries into the PS4 `songdta_ps4` `HasFreestyleVocals` flag so Rock Band 4 draws the diatonic Freestyle Vocals guide lines on Hard/Expert (the game computes the guide scale from the charted vocal notes).
+* **Clone Hero Export (`--build-clone-hero`):** Builds a standard, Clone Hero-compliant song folder (`song.ini` + `notes.chart` *and* `notes.mid` + `song.ogg` + `album.png`) so the vocal/lyric chart can be playtested on a PC in Clone Hero — no PS4, no CON packaging. The chart is re-generated **count-in free** (note ticks == audio time exactly), so any sync judgment made in Clone Hero transfers directly to the Rock Band chart (same data shifted past its count-in). Both chart files are written because CH accepts either and its `.chart` reader is the most battle-tested import path; lyrics ride as `[Events]` `phrase_start`/`phrase_end`/`lyric <text>` events exactly as Moonscraper writes them.
+* **No-PS4 Sync Validation & Preview:** Every run now also emits `preview_mix.wav` (summed stereo stems), `lyrics_preview.srt` (karaoke subtitles from charted word timings — load both in VLC/MPV for a rewindable lyric-sync check), `alignment_report.json` (per-word charted start vs nearest vocal-stem onset: median/p90/max delta + late/early flags), and annotated waveform/spectrogram PNGs of the worst outliers — a quantitative signal for iterating on sync accuracy without a game console.
 
 ---
 
@@ -62,7 +64,7 @@ Beyond the vocal-only MVP, the roadmap (see `ROADMAP.md`) includes:
 - **Vocal gender detection** (`'male'`/`'female'`) for `songs.dta` metadata.
 - **Tambourine detection** — map vocal-free instrumental breaks to microphone "Tambourine" sections.
 - **Multi-harmony vocals** — extract harmony + melody parts for Rock Band's up-to-3-mic harmony system.
-- **Clone Hero export (`--build-clone-hero`)** — also emit a Clone Hero-format song (`.chart`/`.mid` + audio) reusing the same chart and mix, without the Xbox 360 CON packaging or Rock Band count-in.
+- **Robust tempo detection (stem fallback chain)** — beat tracking currently runs on the drums stem and only falls back to vocals for drumless sections; songs without a usable drums stem (all-break intros, instrumentals) get a wrong/missing tempo map. Planned: fall back **drums → bass → vocals → other** with per-stem validation and per-section merging, and record which stem drove each section in `tempo_map.json`.
 
 ---
 
@@ -140,6 +142,7 @@ ForgeTool is vendored as **source only** — the compiled `.exe`/`.dll` binaries
 | CON generation (`.con`), stems, tempo, vocals, difficulty, count-in, MOGG, `songs.dta` | ✅ | ✅ | ✅ |
 | `--build-pkg` (PS4 PKG) | ❌* | ✅ | ✅ |
 | `--generate-freestyle-vocals` — PS4 guide lines | ❌* | ✅ | ✅ |
+| `--build-clone-hero` (Clone Hero folder) + no-PS4 validation artifacts (`preview_mix.wav`, `lyrics_preview.srt`, `alignment_report.json`, `alignment_specs/`) | ✅ | ✅ | ✅ |
 
 \* On a bare wheel install, `--build-pkg` fails fast with a clear message pointing you to `git clone` + `tools/build_forgetool.sh` (the wheel contains only the `autorb.*` Python packages; `_find_forgetool()` searches for `tools/forgetool` under the CWD, its parent, `sys.prefix`, and `sys.base_prefix`, so running the CLI from a clone's root also works against a wheel-installed `autorb`). `--generate-freestyle-vocals` still writes `(freestyle_vocals 1)` into the CON's `songs.dta` on a wheel, but that line has **no effect on PS4 without the patched ForgeTool** carrying it into the `songdta_ps4` `HasFreestyleVocals` flag — so on a wheel it is effectively a no-op for the intended feature.
 
@@ -267,6 +270,7 @@ python3 -m autorb.cli \
 | `--skip-vocals` | Flag | Skip WhisperX alignment and basic-pitch; loads `vocals_cache.json`. |
 | `--skip-mogg` | Flag | Skip MOGG encoding; reuses the existing `.mogg` file (which is expected to already contain the count-in lead-in). The chart is still shifted past the count-in to match the reused audio. |
 | `--generate-freestyle-vocals` | Flag | Enable Rock Band 4 **Freestyle Vocals** guide lines (Hard/Expert): writes `(freestyle_vocals 1)` into `songs.dta`, which the vendored (patched) ForgeTool carries into the PS4 `songdta_ps4` `HasFreestyleVocals` flag so the game advertises and draws the diatonic guide lanes. Off by default. Requires `--build-pkg` to take effect on PS4 (the flag lives in the PKG's songdta; the Xbox 360 CON's `songs.dta` is untouched by the game's freestyle check). |
+| `--build-clone-hero` | Flag | Also export a **Clone Hero**-format song folder (`<output-dir>/clone_hero/<Artist> - <Title>/` with `song.ini` + `notes.chart` *and* `notes.mid` + `song.ogg` + `album.png`) for computer-based playtest — load the folder into Clone Hero (Settings → Open Default Songs Folder → Scan Songs) to review the vocal/lyric chart synced to audio without a PS4. The chart is count-in free so sync judgments transfer directly to the Rock Band chart. |
 | `--ps4-pkg-id` | String | Optional. 16-character PS4 Content ID for the PKG (format: `UP8802-CUSA02084_00-XXXXXXXXXXXXXXXX`). Auto-generated from artist + title (lowercase alphanumeric, padded/truncated to 16 chars) if omitted. Use to ensure unique PKG IDs per song and avoid overwriting previously installed customs on PS4. |
 
 ---
@@ -281,7 +285,21 @@ To sum the separated audio tracks back together into a single audio file to hear
 python -m autorb.audio.mix_preview
 ```
 
-Your stems in `output/stems` will be summed into `output/preview_mix.mp3`
+Your stems in `output/stems` will be summed into `output/preview_mix.wav`
+
+### No-PS4 sync validation & Clone Hero playtest
+
+Every run emits local preview/validation artifacts — `preview_mix.wav`, `lyrics_preview.srt`, `alignment_report.json`, and annotated spectrograms in `alignment_specs/` (see [Key Features](#-key-features)). To playtest the chart on a PC:
+
+```bash
+python3 -m autorb.cli input/eve6-openRoadSong.mp3 \
+  --artist "Eve 6" --title "Open Road Song" --year 1998 --genre "Alternative" \
+  --lyrics input/eve6-openRoadSong.lrc \
+  --output-dir ./output \
+  --build-clone-hero
+```
+
+The song folder lands in `./output/clone_hero/Eve 6 - Open Road Song/` (`song.ini` + `notes.chart` + `notes.mid` + `song.ogg` + `album.png`). In Clone Hero: *Settings → General → Open Default Songs Folder*, copy the folder in, then *Settings → General → Scan Songs*. If it still doesn't appear, check the `badsongs.txt` file Clone Hero generates (it names the exact file it couldn't load) — after adding songs you must always press **Scan Songs** for changes to take effect. The `notes.chart` tempo markers are written as **integer plain-BPM** (drift-compensated) because Clone Hero's reader — a fork of Moonscraper's `ChartReader` — parses the `B` field with `uint.TryParse` and silently drops any fractional value, which would leave the chart with no tempo map and the song invisible. Full procedure in `llm-wiki-kb/local_preview_and_testing.md`.
 
 ## Using Original Master Stems (For Bands/Artists)
 

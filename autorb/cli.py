@@ -39,9 +39,10 @@ def _generate_ps4_pkg_id(artist: str, title: str, custom_id: str | None = None) 
 @click.option('--skip-mogg', is_flag=True, help='Skip MOGG encoding and reuse the existing .mogg in the output dir (which is expected to already contain the count-in lead-in); the chart is still shifted to match it')
 @click.option('--album-art', type=click.Path(exists=True), default=None, help='Path to a custom album art image (PNG/JPG); defaults to the generated "Chris Prime Custom" art')
 @click.option('--build-pkg', is_flag=True, help='Build PS4 PKG installer from the generated CON')
+@click.option('--build-clone-hero', is_flag=True, help='Also export a Clone Hero-format song folder (song.ini + notes.mid + song.ogg + album.png) under <output-dir>/clone_hero/ for computer-based playtest/preview without a PS4')
 @click.option('--generate-freestyle-vocals', is_flag=True, help='Enable Rock Band 4 freestyle-vocals guide lines (Hard/Expert) by setting HasFreestyleVocals in the PS4 songdta')
 @click.option('--ps4-pkg-id', type=str, default=None, help='Optional 16-char PS4 Content ID for the PKG (auto-generated from artist+title if omitted)')
-def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, generate_freestyle_vocals, ps4_pkg_id):
+def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, build_clone_hero, generate_freestyle_vocals, ps4_pkg_id):
     click.echo(f"Starting AutoRB Pipeline for: {artist} - {title}")
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -128,7 +129,9 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         click.echo(f"First aligned word: '{w_text}' (Starts: {w_start:.2f}s, Ends: {w_end:.2f}s)")
     
     if vocal_notes:
-        first_note = vocal_notes[0]
+        # Basic-Pitch returns note events reverse-chronologically; report the
+        # chronologically first note so the log line isn't misleading.
+        first_note = min(vocal_notes, key=lambda n: n[0])
         click.echo(f"First vocal note: starts at {first_note[0]:.2f}s, MIDI pitch {first_note[2]}")
 
     click.echo("\n[4/5] Synchronizing beats and lyrics data...")
@@ -230,8 +233,58 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         )
         click.echo(f"CON file successfully packaged: {con_output_path}")
 
+        # Sync-validation artifacts (no PS4 needed): a count-in-free chart +
+        # alignment report + karaoke .srt so lyric/audio sync can be reviewed
+        # (and quantitatively validated) on a computer, e.g. paired with
+        # preview_mix.wav in VLC/MPV or loaded into Clone Hero.
+        source_length_ms = max(0, song_length_ms - count_in_ms)
+        val_dir = out_path / "validation"
+        val_dir.mkdir(exist_ok=True)
+        val_midi = generate_vocal_midi(
+            synced_output_json, val_dir, "notes",
+            song_length_ms=source_length_ms,
+            bpm=avg_bpm,
+            beat_times=list(beat_times),
+            dynamic_bpms=list(dynamic_bpms),
+            count_in_ticks=0,
+            count_in_ms=0,
+        )
+        from autorb.export.alignment_report import build_lyrics_srt, build_alignment_report
+        build_lyrics_srt(synced_output_json, out_path / "lyrics_preview.srt")
+        try:
+            build_alignment_report(
+                synced_output_json, val_midi, stems["vocals"],
+                out_path / "alignment_report.json",
+                spec_dir=out_path / "alignment_specs",
+            )
+        except Exception as e:
+            click.echo(f"Warning: alignment report failed (pipeline continues): {e}", err=True)
+
+        if build_clone_hero:
+            click.echo("\n[6/5] Exporting Clone Hero song folder...")
+            from autorb.export.clone_hero import build_clone_hero_song
+            ch_folder = build_clone_hero_song(
+                output_dir=out_path,
+                song_id=song_id,
+                title=title,
+                artist=artist,
+                year=year,
+                genre=genre,
+                stems_dir=stems_dir,
+                synced_json=synced_output_json,
+                beat_times=list(beat_times),
+                dynamic_bpms=list(dynamic_bpms),
+                source_length_ms=source_length_ms,
+                avg_bpm=avg_bpm,
+                preview_start_ms=50000,
+                album_art=out_path / "album_art_preview.png" if album_art is None else album_art,
+            )
+            click.echo(f"Clone Hero song exported: {ch_folder}")
+            click.echo("Load it in Clone Hero (Songs folder -> Scan Songs) to playtest "
+                       "lyric/vocal sync on your computer without a PS4.")
+
         if build_pkg:
-            click.echo("\n[6/5] Building PS4 PKG installer...")
+            click.echo("\n[7/5] Building PS4 PKG installer...")
             from autorb.export.con_packer import build_ps4_pkg
             pkg_path = build_ps4_pkg(con_output_path, out_path, pkg_id_16)
             click.echo(f"PS4 PKG installer successfully built: {pkg_path}")

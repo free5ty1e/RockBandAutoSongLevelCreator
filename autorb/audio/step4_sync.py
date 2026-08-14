@@ -84,7 +84,7 @@ AUDIO_END_VOICED_PROB = 0.25  # pyin confidence for a "voiced" frame
 # to the first real vocal onset inside the gap.
 GAP_WORD_MIN_NEXT = 1.00     # ... only when the next word is at least this far
 GAP_WORD_GRACE = 0.20        # skip the previous word's decaying tail
-GAP_WORD_SILENCE = 0.60      # ... then require this long of true vocal silence
+GAP_WORD_SILENCE = 0.30      # ... then require this long of true vocal silence
 GAP_WORD_BACKOFF = 0.12      # breathing room before the next word
 # (2) LATE words: WhisperX can push the last word of a held phrase LATE ("alone"
 # @63.96 sung at ~63.5, "out"@143.2 sung at ~142.15). A start sitting deep into
@@ -693,6 +693,31 @@ def _dedup_final_synced(synced_words, min_gap=0.15):
     return out
 
 
+def _clamp_syllable_regions(refined):
+    """Clip every syllable to its word's [start, min(end, next_start - MIN_WORD_SEP)] region.
+
+    Defends against cache v2 staleness overshoot and onset-snap interleaving:
+    a syllable must never start before its word's true (onset-snapped) start nor
+    spill past the next word's charted start, otherwise lyrics jumble
+    ("eve Thatry thing" instead of "everything that").
+    """
+    for i, word in enumerate(refined):
+        region_end = word.get("end", word.get("start", 0.0))
+        if i + 1 < len(refined):
+            nxt_start = refined[i + 1].get("start", word.get("start", 0.0) + 1.0)
+            region_end = min(region_end, nxt_start - MIN_WORD_SEP)
+        if region_end <= word.get("start", 0.0):
+            region_end = word.get("start", 0.0) + 0.05
+        for syl in word.get("syllables", []):
+            if syl.get("start", 0) < word.get("start", 0):
+                syl["start"] = word.get("start", 0)
+            if syl.get("end", 0) > region_end:
+                syl["end"] = region_end
+            if syl.get("end", 0) < syl.get("start", 0):
+                syl["end"] = syl.get("start", 0) + 0.05
+    return refined
+
+
 def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=None):
     """
     Maps word segments to the nearest beat time.
@@ -805,14 +830,7 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
         min_start = prev.get("end", prev.get("start", 0.0)) + MIN_WORD_SEP
         if w.get("start", 0.0) < min_start:
             w["start"] = w["time"] = min_start
-
-    # Re-derive ends consistent with any start adjustments above.
-
-    _clip_and_extend_word_ends(refined, lyrics_data,
-                               audio_times, audio_f0, audio_voiced, audio_probs,
-                               audio_rms_t, audio_rms)
-
-    # Second pass: syllable segmentation
+# Second pass: syllable segmentation
     lrc_data = None
     if lrc_path and Path(lrc_path).exists():
         lrc_data = lyrics_data.get("lyrics_data", [])
@@ -935,27 +953,6 @@ def sync_lyrics_to_beats(beats_data, lyrics_data, vocals_stem=None, lrc_path=Non
                 }]
                 syl["pitch_trusted"] = False
 
-
-    # Clamp syllable timing to word regions, preventing syllables from
-    # overlapping the next word's start (fixes cache staleness and
-    # onset-snap interleaving bugs).
-    def _clamp_syllable_regions(refined):
-        for i, word in enumerate(refined):
-            region_end = word.get("end", word.get("start", 0.0))
-            if i + 1 < len(refined):
-                nxt_start = refined[i+1].get("start", word.get("start", 0.0) + 1.0)
-                region_end = min(region_end, nxt_start - MIN_WORD_SEP)
-            if region_end <= word.get("start", 0.0):
-                region_end = word.get("start", 0.0) + 0.05
-            for syl in word.get("syllables", []):
-                if syl.get("start", 0) < word.get("start", 0):
-                    syl["start"] = word.get("start", 0)
-                if syl.get("end", 0) > region_end:
-                    syl["end"] = region_end
-                if syl.get("end", 0) < syl.get("start", 0):
-                    syl["end"] = syl.get("start", 0) + 0.05
-        return refined
-    
     refined = _clamp_syllable_regions(refined)
     return {
         "metadata": {
