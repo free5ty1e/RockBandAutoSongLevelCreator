@@ -11,6 +11,7 @@ import soundfile as sf
 from autorb.export.clone_hero import (
     build_clone_hero_song,
     midi_to_chart_file,
+    remap_drums_for_clone_hero,
     sanitize_folder_name,
 )
 from autorb.export.midi_generator import generate_vocal_midi
@@ -444,3 +445,53 @@ def test_midi_to_chart_file_roundtrip(tmp_path: Path):
 
     assert int(expert[0].split("=")[0]) == first_note
     assert int(lyric_events[0].split("=")[0]) == first_lyric
+
+
+def _make_drum_mid(path: Path, rb_pitches=(36, 38, 46)):
+    """Minimal .mid with PART DRUMS at Rock Band pitches (35-59)."""
+    mf = mido.MidiFile(ticks_per_beat=480)
+    tt = mido.MidiTrack(); tt.name = "notes"
+    tt.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120)))
+    mf.tracks.append(tt)
+    dt = mido.MidiTrack(); dt.name = "PART DRUMS"
+    t = 0
+    for p in rb_pitches:
+        dt.append(mido.Message("note_on", note=p, velocity=100, time=t)); t = 480
+        dt.append(mido.Message("note_off", note=p, velocity=0, time=240)); t = 240
+    mf.tracks.append(dt)
+    mf.save(str(path))
+
+
+def test_remap_drums_for_clone_hero_uses_ch_offset_format(tmp_path: Path):
+    """Clone Hero's .mid drums must be difficulty-offset (Easy 60 / Medium 72 /
+    Hard 84 / Expert 96 + lane 0-4), not Rock Band's fixed 35-59 notes — otherwise
+    CH reports 'no players were loaded'. Each RB hit becomes one note per difficulty."""
+    mid = tmp_path / "d.mid"
+    _make_drum_mid(mid)
+    remap_drums_for_clone_hero(mid)
+
+    mf = mido.MidiFile(mid)
+    dt = next(t for t in mf.tracks if t.name == "PART DRUMS")
+    pitches = [m.note for m in dt if m.type == "note_on" and m.velocity > 0]
+    # 3 RB pitches x 4 difficulties = 12 notes, all in CH's 60-101 range.
+    assert len(pitches) == 12
+    assert all(60 <= p <= 101 for p in pitches)
+    # kick(36)->0, snare(38)->1, open-hat(46)->2 ; each emitted in all 4 difficulties.
+    assert sorted(pitches) == [60, 61, 62, 72, 73, 74, 84, 85, 86, 96, 97, 98]
+
+
+def test_chart_drums_use_lanes_not_midi_pitches(tmp_path: Path):
+    """The .chart [ExpertDrums] section must use Clone Hero lanes 0-4 (sustain 0),
+    never the raw RB MIDI pitches, or CH rejects the drum chart."""
+    mid = tmp_path / "d2.mid"
+    _make_drum_mid(mid)
+    remap_drums_for_clone_hero(mid)
+    chart = tmp_path / "d2.chart"
+    midi_to_chart_file(mid, chart, title="T", artist="A")
+
+    sections = _parse_chart_sections(chart.read_text(encoding="utf-8"))
+    expert = [s for s in sections["ExpertDrums"] if " = N " in s]
+    lanes = [int(s.split("=")[1].split()[1]) for s in expert]
+    assert lanes == [0, 1, 2]  # kick/snare/open-hat -> 0/1/2
+    # drum sustains are hits (0), not rolls
+    assert all(int(s.split("=")[1].split()[2]) == 0 for s in expert)

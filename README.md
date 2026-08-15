@@ -397,6 +397,34 @@ python3 -m autorb.cli input/eve6-openRoadSong.mp3 \
 
 The song folder lands in `./output/clone_hero/Eve 6 - Open Road Song/` (`song.ini` + `notes.chart` + `notes.mid` + `song.ogg` + `album.png`). In Clone Hero: *Settings → General → Open Default Songs Folder*, copy the folder in, then *Settings → General → Scan Songs*. If it still doesn't appear, check the `badsongs.txt` file Clone Hero generates (it names the exact file it couldn't load) — after adding songs you must always press **Scan Songs** for changes to take effect. The `notes.chart` tempo markers are written as **integer plain-BPM** (drift-compensated) because Clone Hero's reader — a fork of Moonscraper's `ChartReader` — parses the `B` field with `uint.TryParse` and silently drops any fractional value, which would leave the chart with no tempo map and the song invisible. Full procedure in `llm-wiki-kb/local_preview_and_testing.md`.
 
+#### Headless capture (devcontainer): load a song and screenshot a specific instrument at a specific time
+
+The devcontainer ships a fully headless Clone Hero instance (Clone Hero running under **box64** on arm64, with **Xvfb** + a null-sink **PulseAudio** and an ALSA-seq shim so RtMidi can't crash Unity). This lets you render any AutoRB-exported song and grab a screenshot of the note highway for a chosen instrument, difficulty, and point in the song — no GPU, no display, no manual clicking. It is installed automatically when the devcontainer is built (`tools/setup_clone_hero_headless.sh` is run from the Dockerfile and `post-install.sh`).
+
+Use the documented wrapper `tools/ch_capture.sh`:
+
+```bash
+# See the guitar chart at 1:15 on Expert:
+tools/ch_capture.sh \
+  --song "$PWD/output/clone_hero/Eve 6 - Open Road Song" \
+  --instrument guitar --difficulty expert --at 75 \
+  --out /tmp/guitar75.png
+
+# Confirm the drums chart actually loaded (capture early):
+tools/ch_capture.sh \
+  --song "$PWD/output/clone_hero/Eve 6 - Open Road Song" \
+  --instrument drums --difficulty expert --at 20 \
+  --out /tmp/drums20.png
+```
+
+Arguments: `--song` (absolute path to the song folder, required), `--instrument` (`guitar`/`bass`/`drums`/`vocals`/`keys`, default `guitar`), `--difficulty` (`expert`/`hard`/`medium`/`easy`, default `expert`), `--at` (seconds into the song to capture, default 30), `--out` (PNG path, default `/tmp/ch_capture.png`). Clone Hero needs ~15 s to boot under box64, so `--at` values smaller than that are clamped up to the boot grace period. Behind the scenes it calls `tools/clone_hero_headless.sh`, which boots Xvfb + PulseAudio, launches Clone Hero straight into gameplay on the requested `-p <Instrument>,<Difficulty>`, waits, and captures one frame with `ffmpeg` x11grab.
+
+Notes and gotchas:
+- **Use an absolute `--song` path.** Under box64, Clone Hero resolves relative paths from its own binary directory and fails.
+- **Keys will not appear** — Clone Hero has no playable keyboard instrument; only guitar, bass, drums, and vocals are visible. The `PART KEYS` track is still written for Rock Band / the MIDI.
+- To set up the harness outside the devcontainer (or after a manual rebuild), run `bash tools/setup_clone_hero_headless.sh` (it is idempotent: it skips anything already installed, and verifies the Clone Hero download against a pinned sha256).
+- For automated pass/fail (does the export load at all? did it render a non-blank frame? was it rejected via `badsongs.txt`?), use the load gate: `python -m autorb.testing.ch_runner --help` (the `run_load_gate()` function in `autorb/testing/ch_runner.py`). Mark related tests `@pytest.mark.devcontainer` — they are excluded from the default CI run because GitHub Actions has no X11/audio stack.
+
 ## Using Original Master Stems (For Bands/Artists)
 
 If you have access to the original studio multitracks (stems) for a song, you can skip the AI audio separation step to achieve perfect, artifact-free audio in-game.

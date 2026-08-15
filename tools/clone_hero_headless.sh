@@ -77,15 +77,28 @@ start_pulse
 SONG=""
 SHOT=""
 WAIT=20
+AT=""
 EXTRA=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --song) SONG="$2"; shift 2 ;;
         --shot) SHOT="$2"; shift 2 ;;
         --wait) WAIT="$2"; shift 2 ;;
+        --at) AT="$2"; shift 2 ;;
         *) EXTRA+=("$1"); shift ;;
     esac
 done
+
+# --at <seconds> = target time in the song to capture. Clone Hero needs a few
+# seconds to boot under box64, so we never wait less than a boot grace period.
+if [ -n "${AT}" ]; then
+    BOOT_GRACE=15
+    if [ "${AT}" -gt "${BOOT_GRACE}" ]; then
+        WAIT="${AT}"
+    else
+        WAIT="${BOOT_GRACE}"
+    fi
+fi
 
 if [ -z "${SONG}" ]; then
     echo "ERROR: --song <absolute path> is required" >&2
