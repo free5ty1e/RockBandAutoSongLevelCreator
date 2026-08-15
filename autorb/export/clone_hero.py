@@ -136,13 +136,29 @@ def midi_to_chart_file(
                 events.append((end, 2, "phrase_end"))
             for tick, lyric in sorted(lyrics.items()):
                 events.append((tick, 1, f"lyric {lyric}"))
-        elif name in ("PART GUITAR", "PART BASS", "PART DRUMS"):
+        elif name in ("PART GUITAR", "PART BASS", "PART DRUMS", "PART KEYS"):
             inst = name.replace("PART ", "")
-            chart_inst = {"DRUMS": "Drums", "GUITAR": "Guitar", "BASS": "Bass"}[inst]
+            chart_inst = {"DRUMS": "Drums", "GUITAR": "Guitar", "BASS": "Bass", "KEYS": "Keys"}[inst]
             notes = _extract_notes(tr, exclude=set())
-            instruments[chart_inst] = [
-                (tick, pitch % 12, sustain) for tick, pitch, sustain in notes
-            ]
+            # Build per-difficulty note lists. Guitar/Bass pack each difficulty at a
+            # distinct pitch base (Expert 60 / Hard 72 / Medium 84 / Easy 96), so we
+            # recover the difficulty from the pitch and express it as a 0-4 lane.
+            per_diff: dict[str, list] = {d: [] for d in CHART_DIFFICULTIES}
+            if inst in ("GUITAR", "BASS"):
+                bases = {"Expert": 60, "Hard": 72, "Medium": 84, "Easy": 96}
+                for tick, pitch, sustain in notes:
+                    diff = next((d for d in bases if bases[d] <= pitch < bases[d] + 5), None)
+                    if diff is not None:
+                        per_diff[diff].append((tick, pitch - bases[diff], sustain))
+            else:
+                # Drums/Keys use fixed/actual pitches shared across difficulties in the
+                # packed MIDI (CH requires that for drums), so the per-difficulty split
+                # is not recoverable from pitch alone — emit every note into each
+                # difficulty section at its true pitch.
+                for tick, pitch, sustain in notes:
+                    for d in CHART_DIFFICULTIES:
+                        per_diff[d].append((tick, pitch, sustain))
+            instruments[chart_inst] = per_diff
 
     events.sort(key=lambda e: (e[0], e[1]))
 
@@ -184,12 +200,12 @@ def midi_to_chart_file(
             lines.append(f"  {tick} = N {pitch} {sustain}")
         lines.append("}")
 
-    for inst in ("Guitar", "Bass", "Drums"):
+    for inst in ("Guitar", "Bass", "Drums", "Keys"):
         for diff in CHART_DIFFICULTIES:
             lines.append("")
             lines.append(f"[{diff}{inst}]")
             lines.append("{")
-            for tick, lane, sustain in sorted(instruments.get(inst, [])):
+            for tick, lane, sustain in sorted(instruments.get(inst, {}).get(diff, [])):
                 lines.append(f"  {tick} = N {lane} {sustain}")
             lines.append("}")
 
@@ -313,6 +329,11 @@ def build_clone_hero_song(
     avg_bpm: float = 120.0,
     preview_start_ms: int = 50000,
     album_art: Path | None = None,
+    guitar_charts: dict = None,
+    bass_charts: dict = None,
+    drum_charts: dict = None,
+    keys_charts: dict = None,
+    freestyle_drums: bool = False,
 ) -> Path:
     """Export a Clone Hero song folder under ``<output_dir>/clone_hero/``.
 
@@ -352,6 +373,11 @@ def build_clone_hero_song(
         count_in_ticks=0,
         count_in_ms=0,
         preview_start_ms=preview_start_ms,
+        guitar_charts=guitar_charts,
+        bass_charts=bass_charts,
+        drum_charts=drum_charts,
+        keys_charts=keys_charts,
+        freestyle_drums=freestyle_drums,
     )
     midi_to_chart_file(
         folder / "notes.mid",

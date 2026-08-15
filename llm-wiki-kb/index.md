@@ -21,6 +21,8 @@ If you are new, read in this order:
 | [[architecture]] | End-to-end pipeline, packaging, supported Python range, release wheel naming. |
 | [[rock_band_customs_domain]] | Rock Band charting domain rules, MIDI requirements, count-in, tempo maps, difficulty ranks. |
 | [[vocal_alignment]] | LRC ingestion, WhisperX alignment, onset-snapped timing, pyin-primary pitch resolution, note-end clipping. |
+| [[instrument_charting]] | Real instrument charts (v0.0.92): transcription backends, difficulty reducer, MIDI pitch-offset packing, Clone Hero `.chart` writer quirks. |
+| [[difficulty_charting]] | Rock Band/RBN rules for deriving Hard/Medium/Easy from Expert (cascade, lane consistency, sustain pull-back) + how AutoRB's reducer currently diverges. |
 | [[con_stfs_format]] | Xbox 360 STFS / CON container format and block addressing. |
 | [[mogg_audio_format]] | MOGG container layout, Ogg page-size constraints, channel layout, song_length. |
 | [[forgetool_compat]] | ForgeTool / LibForge CON->PKG compatibility: crashes fixed, interleave-aware I/O, freestyle patch. |

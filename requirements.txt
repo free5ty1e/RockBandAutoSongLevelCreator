@@ -27,4 +27,9 @@ pydub
 mido
 pyphen>=0.10
 
+# Instrument transcription (new)
+crepe>=0.0.12          # High-quality pitch detection
+madmom>=0.16.1         # Drum onset detection, tempo
+scikit-learn>=1.3.0    # For drum classification
+
 

@@ -219,15 +219,175 @@ def build_placeholder_track(name: str, pitches: tuple = PLACEHOLDER_DIFFICULTY_P
         events.extend(b"\x80" + bytes([pitch, 0]))
     return build_track(name, bytes(events))
 
+
+def build_instrument_track(
+    charts: dict,  # {difficulty: InstrumentChart}
+    instrument: str,
+    count_in_ticks: int,
+    time_to_tick,
+) -> bytes:
+    """
+    Build a Rock Band instrument track (GUITAR, BASS, DRUMS, KEYS) containing all 4 difficulties.
+    
+    Rock Band stores all difficulties in a single track, distinguished by pitch ranges:
+    - Expert: base 60 (guitar/bass) / fixed drum pitches / keys actual MIDI pitch
+    - Hard: base 72
+    - Medium: base 84
+    - Easy: base 96
+    
+    Args:
+        charts: Dict mapping difficulty -> InstrumentChart
+        instrument: 'guitar', 'bass', 'drums', 'keys'
+        count_in_ticks: Count-in offset
+        time_to_tick: Function to convert seconds to MIDI ticks
+    
+    Returns:
+        MTrk bytes for the instrument track (contains all 4 difficulties)
+    """
+    # If no real chart data, use the simple placeholder that ForgeTool expects
+    if not charts or all(v is None for v in charts.values()):
+        return build_placeholder_track(f"PART {instrument.upper()}", start_tick=count_in_ticks)
+    
+    # Lane base pitches per difficulty
+    LANE_BASE = {
+        'expert': 60,
+        'hard': 72,
+        'medium': 84,
+        'easy': 96,
+    }
+    OPEN_PITCH = 67  # G4
+    
+    # Drum pitches (same across difficulties)
+    DRUM_PITCHES = {
+        'kick': 36,
+        'snare': 38,
+        'hihat': 42,
+        'hihat_open': 46,
+        'ride': 51,
+        'crash': 49,
+        'tom1': 48,
+        'tom2': 45,
+        'tom3': 43,
+    }
+    
+    difficulties = ['expert', 'hard', 'medium', 'easy']
+
+    # Collect all notes from all difficulties with their target pitches
+    all_notes = []  # (tick, pitch, velocity, duration, difficulty)
+
+    for diff in ['expert', 'hard', 'medium', 'easy']:
+        # charts may be keyed by the Difficulty enum (from create_all_difficulties)
+        # or by plain strings; resolve either way.
+        chart = None
+        if charts:
+            for key in (diff, diff.upper(), diff.capitalize()):
+                chart = charts.get(key)
+                if chart is not None:
+                    break
+            if chart is None:
+                from autorb.transcribe.instruments.difficulty import Difficulty
+                chart = charts.get(Difficulty(diff))
+        base = LANE_BASE[diff]
+        
+        if chart is None:
+            # Should not happen since we handled all-None case above, but safety fallback
+            pitch = LANE_BASE[diff] if instrument != 'drums' else 36
+            all_notes.append((count_in_ticks, pitch, 100, 120, diff))
+            continue
+        
+        notes = sorted(chart.notes, key=lambda n: n.time)
+        
+        for note in chart.notes:
+            target_start = time_to_tick(note.time) + count_in_ticks
+            target_end = target_start + int(note.length * 480 * 120 / 60) if note.length > 0 else target_start + 120
+            
+            # Determine MIDI pitch for this note
+            if instrument == 'drums':
+                pitch = note.difficulty_pitch
+            elif instrument == 'keys':
+                # Keys use actual MIDI pitch (2-octave piano roll C2=36 to C4=60)
+                pitch = note.difficulty_pitch
+            elif note.is_open:
+                pitch = OPEN_PITCH
+            else:
+                pitch = base + note.lane
+            
+            duration = max(48, int((note.length * 480 * 120 / 60)) if note.length > 0 else 120)
+            all_notes.append((target_start, pitch, note.velocity, duration, diff))
+    
+    # Sort all notes by time, then by difficulty order (expert first for same time)
+    diff_order = {'expert': 0, 'hard': 1, 'medium': 2, 'easy': 3}
+    all_notes.sort(key=lambda x: (x[0], diff_order.get(x[4] if len(x) > 4 else 'expert', 0)))
+    
+    # Build events
+    events = bytearray()
+    last_tick = 0
+    
+    for note_data in all_notes:
+        target_start, pitch, velocity, duration, _ = note_data
+        
+        delta = max(0, target_start - last_tick)
+        events.extend(encode_varlen(delta))
+        events.extend(b"\x90" + bytes([pitch, velocity]))
+        
+        duration = max(48, duration)
+        events.extend(encode_varlen(duration))
+        events.extend(b"\x80" + bytes([pitch, 0]))
+        
+        last_tick = target_start + duration
+    
+    track_name = f"PART {instrument.upper()}"
+    return build_track(track_name, bytes(events))
+
+
+def build_all_instrument_tracks(
+    guitar_charts: dict = None,
+    bass_charts: dict = None,
+    drum_charts: dict = None,
+    keys_charts: dict = None,
+    freestyle_drums: bool = False,
+    count_in_ticks: int = 0,
+    time_to_tick = None,
+) -> list[bytes]:
+    """
+    Build all 4 instrument tracks (DRUMS, BASS, GUITAR, KEYS), each containing 4 difficulties.
+    
+    Returns list of 4 MTrk bytes: [drums, bass, guitar, keys]
+
+    When ``freestyle_drums`` is True, the drum track is emitted as a single placeholder
+    note (drum freestyle throughout the song) instead of using ``drum_charts``.
+    """
+    if time_to_tick is None:
+        def time_to_tick(sec):
+            return int(sec * 480 * 120 / 60)
+
+    tracks = []
+
+    if freestyle_drums:
+        tracks.append(build_instrument_track({}, 'drums', count_in_ticks, time_to_tick))
+    else:
+        tracks.append(build_instrument_track(drum_charts or {}, 'drums', count_in_ticks, time_to_tick))
+    tracks.append(build_instrument_track(bass_charts or {}, 'bass', count_in_ticks, time_to_tick))
+    tracks.append(build_instrument_track(guitar_charts or {}, 'guitar', count_in_ticks, time_to_tick))
+    tracks.append(build_instrument_track(keys_charts or {}, 'keys', count_in_ticks, time_to_tick))
+
+    return tracks
+
+
 def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id: str,
                         preview_start_ms: int = 50000, song_length_ms: int | None = None,
                         phrase_measures: int = 2, bpm: float = 120.0,
                         beat_times: list | None = None, dynamic_bpms: list | None = None,
-                        count_in_ticks: int = 0, count_in_ms: int = 0) -> Path:
+                        count_in_ticks: int = 0, count_in_ms: int = 0,
+                        guitar_charts: dict = None,  # {diff: InstrumentChart}
+                        bass_charts: dict = None,
+                        drum_charts: dict = None,
+                        keys_charts: dict = None,  # {diff: InstrumentChart}
+                        freestyle_drums: bool = False) -> Path:
     """
     Generates a fully compliant Rock Band PART VOCALS MIDI chart from synchronized JSON data.
-    Includes placeholder PART DRUMS, PART GUITAR, and PART BASS tracks (one note each) so that
-    every instrument advertised in songs.dta has a corresponding chart track.
+    Includes PART DRUMS, PART GUITAR, and PART BASS tracks. If instrument charts are provided,
+    uses full transcriptions with all four difficulties; otherwise uses placeholder tracks.
 
     ``count_in_ticks`` shifts the whole chart so tick 0 is the start of the
     MOGG's count-in silence and the first musical event lands at
@@ -472,12 +632,21 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     )
     t0 = build_track(song_id, tempo_data)
 
-    # Track 1-4: instrument charts
-    t1 = build_placeholder_track("PART DRUMS", start_tick=count_in_ticks)
-    t2 = build_placeholder_track("PART BASS", start_tick=count_in_ticks)
-    t3 = build_placeholder_track("PART GUITAR", start_tick=count_in_ticks)
-    t4 = build_track("PART VOCALS", bytes(vocal_events))
-
+    # Track 1-3: instrument charts (DRUMS, BASS, GUITAR - each with 4 difficulties)
+    # Each track contains all 4 difficulties (Expert/Hard/Medium/Easy) distinguished by pitch range
+    instrument_tracks = build_all_instrument_tracks(
+        drum_charts=drum_charts,
+        bass_charts=bass_charts,
+        guitar_charts=guitar_charts,
+        keys_charts=keys_charts,
+        freestyle_drums=freestyle_drums,
+        count_in_ticks=count_in_ticks,
+        time_to_tick=shifted_time_to_tick,
+    )
+    
+    # Vocal track (single track, not per-difficulty)
+    t_vocals = build_track("PART VOCALS", bytes(vocal_events))
+    
     # Track 5: EVENTS with the required [music_start]/[preview]/[music_end]/[end] markers
     t5 = build_events_track(
         first_note_tick=first_note_tick or count_in_ticks,
@@ -501,10 +670,9 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     with open(midi_path, "wb") as f:
         f.write(header)
         f.write(t0)
-        f.write(t1)
-        f.write(t2)
-        f.write(t3)
-        f.write(t4)
+        for track_bytes in instrument_tracks:
+            f.write(track_bytes)
+        f.write(t_vocals)
         f.write(t5)
         f.write(t6)
 

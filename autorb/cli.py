@@ -26,12 +26,12 @@ def _generate_ps4_pkg_id(artist: str, title: str, custom_id: str | None = None) 
 
 
 @click.command()
-@click.argument('audio_file', type=click.Path(exists=True))
-@click.option('--artist', required=True, help='Artist name')
-@click.option('--title', required=True, help='Song title')
-@click.option('--year', type=int, required=True, help='Release year')
-@click.option('--genre', required=True, help='Song genre')
-@click.option('--lyrics', type=click.Path(exists=True), required=True, help='Path to LRC file')
+@click.argument('audio_file', type=click.Path(exists=True), required=False)
+@click.option('--artist', default=None, help='Artist name')
+@click.option('--title', default=None, help='Song title')
+@click.option('--year', type=int, default=None, help='Release year')
+@click.option('--genre', default=None, help='Song genre')
+@click.option('--lyrics', type=click.Path(exists=True), default=None, help='Path to LRC file')
 @click.option('--output-dir', default='./output', type=click.Path(), help='Output directory')
 @click.option('--skip-separation', is_flag=True, help='Skip Demucs separation and use existing stems')
 @click.option('--skip-tempo-detection', is_flag=True, help='Skip beat tracking and use cached tempo map')
@@ -41,8 +41,28 @@ def _generate_ps4_pkg_id(artist: str, title: str, custom_id: str | None = None) 
 @click.option('--build-pkg', is_flag=True, help='Build PS4 PKG installer from the generated CON')
 @click.option('--build-clone-hero', is_flag=True, help='Also export a Clone Hero-format song folder (song.ini + notes.mid + song.ogg + album.png) under <output-dir>/clone_hero/ for computer-based playtest/preview without a PS4')
 @click.option('--generate-freestyle-vocals', is_flag=True, help='Enable Rock Band 4 freestyle-vocals guide lines (Hard/Expert) by setting HasFreestyleVocals in the PS4 songdta')
+@click.option('--freestyle-drums', is_flag=True, help='Create drum freestyle mode: drum track gets only one placeholder note at the start, allowing free drum play throughout the song')
+@click.option('--package-con-dir', type=click.Path(exists=True, file_okay=False, dir_okay=True), default=None, help='Package all .con files in this directory into a single PS4 PKG installer (batch packaging mode)')
 @click.option('--ps4-pkg-id', type=str, default=None, help='Optional 16-char PS4 Content ID for the PKG (auto-generated from artist+title if omitted)')
-def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, build_clone_hero, generate_freestyle_vocals, ps4_pkg_id):
+def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, build_clone_hero, generate_freestyle_vocals, freestyle_drums, package_con_dir, ps4_pkg_id):
+    # Batch packaging mode: package all .con files in a directory into a single PS4 PKG
+    if package_con_dir:
+        click.echo(f"Batch packaging mode: packaging all .con files in {package_con_dir}")
+        from autorb.export.con_packer import build_ps4_pkg_from_con_dir
+        pkg_path = build_ps4_pkg_from_con_dir(package_con_dir, ps4_pkg_id)
+        click.echo(f"PS4 PKG installer successfully built: {pkg_path}")
+        return
+
+    # Pipeline mode requires the core inputs
+    missing = [name for name, val in (
+        ("AUDIO_FILE", audio_file), ("--artist", artist), ("--title", title),
+        ("--year", year), ("--genre", genre), ("--lyrics", lyrics),
+    ) if val is None]
+    if missing:
+        click.echo(f"Error: missing required argument(s) for pipeline mode: {', '.join(missing)}", err=True)
+        click.echo("Either supply the audio/metadata arguments, or use --package-con-dir for batch PS4 packaging.", err=True)
+        return
+
     click.echo(f"Starting AutoRB Pipeline for: {artist} - {title}")
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -149,6 +169,66 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         click.echo(f"Error during step 4 synchronization: {e}", err=True)
         return
 
+    # Transcribe instruments (guitar, bass, drums) for full-band charts
+    click.echo("\n[4b/5] Transcribing instrument tracks (guitar, bass, drums)...")
+    from autorb.transcribe.instruments import (
+        transcribe_guitar,
+        transcribe_bass,
+        transcribe_drums,
+        transcribe_keys,
+    )
+    from autorb.transcribe.instruments.difficulty import create_all_difficulties
+
+    # tempo.py returns numpy arrays; coerce to plain lists so the transcription
+    # helpers (and the song_end check above) don't hit ambiguous numpy truthiness.
+    beat_times = list(beat_times) if beat_times is not None else []
+    dynamic_bpms = list(dynamic_bpms) if dynamic_bpms is not None else []
+
+    # Song end time for BRE/solo detection. beat_times is a numpy array
+    # (tempo.py returns np.array), so test length, not truthiness.
+    if 'song_length_ms' in locals() and song_length_ms:
+        song_end = song_length_ms / 1000.0
+    elif beat_times is not None and len(beat_times) > 0:
+        song_end = float(beat_times[-1])
+    else:
+        song_end = 300.0
+    
+    click.echo("  Transcribing guitar (from 'other' stem)...")
+    try:
+        guitar_expert = transcribe_guitar(stems["other"], list(zip(beat_times, dynamic_bpms)), song_end)
+        guitar_charts = create_all_difficulties(guitar_expert, "guitar")
+        click.echo("  Guitar transcription complete.")
+    except Exception as e:
+        click.echo(f"  Warning: guitar transcription failed: {e}", err=True)
+        guitar_charts = None
+    
+    click.echo("  Transcribing bass...")
+    try:
+        bass_expert = transcribe_bass(stems["bass"], list(zip(beat_times, dynamic_bpms)), song_end)
+        bass_charts = create_all_difficulties(bass_expert, "bass")
+        click.echo("  Bass transcription complete.")
+    except Exception as e:
+        click.echo(f"  Warning: bass transcription failed: {e}", err=True)
+        bass_charts = None
+    
+    click.echo("  Transcribing drums...")
+    try:
+        drum_expert = transcribe_drums(stems["drums"], list(zip(beat_times, dynamic_bpms)), song_end)
+        drum_charts = create_all_difficulties(drum_expert, "drums")
+        click.echo("  Drum transcription complete.")
+    except Exception as e:
+        click.echo(f"  Warning: drum transcription failed: {e}", err=True)
+        drum_charts = None
+
+    click.echo("  Transcribing keys (from 'other' stem)...")
+    try:
+        keys_expert = transcribe_keys(stems["other"], list(zip(beat_times, dynamic_bpms)), song_end)
+        keys_charts = create_all_difficulties(keys_expert, "keys")
+        click.echo("  Keys transcription complete.")
+    except Exception as e:
+        click.echo(f"  Warning: keys transcription failed: {e}", err=True)
+        keys_charts = None
+
     click.echo("\n[5/5] Building assets and packaging Xbox 360 CON file...")
     from autorb.export.midi_generator import generate_vocal_midi
     from autorb.export.dta_writer import generate_songs_dta
@@ -188,6 +268,11 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             dynamic_bpms=list(dynamic_bpms),
             count_in_ticks=count_in_ticks,
             count_in_ms=count_in_ms,
+            guitar_charts=guitar_charts,
+            bass_charts=bass_charts,
+            drum_charts=drum_charts,
+            keys_charts=keys_charts,
+            freestyle_drums=freestyle_drums,
         )
 
         # 3. Generate songs.dta configuration metadata
@@ -248,6 +333,11 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             dynamic_bpms=list(dynamic_bpms),
             count_in_ticks=0,
             count_in_ms=0,
+            guitar_charts=guitar_charts,
+            bass_charts=bass_charts,
+            drum_charts=drum_charts,
+            keys_charts=keys_charts,
+            freestyle_drums=freestyle_drums,
         )
         from autorb.export.alignment_report import build_lyrics_srt, build_alignment_report
         build_lyrics_srt(synced_output_json, out_path / "lyrics_preview.srt")
@@ -278,6 +368,11 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
                 avg_bpm=avg_bpm,
                 preview_start_ms=50000,
                 album_art=out_path / "album_art_preview.png" if album_art is None else album_art,
+                guitar_charts=guitar_charts,
+                bass_charts=bass_charts,
+                drum_charts=drum_charts,
+                keys_charts=keys_charts,
+                freestyle_drums=freestyle_drums,
             )
             click.echo(f"Clone Hero song exported: {ch_folder}")
             click.echo("Load it in Clone Hero (Songs folder -> Scan Songs) to playtest "
