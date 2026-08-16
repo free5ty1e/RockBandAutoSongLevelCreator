@@ -447,8 +447,11 @@ def test_midi_to_chart_file_roundtrip(tmp_path: Path):
     assert int(lyric_events[0].split("=")[0]) == first_lyric
 
 
-def _make_drum_mid(path: Path, rb_pitches=(36, 38, 46)):
-    """Minimal .mid with PART DRUMS at Rock Band pitches (35-59)."""
+def _make_drum_mid(path: Path, rb_pitches=(96, 97, 98)):
+    """Minimal .mid with PART DRUMS at difficulty-offset pitches — the scheme the
+    CON `.mid` now writes (Easy 60 / Medium 72 / Hard 84 / Expert 96 + lane 0-4).
+    The three notes here are Expert: kick=96 (lane 0), snare=97 (lane 1),
+    open-hat=98 (lane 2)."""
     mf = mido.MidiFile(ticks_per_beat=480)
     tt = mido.MidiTrack(); tt.name = "notes"
     tt.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(120)))
@@ -464,8 +467,10 @@ def _make_drum_mid(path: Path, rb_pitches=(36, 38, 46)):
 
 def test_remap_drums_for_clone_hero_uses_ch_offset_format(tmp_path: Path):
     """Clone Hero's .mid drums must be difficulty-offset (Easy 60 / Medium 72 /
-    Hard 84 / Expert 96 + lane 0-4), not Rock Band's fixed 35-59 notes — otherwise
-    CH reports 'no players were loaded'. Each RB hit becomes one note per difficulty."""
+    Hard 84 / Expert 96 + lane 0-4). The CON `PART DRUMS` is already in this scheme
+    (ForgeTool/PKG requires it), and `remap_drums_for_clone_hero` re-emits every hit
+    into all four difficulties so Clone Hero loads a drums player. Each input hit
+    becomes one note per difficulty."""
     mid = tmp_path / "d.mid"
     _make_drum_mid(mid)
     remap_drums_for_clone_hero(mid)
@@ -482,7 +487,7 @@ def test_remap_drums_for_clone_hero_uses_ch_offset_format(tmp_path: Path):
 
 def test_chart_drums_use_lanes_not_midi_pitches(tmp_path: Path):
     """The .chart [ExpertDrums] section must use Clone Hero lanes 0-4 (sustain 0),
-    never the raw RB MIDI pitches, or CH rejects the drum chart."""
+    never raw pitches, or CH rejects the drum chart."""
     mid = tmp_path / "d2.mid"
     _make_drum_mid(mid)
     remap_drums_for_clone_hero(mid)

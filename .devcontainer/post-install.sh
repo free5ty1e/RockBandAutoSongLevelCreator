@@ -6,7 +6,17 @@ sudo apt-get update
 sudo apt-get install -y patchelf
 
 echo "Installing Python dependencies..."
-pip install -r requirements.txt
+# requirements.txt lists crepe + madmom, but both fail to BUILD on Python 3.11
+# (setuptools>=81 dropped pkg_resources; madmom 0.16.1 also uses removed numpy
+# Py2 aliases). They are optional backends: the pipeline falls back to librosa
+# onsets and basic-pitch/pyin pitch when they are absent. Install the bulk first
+# (tolerant of those two failing), then install crepe explicitly with the
+# setuptools workaround so the devcontainer actually gets the better pitch backend.
+pip install -r requirements.txt || echo "WARN: requirements.txt had build failures (continuing; crepe/madmom installed below if possible)"
+
+echo "Installing crepe (pitch detection for guitar/bass/keys) — needs setuptools<81 to build on Py3.11..."
+pip install "setuptools<81" && pip install --no-build-isolation crepe && pip install --upgrade setuptools \
+    || echo "WARN: crepe install failed — pipeline will fall back to librosa pyin / basic-pitch"
 
 echo "Patching ctranslate2 to fix execstack crash..."
 CT2_LIB=$(find ~/.local/lib /usr/local/lib /opt /usr/lib -type f -name "libctranslate2-*.so*" 2>/dev/null | head -n 1)

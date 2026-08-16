@@ -319,6 +319,68 @@ def detect_bre_section(
     return None
 
 
+def detect_string_pitches(
+    stem_path: Path,
+    sr: int = 44100,
+    min_strength: float = 0.15,
+    conf_thresh: float = 0.5,
+) -> list:
+    """
+    Shared onset + pitch detection for the 'other' (guitar + keys) stem.
+
+    Demucs cannot separate guitar from keys, so the two Rock Band parts must be
+    derived from the SAME (time, pitch) onsets or they will diverge (different
+    note counts / rhythms). Both ``transcribe_guitar`` and ``transcribe_keys``
+    call this so the parts stay consistent.
+
+    Returns a list of dicts: {time, pitch_hz, midi_note, confidence, strength}.
+    """
+    onset_result = detect_onsets_librosa(stem_path, sr=sr)
+    onset_result = merge_nearby_onsets(onset_result, min_interval=0.03)
+    onset_result = filter_onsets_by_strength(onset_result, min_strength=min_strength)
+
+    times = onset_result.times
+    # CREPE pitch at each onset (fall back to librosa pyin).
+    pitches = []
+    try:
+        if not CREPE_AVAILABLE:
+            raise ImportError("crepe not available")
+        import crepe
+        y, _ = librosa.load(stem_path, sr=sr, mono=True)
+        y16 = librosa.resample(y, orig_sr=sr, target_sr=16000)
+        tc, freq, conf, _ = crepe.predict(
+            y16, 16000, model_capacity='full', viterbi=True, step_size=10
+        )
+        for t in times:
+            idx = int(np.argmin(np.abs(tc - t)))
+            pitches.append((float(freq[idx]), float(conf[idx])))
+    except Exception:
+        y, _ = librosa.load(stem_path, sr=sr, mono=True)
+        f0, vf, vp = librosa.pyin(
+            y, fmin=65.0, fmax=1200.0, sr=sr, frame_length=2048, hop_length=512
+        )
+        ptimes = librosa.times_like(f0, sr=sr, hop_length=512)
+        for t in times:
+            idx = int(np.argmin(np.abs(ptimes - t)))
+            f = f0[idx] if (vf[idx] and f0[idx] and f0[idx] > 0) else 0.0
+            c = float(vp[idx]) if vf[idx] else 0.0
+            pitches.append((float(f), c))
+
+    out = []
+    for i, t in enumerate(times):
+        f, c = pitches[i]
+        midi = int(round(69 + 12 * np.log2(f / 440.0))) if f > 0 else 0
+        out.append({
+            'time': float(t),
+            'pitch_hz': float(f),
+            'midi_note': midi,
+            'confidence': c,
+            'strength': float(onset_result.strengths[i]),
+        })
+    out = [o for o in out if o['confidence'] > conf_thresh and o['pitch_hz'] > 0]
+    return out
+
+
 def transcribe_guitar(
     stem_path: Path,
     tempo_map: list,
@@ -337,46 +399,41 @@ def transcribe_guitar(
     Returns:
         InstrumentChart with Expert difficulty (other difficulties generated separately)
     """
-    # 1. Onset detection
-    onset_result = detect_onsets_librosa(stem_path, sr=sr)
-    onset_result = merge_nearby_onsets(onset_result, min_interval=0.03)
-    onset_result = filter_onsets_by_strength(onset_result, min_strength=0.15)
-    
-    # 2. Pitch detection (try CREPE first, fallback to pyin)
-    try:
-        onsets_with_pitch = detect_guitar_pitch_crepe(stem_path, onset_result.times, sr=sr)
-    except Exception:
-        onsets_with_pitch = detect_guitar_pitch_pyin(stem_path, onset_result.times, sr=sr)
-    
-    # Add strengths from onset detection
-    for i, onset in enumerate(onsets_with_pitch):
-        onset.strength = onset_result.strengths[i]
-    
-    # Filter out low-confidence pitches
-    onsets_with_pitch = [o for o in onsets_with_pitch if o.confidence > 0.5 and o.pitch_hz > 0]
-    
+    # 1-2. Shared onset + pitch detection (guitar and keys use the same list so
+    # the two parts stay consistent — Demucs cannot separate them).
+    onsets = detect_string_pitches(stem_path, sr=sr, min_strength=0.15, conf_thresh=0.5)
+
     # 3. Detect tuning from pitch distribution
-    pitches = np.array([o.pitch_hz for o in onsets_with_pitch])
+    pitches = np.array([o['pitch_hz'] for o in onsets])
     tuning = detect_tuning_from_pitches(pitches, 'guitar')
     capo = detect_capo(pitches, tuning)
-    
+    # Guard against a bogus capo (e.g. from a skewed pitch distribution) that
+    # would shift every note out of the playable fret range. Real capos are
+    # 0-12; clamp so downstream fret mapping never receives an impossible pitch.
+    capo = max(0, min(12, int(round(capo))))
+
     # Adjust pitches for capo
     if capo > 0:
-        for o in onsets_with_pitch:
-            o.pitch_hz *= 2 ** (capo / 12)
-    
-    # 4. Detect chords
+        for o in onsets:
+            o['pitch_hz'] *= 2 ** (capo / 12)
+
+    # 4. Detect chords (rebuild GuitarOnset objects for the existing helpers)
+    onsets_with_pitch = [
+        GuitarOnset(time=o['time'], pitch_hz=o['pitch_hz'],
+                    confidence=o['confidence'], strength=o['strength'])
+        for o in onsets
+    ]
     onsets_with_pitch = detect_chords(onsets_with_pitch)
-    
+
     # 5. Detect holds
     onsets_with_pitch = detect_holds(onsets_with_pitch, stem_path, sr=sr)
-    
+
     # 6. Detect solo sections
     solos = detect_solo_sections(onsets_with_pitch, tempo_map)
-    
+
     # 7. Detect BRE
     bre = detect_bre_section(onsets_with_pitch, tempo_map, song_end)
-    
+
     # 8. Build lane map (pitches → 5 lanes)
     onset_pitches = [(o.time, o.pitch_hz) for o in onsets_with_pitch]
     lane_notes = build_lane_map(onset_pitches, tuning, 'expert')

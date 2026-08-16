@@ -20,7 +20,7 @@ from .onset_detection import (
     OnsetResult,
 )
 from .drum_classifier import (
-    classify_onsets_batch,
+    classify_drum_onsets_energy,
     detect_hihat_state_changes,
     detect_fills,
     DrumElement,
@@ -52,6 +52,7 @@ def transcribe_drums(
         InstrumentChart with Expert difficulty
     """
     # 1. Onset detection (try madmom for drums, fallback to librosa)
+    y, _ = librosa.load(stem_path, sr=sr, mono=True)
     try:
         onset_result = detect_onsets_madmom(stem_path)
         onset_result = merge_nearby_onsets(onset_result, min_interval=0.02)  # Drums can be faster
@@ -60,31 +61,32 @@ def transcribe_drums(
         onset_result = detect_onsets_librosa(stem_path, sr=sr)
         onset_result = merge_nearby_onsets(onset_result, min_interval=0.02)
         onset_result = filter_onsets_by_strength(onset_result, min_strength=0.08)
-    
-    # 2. Classify each onset into drum element
-    drum_elements = classify_onsets_batch(
-        str(stem_path),
-        onset_result.times,
-        sr=sr,
-        window_ms=80,  # Shorter window for drums
-    )
+
+    # Augment full-signal onsets with high-band onsets so quiet hi-hats /
+    # cymbals (often attenuated by stem separation) are not missed.
+    hat_t = _band_onsets(y, sr, 7000, 14000, delta=0.12, wait=3)
+    cym_t = _band_onsets(y, sr, 3000, 9000, delta=0.12, wait=4)
+    times = np.asarray(_merge_times([onset_result.times, hat_t, cym_t], tol=0.025), dtype=float)
+
+    # 2. Classify each onset into a drum element by band-energy ratios.
+    drum_elements = classify_drum_onsets_energy(y, sr, times, window_ms=60)
     
     # 3. Detect hi-hat open/closed transitions
-    hihat_transitions = detect_hihat_state_changes(drum_elements, onset_result.times)
+    hihat_transitions = detect_hihat_state_changes(drum_elements, times)
     
     # 4. Detect fills (source of overdrive phrases)
-    fills = detect_fills(drum_elements, onset_result.times, min_hits=3, window_ms=500)
+    fills = detect_fills(drum_elements, times, min_hits=3, window_ms=500)
     
     # 5. Detect solo sections
-    solos = detect_drum_solos(drum_elements, onset_result.times, tempo_map)
+    solos = detect_drum_solos(drum_elements, times, tempo_map)
     
     # 6. Detect BRE
-    bre = detect_drum_bre(drum_elements, onset_result.times, song_end)
+    bre = detect_drum_bre(drum_elements, times, song_end)
     
     # 7. Build Expert chart notes
     expert_notes = build_drum_notes(
         drum_elements,
-        onset_result.times,
+        times,
         hihat_transitions,
         fills,
         tempo_map,
@@ -107,6 +109,45 @@ def transcribe_drums(
     )
     
     return expert_chart
+
+
+def _band_onsets(
+    y: np.ndarray,
+    sr: int,
+    fmin: float,
+    fmax: float,
+    delta: float = 0.07,
+    wait: int = 4,
+) -> np.ndarray:
+    """Detect onsets in a band-passed version of the signal (per-element)."""
+    from scipy.signal import butter, sosfiltfilt
+    nyq = sr / 2.0
+    lo = max(fmin / nyq, 1e-3)
+    hi = min(fmax / nyq, 0.99)
+    if hi <= lo:
+        hi = min(lo * 1.5, 0.99)
+    sos = butter(4, [lo, hi], btype='band', output='sos')
+    yb = sosfiltfilt(sos, y)
+    env = librosa.onset.onset_strength(
+        y=yb, sr=sr, hop_length=512, aggregate=np.median, n_mels=64, fmax=fmax
+    )
+    frames = librosa.onset.onset_detect(
+        onset_envelope=env, sr=sr, hop_length=512,
+        delta=delta, wait=wait, backtrack=True,
+    )
+    return librosa.frames_to_time(frames, sr=sr, hop_length=512)
+
+
+def _merge_times(lists, tol: float = 0.025):
+    """Merge several onset-time lists, averaging any within `tol` seconds."""
+    all_t = sorted(float(t) for lst in lists for t in lst)
+    merged = []
+    for t in all_t:
+        if merged and t - merged[-1] <= tol:
+            merged[-1] = (merged[-1] + t) / 2.0
+        else:
+            merged.append(t)
+    return merged
 
 
 def detect_drum_solos(

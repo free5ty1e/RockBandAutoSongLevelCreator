@@ -34,6 +34,7 @@ from .difficulty import (
     Difficulty,
     create_all_difficulties,
 )
+from .guitar import detect_string_pitches
 
 
 # Rock Band Keys lane: 2-octave piano roll starting at C2 (MIDI 36)
@@ -146,33 +147,19 @@ def transcribe_keys(
     Returns:
         InstrumentChart with Expert difficulty
     """
-    # 1. Onset detection
-    onset_result = detect_onsets_librosa(stem_path, sr=sr)
-    onset_result = merge_nearby_onsets(onset_result, min_interval=0.03)
-    onset_result = filter_onsets_by_strength(onset_result, min_strength=0.15)
-    
-    # 2. Pitch detection
-    try:
-        onsets_with_pitch = detect_keys_pitch_crepe(stem_path, onset_result.times, sr=sr)
-    except Exception:
-        onsets_with_pitch = detect_keys_pitch_pyin(stem_path, onset_result.times, sr=sr)
-    
-    # Add strengths
-    for i, onset in enumerate(onsets_with_pitch):
-        onset['strength'] = onset_result.strengths[i]
-    
-    # Filter
-    onsets_with_pitch = [o for o in onsets_with_pitch if o['confidence'] > 0.5 and o['pitch_hz'] > 0]
-    
-    # 3. Build lane map (pitches -> keys lanes)
+    # 1-2. Reuse the SAME onset + pitch detection as guitar. Demucs cannot
+    # separate guitar from keys, so the two parts must share one (time, pitch)
+    # list — otherwise the guitar and keys charts diverge (different note
+    # counts / rhythms for what is literally the same audio).
+    onsets = detect_string_pitches(stem_path, sr=sr, min_strength=0.15, conf_thresh=0.5)
+
+    # 3. Build lane map (pitches -> keys piano-roll lanes, C2..C4)
     expert_notes = []
-    for onset in onsets_with_pitch:
-        midi_note = hz_to_midi_note(onset['pitch_hz'])
+    for onset in onsets:
+        midi_note = onset['midi_note']
         if midi_note < KEYS_BASE_PITCH or midi_note > KEYS_BASE_PITCH + KEYS_NUM_KEYS - 1:
-            continue  # Outside keys range
-        
+            continue  # Outside the 2-octave keys range
         lane = midi_to_keys_lane(midi_note)
-        
         note = ChartNote(
             time=onset['time'],
             lane=lane,

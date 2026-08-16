@@ -229,11 +229,14 @@ def build_instrument_track(
     """
     Build a Rock Band instrument track (GUITAR, BASS, DRUMS, KEYS) containing all 4 difficulties.
     
-    Rock Band stores all difficulties in a single track, distinguished by pitch ranges:
-    - Expert: base 60 (guitar/bass) / fixed drum pitches / keys actual MIDI pitch
-    - Hard: base 72
-    - Medium: base 84
-    - Easy: base 96
+    Rock Band (ForgeTool) stores all difficulties in a single track, distinguished by
+    pitch ranges (a packed MIDI where every instrument uses the same scheme):
+    - Expert: base 96
+    - Hard: base 84
+    - Medium: base 72
+    - Easy: base 60
+    Each note's pitch is ``base + lane`` (lane 0-4); the raw 35-59 drum sound pitches and
+    the true key pitches are NOT valid here (they crash ForgeTool's MIDI converter).
     
     Args:
         charts: Dict mapping difficulty -> InstrumentChart
@@ -248,12 +251,13 @@ def build_instrument_track(
     if not charts or all(v is None for v in charts.values()):
         return build_placeholder_track(f"PART {instrument.upper()}", start_tick=count_in_ticks)
     
-    # Lane base pitches per difficulty
+    # Lane base pitches per difficulty (Rock Band / ForgeTool packed-MIDI convention:
+    # Easy 60-64 / Medium 72-76 / Hard 84-88 / Expert 96-100, lane = pitch - base).
     LANE_BASE = {
-        'expert': 60,
-        'hard': 72,
-        'medium': 84,
-        'easy': 96,
+        'expert': 96,
+        'hard': 84,
+        'medium': 72,
+        'easy': 60,
     }
     OPEN_PITCH = 67  # G4
     
@@ -301,12 +305,19 @@ def build_instrument_track(
             target_start = time_to_tick(note.time) + count_in_ticks
             target_end = target_start + int(note.length * 480 * 120 / 60) if note.length > 0 else target_start + 120
             
-            # Determine MIDI pitch for this note
-            if instrument == 'drums':
-                pitch = note.difficulty_pitch
-            elif instrument == 'keys':
-                # Keys use actual MIDI pitch (2-octave piano roll C2=36 to C4=60)
-                pitch = note.difficulty_pitch
+            # Determine MIDI pitch for this note.
+            # ForgeTool (LibForge) requires difficulty-offset pitches for EVERY
+            # instrument: Easy 60 / Medium 72 / Hard 84 / Expert 96, lane = key - base
+            # (0-4). Raw 35-59 drum sound pitches and true key pitches are NOT accepted
+            # by HandleDrumTrk/HandleGuitarBass (they hit the "Unhandled midi note"
+            # branch, leaving the difficulty gem-track null and crashing GemTracks.Add
+            # with a NullReferenceException). So drums and keys are lane-encoded exactly
+            # like guitar/bass.
+            if instrument in ('drums', 'keys'):
+                lane = note.lane if note.lane is not None else 0
+                if lane < 0 or lane > 4:
+                    lane = 0
+                pitch = base + lane
             elif note.is_open:
                 pitch = OPEN_PITCH
             else:
@@ -421,7 +432,7 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
         with open(json_path, "r", encoding="utf-8") as f:
             track_data = json.load(f)
 
-    header = b"MThd" + struct.pack(">IHHH", 6, 1, 7, 480)
+    header = b"MThd" + struct.pack(">IHHH", 6, 1, 8, 480)
 
     ticks_per_beat = 480
     beats_per_measure = 4
@@ -667,14 +678,18 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
         beat_events.extend(b"\x80" + bytes([pitch, 0]))
     t6 = build_track("BEAT", bytes(beat_events))
 
+    all_tracks = [t0, *instrument_tracks, t_vocals, t5, t6]
+    # The MThd track-count must match the number of chunks actually written.
+    # If it is too low, strict parsers (e.g. ForgeTool's MidiCS) read one track
+    # fewer and silently drop the final (BEAT) track, which then crashes PKG
+    # conversion with "Sequence contains no elements" (no BEAT track found).
+    # Compute it from the real track list so it can never drift out of sync.
+    header = b"MThd" + struct.pack(">IHHH", 6, 1, len(all_tracks), 480)
+
     with open(midi_path, "wb") as f:
         f.write(header)
-        f.write(t0)
-        for track_bytes in instrument_tracks:
+        for track_bytes in all_tracks:
             f.write(track_bytes)
-        f.write(t_vocals)
-        f.write(t5)
-        f.write(t6)
 
     logger.info(f"Generated complete vocal MIDI chart at {midi_path}")
     return midi_path

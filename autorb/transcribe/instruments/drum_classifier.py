@@ -43,6 +43,78 @@ PRO_DRUM_LANES = {
 }
 
 
+def _band_rms(y: np.ndarray, sr: int, fmin: float, fmax: float) -> float:
+    """RMS energy of the signal band-passed to [fmin, fmax] Hz."""
+    from scipy.signal import butter, sosfiltfilt
+    nyq = sr / 2.0
+    lo = max(fmin / nyq, 1e-3)
+    hi = min(fmax / nyq, 0.99)
+    if hi <= lo:
+        hi = min(lo * 1.5, 0.99)
+    sos = butter(4, [lo, hi], btype='band', output='sos')
+    yb = sosfiltfilt(sos, y)
+    return float(np.sqrt(np.mean(yb ** 2)))
+
+
+def classify_drum_onsets_energy(
+    y: np.ndarray,
+    sr: int,
+    times: np.ndarray,
+    window_ms: int = 60,
+) -> list:
+    """
+    Classify onsets by per-band RMS energy ratios measured at each onset time.
+
+    Band energy is computed on a band-passed signal so low/mid/high content is
+    isolated *before* the decision. This avoids the old spectral-score heuristic,
+    whose normalization excluded the low-mid/sub bands and inflated the kick and
+    tom scores so almost every hit collapsed to kick or tom regardless of the
+    actual audio.
+    """
+    half = int(sr * window_ms / 1000 / 2)
+    results = []
+    for t in times:
+        i = int(t * sr)
+        start = max(0, i - half)
+        end = min(len(y), i + half)
+        seg = y[start:end]
+        if len(seg) < int(sr * 0.005):
+            results.append(DrumElement('unknown', 0.0, 0, 0))
+            continue
+        ek = _band_rms(seg, sr, 30, 110)
+        em = _band_rms(seg, sr, 110, 350)
+        eh = _band_rms(seg, sr, 7000, 14000)
+        ec = _band_rms(seg, sr, 3000, 9000)
+        ehf = _band_rms(seg, sr, 2000, 14000)
+        tot = ek + em + eh + ec + 1e-9
+        elem, lane, pitch, conf = 'unknown', 0, 36, 0.0
+        if max(eh, ec) > 0.2 * tot:
+            if eh >= ec * 0.6:
+                elem, lane, pitch = 'hihat', 2, 42
+            else:
+                # Cymbal-band hit: a drummer keeps time on the RIDE (lane 3),
+                # reserving the CRASH (lane 4) for loud accents. Default to ride
+                # and only call it a crash when the high-freq content dominates.
+                if (eh + ec) > 0.6 * tot:
+                    elem, lane, pitch = 'crash', 4, 49
+                else:
+                    elem, lane, pitch = 'ride', 3, 51
+            conf = max(eh, ec) / tot
+        else:
+            if ek > em * 1.5:
+                elem, lane, pitch = 'kick', 0, 36
+                conf = ek / (ek + em + 1e-9)
+            else:
+                if ehf > 0.18 * (ek + em + 1e-9):
+                    elem, lane, pitch = 'snare', 1, 38
+                    conf = ehf / (ek + em + 1e-9)
+                else:
+                    elem, lane, pitch = 'tom1', 2, 48
+                    conf = em / (ek + em + 1e-9)
+        results.append(DrumElement(elem, float(min(conf, 1.0)), lane, pitch))
+    return results
+
+
 def extract_spectral_features(y: np.ndarray, sr: int) -> dict:
     """Extract spectral features for drum classification."""
     # STFT
@@ -234,40 +306,57 @@ def detect_hihat_state_changes(
 def detect_fills(
     elements: list[DrumElement],
     onset_times: np.ndarray,
-    min_hits: int = 3,
+    min_hits: int = 4,
     window_ms: float = 500,
+    density_multiplier: float = 1.3,
 ) -> list[dict]:
     """
-    Detect drum fills: rapid multi-lane hits.
-    
+    Detect drum fills: rapid, multi-lane bursts that stand out from the groove.
+
+    A steady groove (kick + snare + hat at a fixed rate) also packs several
+    hits into a 500 ms window, so a naive ">= N hits in a window" rule fired on
+    every bar and produced ~188 false fills (each becoming an overdrive phrase)
+    on a 5-minute song. Instead the threshold is the song's own groove baseline
+    (median hits-per-window, computed adaptively below) scaled up, and a fill
+    must additionally span >= 2 distinct lanes — a real burst/roll, not a lone
+    repeated hit.
+
     Returns list of {start_time, end_time, lanes_involved, hit_count}.
     """
     if len(elements) < min_hits:
         return []
-    
+
+    times = np.asarray(onset_times, dtype=float)
+
+    # Groove baseline: median number of hits landing within window_ms of a hit.
+    baseline_counts = []
+    for i in range(len(elements)):
+        j = i
+        while j < len(elements) and (times[j] - times[i]) * 1000 <= window_ms:
+            j += 1
+        baseline_counts.append(j - i)
+    baseline = float(np.median(baseline_counts)) if baseline_counts else 0.0
+    threshold = max(min_hits, int(round(baseline * density_multiplier)) + 1)
+
     fills = []
     i = 0
     while i < len(elements):
-        # Look for cluster of hits within window
-        cluster_start = i
-        cluster_lanes = {elements[i].lane}
-        cluster_count = 1
-        
-        j = i + 1
-        while j < len(elements) and (onset_times[j] - onset_times[i]) * 1000 <= window_ms:
-            cluster_lanes.add(elements[j].lane)
-            cluster_count += 1
+        j = i
+        while j < len(elements) and (times[j] - times[i]) * 1000 <= window_ms:
             j += 1
-        
-        if cluster_count >= min_hits and len(cluster_lanes) >= 2:
+        cluster = elements[i:j]
+        cluster_lanes = {e.lane for e in cluster}
+        cluster_count = j - i
+
+        if cluster_count >= threshold and len(cluster_lanes) >= 2:
             fills.append({
-                'start_time': onset_times[i],
-                'end_time': onset_times[j-1],
-                'lanes': list(cluster_lanes),
+                'start_time': float(times[i]),
+                'end_time': float(times[j - 1]),
+                'lanes': sorted(cluster_lanes),
                 'hit_count': cluster_count,
             })
             i = j
         else:
             i += 1
-    
+
     return fills

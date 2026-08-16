@@ -1,15 +1,21 @@
 # AutoRB Knowledge Base - Instrument Charting
 
-How AutoRB turns separated stems into playable 5-lane instrument charts (guitar, bass, drums, keys) and how those charts are serialized to MIDI and to the Clone Hero `.chart` format. Captured at **v0.0.92** (first alpha with *real*, non-placeholder instrument charts).
+How AutoRB turns separated stems into playable 5-lane instrument charts (guitar, bass, drums, keys) and how those charts are serialized to MIDI and to the Clone Hero `.chart` format. Captured at **v0.0.92** (first alpha with *real*, non-placeholder instrument charts); drum element classification + fill detection reworked in **v0.0.94**.
 
-## Overview (v0.0.92)
+## Overview (v0.0.92, drum logic reworked in v0.0.94)
 
 Before v0.0.92, `PART GUITAR/BASS/DRUMS/KEYS` were single-note placeholders so ForgeTool's CON→PKG conversion wouldn't `NullReferenceException`. v0.0.92 replaces them with charts produced by the `autorb/transcribe/instruments/` package:
 
 - **Onset detection** (multi-band librosa; optional madmom for drums, optional CREPE for pitch)
 - **Pitch → lane mapping** (tuning/capo detection, fret→5-lane)
-- **Spectral drum-element classification** (kick/snare/hihat/tom/crash/ride)
+- **Drum-element classification** — v0.0.92 used a spectral-score heuristic (kick/snare/hihat/tom/crash/ride) whose normalization dropped the low-mid/sub bands and inflated kick/tom so almost every hit collapsed to kick or tom (the "4 toms then 4 bass drums" unplayable track). v0.0.94 replaced it with `classify_drum_onsets_energy()` (per-band RMS energy ratios measured on band-passed signals: kick 30–110 Hz, body 110–350 Hz, hat 7–14 kHz, cymbal 3–9 kHz; cymbals default to ride unless the high band dominates → crash). Verified on the Open Road Song `drums.wav` (291s): 796 notes, kick 243 / snare 95 / hi-hat 181 / ride 229 / crash 31.
 - **Progressive per-difficulty reduction** (Expert → Hard → Medium → Easy)
+
+### v0.0.94 drum fill fix
+Old `detect_fills` flagged any 3 hits in a 500 ms window with 2 lanes as a fill → ~188 false fills (each an overdrive phrase) on a 5-minute song. New version is adaptive: threshold = song's groove baseline (median hits-per-window) × 1.3, must span ≥2 distinct lanes. Same song → **7** fills (realistic). `transcribe_drums` also now merges full-signal onsets with dedicated high-band onset detection (hat 7–14 kHz, cymbal 3–9 kHz) so quiet hi-hats/cymbals attenuated by stem separation are not missed.
+
+### v0.0.95 guitar transcription crash fix
+`pitch_to_fret_string` (`pitch_to_lane.py`) returned `None` for any detected pitch outside every string's 0–22 fret range (triggered after capo detection shifted pitches, or for extreme/low transients). `build_lane_map` then dereferenced `fret_pos.fret` and raised `'NoneType' object has no attribute 'fret'`, aborting the whole instrument step. The function now never returns `None` — out-of-range pitches clamp to the nearest string's open (fret 0) or top (fret 22), and degenerate (≤0) pitches fall back to the lowest open string; the capo shift is also clamped to 0–12. Regression test: `tests/test_pitch_to_lane.py`.
 
 Keys reuses the guitar transcription because Demucs' `other` stem is guitar+keys inseparable (see `[[architecture]]`).
 
@@ -29,23 +35,21 @@ stems/{drums,bass,other}.wav
 
 ## MIDI pitch encoding (the load-bearing detail)
 
-`build_instrument_track` packs all four difficulties into **one** MIDI track per instrument. The difficulty is encoded in the **pitch**:
+`build_instrument_track` packs all four difficulties into **one** MIDI track per instrument. The difficulty is encoded in the **pitch** using the Rock Band / ForgeTool packed-MIDI convention (this is mandatory: `tools/libforge/LibForge/LibForge/Midi/RBMidConverter.cs` `HandleDrumTrk`/`HandleGuitarBass` only accept `base + lane` for **every** instrument — raw 35–59 drum sound pitches or true key pitches are rejected and leave the difficulty gem-track null, crashing PKG conversion with a `NullReferenceException`):
 
-- **Guitar / Bass** — pitch offset per difficulty (`autorb/transcribe/instruments/pitch_to_lane.py` `LANE_BASE`):
-  - Expert base **60**, Hard **72**, Medium **84**, Easy **96**.
-  - A note in lane `L` (0=Green … 4=Orange) is written at `base + L`. Open string is pitch **67** for all difficulties.
-  - ⇒ Difficulty is recoverable from pitch: `60≤p<65`→Expert, `72≤p<77`→Hard, `84≤p<89`→Medium, `96≤p<101`→Easy.
-- **Drums** — `pitch = note.difficulty_pitch` (the drum's **fixed** MIDI pitch, e.g. kick=36, snare=38, hihat=42, open-hihat=46, tom=48, crash=49, ride=51). **All difficulties share the same pitch range** (36–51) because Rock Band / Clone Hero drum lanes are pitch-addressed, not offset by difficulty.
-- **Keys** — `pitch = KEYS_BASE_PITCH + lane` where `KEYS_BASE_PITCH = 36` (C2) and lane ∈ 0..24 (2-octave piano roll C2..C4). **All difficulties share 36–60** because the actual key pitch is musically meaningful and cannot be offset per difficulty.
+- **Difficulty bases (all instruments):** Easy **60**, Medium **72**, Hard **84**, Expert **96**. A note in lane `L` (0–4) is written at `base + L`. ⇒ Recoverable from pitch: `60≤p<65`→Easy, `72≤p<77`→Medium, `84≤p<89`→Hard, `96≤p<101`→Expert.
+- **Guitar / Bass** — `pitch = base + lane`. Open string is pitch **67** for all difficulties (outside the difficulty ranges → the note is dropped by ForgeTool; open-note handling is a known limitation, not a crash).
+- **Drums** — `pitch = base + lane` where lane is the 0–4 drum pad lane (kick=0, snare=1, hat/tom=2, tom=3, cymbal=4). The raw drum sound pitches (36–51) are **NOT** written. ForgeTool's `HandleDrumTrk` only accepts `base + lane`; writing 36–51 made every difficulty gem-track null → `NullReferenceException` in `GemTracks.Add`.
+- **Keys** — `pitch = base + lane` (5-lane, reused from the guitar transcription). Keys is handled by `HandleGuitarBass` in ForgeTool, so it must use the same difficulty-offset scheme; the true piano pitch is not carried in the CON MIDI.
 
-**Consequence:** guitar/bass difficulties are recoverable from the packed MIDI; **drum and keys difficulties are NOT** — they overlap in pitch. This is a structural limitation of the single-track packing and drives the `.chart` writer behavior below.
+**Consequence:** every instrument's difficulty IS recoverable from the packed MIDI pitch (four distinct `60–100` ranges). That is what makes the CON loadable by ForgeTool and the PS4 PKG build succeed. (Historical note: earlier versions wrote drums at 35–59 and keys at 36–60 under the mistaken belief that "RB keeps real pitches"; that assumption was wrong for ForgeTool and broke PKG conversion — see v0.0.96.)
 
 ## Clone Hero `.chart` writer (`autorb/export/clone_hero.py :: midi_to_chart_file`)
 
 The RB3 MIDI packs 4 difficulties per track; the `.chart` format wants one `[<Difficulty><Instrument>]` section per difficulty. The writer must map packed-MIDI pitches back to (difficulty, lane):
 
 - **Guitar / Bass** — split by pitch base (above). Each note goes to its own difficulty section; lane = `pitch - base`. This is the **correct** path and shows the reduced note counts per difficulty.
-- **Drums / Keys** — since difficulty is not recoverable from pitch, every note is emitted into **all four** difficulty sections. The Clone Hero **`.chart`** splits drums by the CH drum base (Easy 60 / Medium 72 / Hard 84 / Expert 96; inverted vs guitar), lane = `pitch − base`; the underlying RB drum note (35–59) → CH lane 0–4 mapping is `_rb_drum_pitch_to_ch_lane` (`0=kick, 1=red(snare), 2=yellow(hat), 3=blue(tom), 4=green(cymbal)`). The Clone Hero **`.mid`** is rewritten by `remap_drums_for_clone_hero` from RB pitches (35–59) into the same difficulty-offset scheme (60/72/84/96 + lane) — see `[[charting_basics]]`. **Keys writes its true pitch and is ignored by CH** (Clone Hero has no keyboard instrument). So `notes.chart`/`notes.mid` show identical drum/keys counts in Expert/Hard/Medium/Easy (faithful to the packed MIDI, not a true per-difficulty reduction).
+- **Drums / Keys** — the CON `PART DRUMS` is already in the difficulty-offset scheme (Easy 60 / Medium 72 / Hard 84 / Expert 96 + lane 0–4), so the writer splits by that base, lane = `pitch − base`. `remap_drums_for_clone_hero` then re-emits every hit into **all four** Clone Hero difficulty sections (CH needs each hit present in every difficulty to build a drums player); the lane→pad mapping is `_rb_drum_pitch_to_ch_lane` (`0=kick, 1=red(snare), 2=yellow(hat), 3=blue(tom), 4=green(cymbal)`). **Keys is ignored by CH** (Clone Hero has no keyboard instrument) so its notes are copied through harmlessly. Hence `notes.chart`/`notes.mid` show identical drum/keys counts in Expert/Hard/Medium/Easy (faithful to the packed MIDI, not a true per-difficulty reduction).
 
 ### v0.0.92 bugs fixed in the writer
 1. **Keys omitted entirely** — only `PART GUITAR/BASS/DRUMS` were handled. Added `PART KEYS` → `[ExpertKeys]…[EasyKeys]` sections.

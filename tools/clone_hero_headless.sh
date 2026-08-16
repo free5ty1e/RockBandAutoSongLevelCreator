@@ -89,15 +89,13 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# --at <seconds> = target time in the song to capture. Clone Hero needs a few
-# seconds to boot under box64, so we never wait less than a boot grace period.
+# --at <seconds> = target time in the SONG to capture. Under box64 Clone Hero
+# spends ~BOOT_GRACE seconds booting before the song actually starts playing, so
+# a wall-clock sleep of exactly AT would capture (AT - BOOT_GRACE) seconds into
+# the song. Add the boot grace to the wait so the captured frame lands at ~AT.
 if [ -n "${AT}" ]; then
     BOOT_GRACE=15
-    if [ "${AT}" -gt "${BOOT_GRACE}" ]; then
-        WAIT="${AT}"
-    else
-        WAIT="${BOOT_GRACE}"
-    fi
+    WAIT=$((AT + BOOT_GRACE))
 fi
 
 if [ -z "${SONG}" ]; then

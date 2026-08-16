@@ -39,41 +39,34 @@ CHARTER_NAME = "AutoRB"
 #: The four .chart difficulty sections, in ascending difficulty order.
 CHART_DIFFICULTIES = ("Easy", "Medium", "Hard", "Expert")
 
-#: Clone Hero's `.mid` drums use **difficulty-offset pitches**, NOT Rock Band's
-#: fixed 35-59 notes. Each difficulty has a base; the note = base + lane
-#: (0=kick, 1=red, 2=yellow/hat, 3=blue/tom, 4=green/cymbal). The bases are
-#: *inverted* vs guitar/bass (Easy 60 … Expert 96). Rock Band (the CON `.mid`)
-#: keeps the real 35-59 drum notes — that is correct for RB and must NOT be
-#: lane-remapped. Only the Clone Hero export's `.mid` is rewritten to this scheme
-#: (see `remap_drums_for_clone_hero`).
+#: Clone Hero's `.mid` drums use **difficulty-offset pitches** (Easy 60 / Medium 72
+#: / Hard 84 / Expert 96 + lane 0-4), the same packed scheme AutoRB now writes for
+#: the CON `.mid`. The CON's `PART DRUMS` is therefore already in this form, so the
+#: remap below just recovers the lane (`pitch - base`) and re-emits each hit into
+#: every CH difficulty.
 CH_DRUM_MID_BASES = {"Easy": 60, "Medium": 72, "Hard": 84, "Expert": 96}
 
 
 def _rb_drum_pitch_to_ch_lane(midi_note: int) -> int:
-    """Map a Rock Band drum MIDI note (35-59) to a Clone Hero `.mid` drum lane (0-4):
-    0=kick, 1=red, 2=yellow(hat), 3=blue(tom), 4=green(cymbal)."""
+    """Recover the 0-4 drum lane from a difficulty-offset pitch (Easy 60 / Medium 72
+    / Hard 84 / Expert 96 + lane). 0=kick, 1=red, 2=yellow(hat), 3=blue(tom),
+    4=green(cymbal)."""
     m = int(round(midi_note))
-    if m in (35, 36):
-        return 0
-    if m in (37, 38, 39, 40):
-        return 1
-    if m in (42, 44, 46):
-        return 2
-    if m in (41, 43, 45, 47, 48, 50):
-        return 3
-    return 4  # cymbals: 49, 51-59, 52, 55, 57, ...
+    for base in (60, 72, 84, 96):
+        if base <= m < base + 5:
+            return m - base
+    return 0
 
 
 def remap_drums_for_clone_hero(midi_path: Path) -> None:
-    """Rewrite ``PART DRUMS`` in a Clone Hero ``notes.mid`` from Rock Band's
-    pitch-addressed 35-59 notes to Clone Hero's difficulty-offset scheme
-    (Easy 60 / Medium 72 / Hard 84 / Expert 96 + lane 0-4).
+    """Rewrite ``PART DRUMS`` in a Clone Hero ``notes.mid`` so every hit is present
+    in all four Clone Hero difficulties (Easy/Medium/Hard/Expert) at ``base + lane``.
 
-    Rock Band packs all drum difficulties at the same pitches, so each RB hit is
-    emitted into every CH difficulty (Easy/Medium/Hard/Expert) at ``base + lane``.
-    This is what makes Clone Hero actually create a drums player — without it CH
-    reports "no players were loaded" because 35-59 isn't a recognized drum range.
-    Guitar/bass/keys/vocals tracks are left untouched.
+    AutoRB's CON `PART DRUMS` is packed with difficulty-offset pitches (Easy 60 …
+    Expert 96 + lane 0-4), which is exactly Clone Hero's drum scheme — so we recover
+    the lane from the pitch and re-emit it into every CH difficulty. This is what
+    makes Clone Hero actually create a drums player; without it CH reports "no players
+    were loaded". Guitar/bass/keys/vocals tracks are left untouched.
     """
     mf = mido.MidiFile(str(midi_path))
     for i, tr in enumerate(mf.tracks):
@@ -209,19 +202,19 @@ def midi_to_chart_file(
             # recover the difficulty from the pitch and express it as a 0-4 lane.
             per_diff: dict[str, list] = {d: [] for d in CHART_DIFFICULTIES}
             if inst in ("GUITAR", "BASS"):
-                bases = {"Expert": 60, "Hard": 72, "Medium": 84, "Easy": 96}
+                bases = {"Easy": 60, "Medium": 72, "Hard": 84, "Expert": 96}
                 for tick, pitch, sustain in notes:
                     diff = next((d for d in bases if bases[d] <= pitch < bases[d] + 5), None)
                     if diff is not None:
                         per_diff[diff].append((tick, pitch - bases[diff], sustain))
             else:
-                # Drums/Keys use fixed/actual pitches shared across difficulties in the
-                # packed MIDI. Clone Hero's .mid packs drums with difficulty offsets
-                # (Easy 60 / Medium 72 / Hard 84 / Expert 96 + lane 0-4, INVERTED vs
-                # guitar/bass), so split by those bases and emit lane = pitch - base.
+                # Drums are already in Clone Hero's difficulty-offset form after
+                # remap_drums_for_clone_hero (Easy 60 / Medium 72 / Hard 84 / Expert
+                # 96 + lane 0-4), so split by those bases and emit lane = pitch - base.
                 # Drums are percussive hits, so the .chart sustain is forced to 0 (a
                 # non-zero sustain implies a CH roll the transcription never intended).
-                # Keys writes its true pitch and is ignored by CH (no keyboard part).
+                # Keys are lane-encoded (base + lane) like guitar and are ignored by
+                # CH (no keyboard part), so they are copied through harmlessly.
                 if inst == "DRUMS":
                     drum_bases = {"Easy": 60, "Medium": 72, "Hard": 84, "Expert": 96}
                     for tick, pitch, sustain in notes:

@@ -107,29 +107,40 @@ def pitch_to_fret_string(
 ) -> FretPosition:
     """
     Find the closest (string, fret) for a given pitch.
-    
-    Returns the position with minimum cents error.
+
+    Returns the position with minimum cents error. Never returns ``None``: if a
+    pitch lies outside every string's playable 0-22 fret range (e.g. an
+    extreme/low transient, or a pitch pushed out of range by capo detection),
+    it is clamped to the nearest string's open (fret 0) or highest (fret 22)
+    position so callers can safely dereference ``fret_pos.fret``.
     """
+    if pitch_hz is None or pitch_hz <= 0:
+        # Degenerate pitch (silence / misdetect) -> lowest open string, open.
+        return FretPosition(
+            string=0,
+            fret=0,
+            pitch=tuning.string_pitches[0],
+            cents_error=0.0,
+        )
+
     best_pos = None
     best_error = float('inf')
-    
+
     for string_idx, open_pitch in enumerate(tuning.string_pitches):
-        # For each string, find the fret that gives closest pitch
-        # fret 0 = open string
-        # fret n = open_pitch * 2^(n/12)
-        
-        # Find the fret that minimizes cents error
+        # fret 0 = open string; fret n = open_pitch * 2^(n/12)
         # n = 12 * log2(pitch / open_pitch)
         fret_float = 12 * np.log2(pitch_hz / open_pitch)
-        
-        # Check integer frets around the ideal
-        for fret in [int(np.floor(fret_float)), int(np.ceil(fret_float))]:
-            if fret < 0 or fret > 22:
-                continue
-            
+
+        # Clamp the candidate fret window into the playable [0, 22] range.
+        lo = max(0, int(np.floor(fret_float)))
+        hi = min(22, int(np.ceil(fret_float)))
+
+        if lo > hi:
+            # Pitch is outside this string's range entirely; clamp to the
+            # nearer end so we still emit a (low-accuracy) position.
+            fret = 0 if fret_float < 0 else 22
             actual_pitch = open_pitch * (2 ** (fret / 12))
             cents_error = 1200 * np.log2(pitch_hz / actual_pitch)
-            
             if abs(cents_error) < abs(best_error):
                 best_error = cents_error
                 best_pos = FretPosition(
@@ -138,7 +149,39 @@ def pitch_to_fret_string(
                     pitch=actual_pitch,
                     cents_error=cents_error,
                 )
-    
+            continue
+
+        for fret in range(lo, hi + 1):
+            actual = open_pitch * (2 ** (fret / 12))
+            cents_error = 1200 * np.log2(pitch_hz / actual)
+            if abs(cents_error) < abs(best_error):
+                best_error = cents_error
+                best_pos = FretPosition(
+                    string=string_idx,
+                    fret=fret,
+                    pitch=actual,
+                    cents_error=cents_error,
+                )
+
+    if best_pos is None:
+        # Defensive fallback (should be unreachable): nearest string, clamped.
+        best_str = 0
+        best_str_err = float('inf')
+        for string_idx, open_pitch in enumerate(tuning.string_pitches):
+            e = abs(1200 * np.log2(pitch_hz / open_pitch))
+            if e < best_str_err:
+                best_str_err = e
+                best_str = string_idx
+        fret_float = 12 * np.log2(pitch_hz / tuning.string_pitches[best_str])
+        fret = max(0, min(22, int(round(fret_float))))
+        actual = tuning.string_pitches[best_str] * (2 ** (fret / 12))
+        best_pos = FretPosition(
+            string=best_str,
+            fret=fret,
+            pitch=actual,
+            cents_error=1200 * np.log2(pitch_hz / actual),
+        )
+
     return best_pos
 
 
