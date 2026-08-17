@@ -1,6 +1,6 @@
 # AutoRB Knowledge Base - Instrument Charting
 
-How AutoRB turns separated stems into playable 5-lane instrument charts (guitar, bass, drums, keys) and how those charts are serialized to MIDI and to the Clone Hero `.chart` format. Captured at **v0.0.92** (first alpha with *real*, non-placeholder instrument charts); drum element classification + fill detection reworked in **v0.0.94**.
+How AutoRB turns separated stems into playable 5-lane instrument charts (guitar, bass, drums, keys) and how those charts are serialized to MIDI and to the Clone Hero `.chart` format. Captured at **v0.0.92** (first alpha with *real*, non-placeholder instrument charts); drum element classification + fill detection reworked in **v0.0.94**; chord (multi-pitch) transcription + simultaneous-note MIDI fix in **v0.0.98**.
 
 ## Overview (v0.0.92, drum logic reworked in v0.0.94)
 
@@ -18,6 +18,16 @@ Old `detect_fills` flagged any 3 hits in a 500 ms window with 2 lanes as a fill 
 `pitch_to_fret_string` (`pitch_to_lane.py`) returned `None` for any detected pitch outside every string's 0–22 fret range (triggered after capo detection shifted pitches, or for extreme/low transients). `build_lane_map` then dereferenced `fret_pos.fret` and raised `'NoneType' object has no attribute 'fret'`, aborting the whole instrument step. The function now never returns `None` — out-of-range pitches clamp to the nearest string's open (fret 0) or top (fret 22), and degenerate (≤0) pitches fall back to the lowest open string; the capo shift is also clamped to 0–12. Regression test: `tests/test_pitch_to_lane.py`.
 
 Keys reuses the guitar transcription because Demucs' `other` stem is guitar+keys inseparable (see `[[architecture]]`).
+
+### v0.0.98 chord (multi-pitch) transcription + MIDI writer fix
+Before v0.0.98 the transcription was **monophonic**: one CREPE f0 per onset, and a chord strum yields a single spectral-flux onset, so every chord collapsed to one note. Worse, the flow gated every note on a monophonic CREPE confidence `> 0.5`, discarding ~90% of onsets — so intros looked empty and (because Rock Band gates an instrument's stem audio on its chart) the guitar stayed silent until a high-confidence onset.
+
+- Added `detect_chord_tones()` (`guitar.py`): for each onset, a CQT salience column (±30 ms) is peak-picked and **harmonic-rejected** (a peak whose freq is ≈½/⅓/2×/3× another chosen peak is dropped) so overtones don't become false "chord tones". Up to `top_k=4` simultaneous tones per onset → multiple lanes.
+- `transcribe_guitar` / `transcribe_keys` now keep the dense onset backbone (strength-gated, **not** CREPE-conf-gated) and expand each onset into its chord tones; `tuning`/`capo` come from the full tone set. The legacy per-onset helpers (`detect_chords`/`detect_holds`/`detect_solo`/`detect_bre`) still run on each onset's primary tone. Keys quantizes the detected 2-octave pitch into 5 lanes (a true 25-key piano roll crashes `con2pkg`).
+- **MIDI writer bug fixed:** `build_instrument_track` advanced `last_tick` by each note's *duration*, so a chord's 2nd+ notes landed *after* the previous note ended (never simultaneous). Rewritten as a flat, time-sorted note-on/note-off list (on before off at the same tick) so chords are truly simultaneous. Regression test: `tests/test_midi_structure.py::test_simultaneous_notes_stay_simultaneous`.
+- Verified on "Open Road Song": guitar Expert went 150 monophonic → **257 with 154 chord-onsets**; keys 243 with 150 chord-onsets. PKG still builds.
+
+**Known limitation (still alpha):** chord *presence* and note *density* are now representative, but pitch/fret accuracy, strum-vs-HOPO, and rhythm alignment are unplaytest-validated and may need tuning (the CQT threshold / harmonic-rejection are first-pass). Drums remain the weakest.
 
 ## Pipeline flow
 
@@ -38,7 +48,7 @@ stems/{drums,bass,other}.wav
 `build_instrument_track` packs all four difficulties into **one** MIDI track per instrument. The difficulty is encoded in the **pitch** using the Rock Band / ForgeTool packed-MIDI convention (this is mandatory: `tools/libforge/LibForge/LibForge/Midi/RBMidConverter.cs` `HandleDrumTrk`/`HandleGuitarBass` only accept `base + lane` for **every** instrument — raw 35–59 drum sound pitches or true key pitches are rejected and leave the difficulty gem-track null, crashing PKG conversion with a `NullReferenceException`):
 
 - **Difficulty bases (all instruments):** Easy **60**, Medium **72**, Hard **84**, Expert **96**. A note in lane `L` (0–4) is written at `base + L`. ⇒ Recoverable from pitch: `60≤p<65`→Easy, `72≤p<77`→Medium, `84≤p<89`→Hard, `96≤p<101`→Expert.
-- **Guitar / Bass** — `pitch = base + lane`. Open string is pitch **67** for all difficulties (outside the difficulty ranges → the note is dropped by ForgeTool; open-note handling is a known limitation, not a crash).
+- **Guitar / Bass** — `pitch = base + lane`. Rock Band 5-button guitar/bass charts have **no "open" notes**, so an open-string hit is encoded as a normal `base + lane` strum (the old `OPEN_PITCH = 67` encoding put it outside the 60–100 ranges and ForgeTool dropped it — fixed in v0.0.97).
 - **Drums** — `pitch = base + lane` where lane is the 0–4 drum pad lane (kick=0, snare=1, hat/tom=2, tom=3, cymbal=4). The raw drum sound pitches (36–51) are **NOT** written. ForgeTool's `HandleDrumTrk` only accepts `base + lane`; writing 36–51 made every difficulty gem-track null → `NullReferenceException` in `GemTracks.Add`.
 - **Keys** — `pitch = base + lane` (5-lane, reused from the guitar transcription). Keys is handled by `HandleGuitarBass` in ForgeTool, so it must use the same difficulty-offset scheme; the true piano pitch is not carried in the CON MIDI.
 
@@ -83,5 +93,5 @@ Each transcriber tries a high-quality backend and falls back to librosa:
 - **Not yet playtest-validated.** Charts are loadable and no longer crash ForgeTool, but note accuracy, HOPO/chord/sustain decisions, and drum-lane assignment need playtest tuning.
 - **Drum/Keys difficulty not differentiated** in the packed MIDI or `.chart` (pitch-ambiguous; CH needs fixed drum pitches). Easy/Medium/Hard drums == Expert in the exported chart.
 - **Clone Hero does not support Keys** — `[*Keys]` sections are emitted but ignored by CH; validate keys only in RB3/RB4.
-- **Guitar/Bass sparseness without CREPE** (librosa pyin fallback). Install `crepe` for production density.
+- **Guitar/Bass sparseness (largely fixed in v0.0.98).** The old CREPE-confidence gate dropped ~90% of onsets; v0.0.98 recovers density via a dense onset backbone + per-onset multi-pitch, so chord *presence* and note *count* are now representative even without CREPE. Remaining gap is pitch/fret **accuracy** and rhythm alignment, not raw count.
 - **Guitar + Keys share the Demucs `other` stem**, so keys transcription is a re-map of the guitar onsets, not a separate keys source.

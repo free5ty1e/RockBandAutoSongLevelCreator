@@ -132,3 +132,94 @@ def test_instrument_tracks_use_difficulty_offset_pitches():
         for diff in ("easy", "medium", "hard", "expert"):
             assert counts[diff] > 0, f"{inst}: empty {diff} difficulty"
 
+
+def test_open_guitar_notes_are_not_dropped():
+    """v0.0.97: Rock Band 5-button guitar/bass charts have no 'open' notes.
+
+    Open-string hits used to be encoded as OPEN_PITCH (67), which is outside the
+    60-100 difficulty ranges, so ForgeTool's HandleGuitarBass dropped them (the
+    in-game chart lost those notes). They must now encode as a normal lane note.
+    """
+    from autorb.transcribe.instruments.difficulty import (
+        ChartNote,
+        InstrumentChart,
+    )
+    from autorb.export.midi_generator import build_instrument_track
+
+    notes = [
+        ChartNote(time=0.0, lane=2, length=0.1, is_open=True, velocity=100),
+        ChartNote(time=0.5, lane=1, length=0.1, is_open=False, velocity=100),
+    ]
+    chart = {"expert": InstrumentChart(notes=notes, tempo_map=[(0, 120)])}
+    counts = _count_per_difficulty(build_instrument_track(chart, "guitar", 0, lambda s: int(s * 480)))
+    assert counts["bad"] == 0, f"open note produced out-of-range pitch: {counts}"
+    assert counts["expert"] == 2, f"open note was dropped: {counts}"
+
+
+def test_open_string_lane_minus_one_clamped():
+    """`fret_string_to_lane` returns -1 for open strings (fret 0). `build_instrument_track`
+    must clamp it into 0-4, otherwise `base + (-1)` (59/71/83/95) is outside the 60-100
+    difficulty ranges and ForgeTool drops the note (the "too few notes" bug)."""
+    from autorb.transcribe.instruments.difficulty import (
+        ChartNote,
+        InstrumentChart,
+    )
+    from autorb.export.midi_generator import build_instrument_track
+
+    notes = [ChartNote(time=0.0, lane=-1, length=0.1, is_open=True, velocity=100)]
+    chart = {"expert": InstrumentChart(notes=notes, tempo_map=[(0, 120)])}
+    counts = _count_per_difficulty(build_instrument_track(chart, "guitar", 0, lambda s: int(s * 480)))
+    assert counts["bad"] == 0, f"lane -1 produced out-of-range pitch: {counts}"
+    assert counts["expert"] == 1, f"open-string note was dropped: {counts}"
+
+
+def test_simultaneous_notes_stay_simultaneous():
+    """v0.0.98: a chord (multiple notes at the same time) must stay simultaneous
+    in the written MIDI. The old writer advanced last_tick by each note's
+    *duration*, so a chord's 2nd+ notes landed after the previous note ended
+    (never simultaneous) and chords never rendered as chords in-game.
+    """
+    import io
+    import struct
+    from autorb.transcribe.instruments.difficulty import (
+        ChartNote,
+        InstrumentChart,
+    )
+    from autorb.export.midi_generator import build_instrument_track
+
+    # Two expert guitar notes at the SAME time -> a chord (lanes 0 and 2).
+    notes = [
+        ChartNote(time=1.0, lane=0, length=0.2, velocity=100, difficulty_pitch=96),
+        ChartNote(time=1.0, lane=2, length=0.2, velocity=100, difficulty_pitch=98),
+        ChartNote(time=2.0, lane=1, length=0.2, velocity=100, difficulty_pitch=97),
+    ]
+    # All four difficulties must be present, otherwise the writer injects
+    # placeholder notes at tick 0 that would also look "simultaneous".
+    chart = {
+        d: InstrumentChart(notes=notes, tempo_map=[(0, 120)])
+        for d in ("expert", "hard", "medium", "easy")
+    }
+    track_bytes = build_instrument_track(chart, "guitar", 0, lambda s: int(s * 480))
+
+    full = b"MThd" + struct.pack(">IHHH", 6, 1, 1, 480) + track_bytes
+    mid = mido.MidiFile(file=io.BytesIO(full))
+    abs_tick = 0
+    onsets_by_tick = {}
+    for msg in mid.tracks[0]:
+        abs_tick += msg.time
+        if msg.type == "note_on" and msg.velocity > 0:
+            onsets_by_tick.setdefault(abs_tick, []).append(msg.note)
+
+    # The two expert chord notes (96, 98) must share one tick, and the single
+    # note (97) must be on a *different* tick. (All four difficulties carry the
+    # same chart, so each tick lists one copy per difficulty — the simultaneity
+    # we care about is that 96 and 98 land on the same tick, not 97's.)
+    chord_tick = next(t for t, ns in onsets_by_tick.items() if 96 in ns and 98 in ns)
+    assert 96 in onsets_by_tick[chord_tick] and 98 in onsets_by_tick[chord_tick], (
+        f"chord notes 96/98 not simultaneous: {onsets_by_tick}"
+    )
+    single_tick = next(t for t, ns in onsets_by_tick.items() if 97 in ns)
+    assert single_tick != chord_tick, (
+        f"single note 97 collided with chord tick: {onsets_by_tick}"
+    )
+

@@ -34,7 +34,7 @@ from .difficulty import (
     Difficulty,
     create_all_difficulties,
 )
-from .guitar import detect_string_pitches
+from .guitar import detect_string_pitches, detect_chord_tones
 
 
 # Rock Band Keys lane: 2-octave piano roll starting at C2 (MIDI 36)
@@ -147,48 +147,56 @@ def transcribe_keys(
     Returns:
         InstrumentChart with Expert difficulty
     """
-    # 1-2. Reuse the SAME onset + pitch detection as guitar. Demucs cannot
-    # separate guitar from keys, so the two parts must share one (time, pitch)
-    # list — otherwise the guitar and keys charts diverge (different note
-    # counts / rhythms for what is literally the same audio).
-    onsets = detect_string_pitches(stem_path, sr=sr, min_strength=0.15, conf_thresh=0.5)
+    # 1-2. Reuse the SAME onset backbone as guitar (Demucs cannot separate
+    # guitar from keys) and the shared multi-pitch chord detection so the two
+    # parts stay consistent — and so keyboard chords render as multiple piano
+    # keys instead of a single tone.
+    onset_result = detect_onsets_librosa(stem_path, sr=sr)
+    onset_result = merge_nearby_onsets(onset_result, min_interval=0.03)
+    onset_result = filter_onsets_by_strength(onset_result, min_strength=0.25)
+    onset_times = onset_result.times
+    chord_tone_lists = detect_chord_tones(stem_path, onset_times, sr=sr, top_k=4)
 
-    # 3. Build lane map (pitches -> keys piano-roll lanes, C2..C4)
+    # 3. Build lane map. The packed-MIDI convention this pipeline uses treats
+    #    PART KEYS as a 5-lane instrument (like guitar/bass, base+lane, lanes
+    #    0-4) so ForgeTool's HandleKeyboard accepts it — a true 25-key piano
+    #    roll (36-60) crashes the PKG build. So we quantize the detected 2-octave
+    #    key range into 5 bands; each chord tone still maps to a distinct band so
+    #    chords spread across the 5 lanes.
     expert_notes = []
-    for onset in onsets:
-        midi_note = onset['midi_note']
-        if midi_note < KEYS_BASE_PITCH or midi_note > KEYS_BASE_PITCH + KEYS_NUM_KEYS - 1:
-            continue  # Outside the 2-octave keys range
-        lane = midi_to_keys_lane(midi_note)
-        note = ChartNote(
-            time=onset['time'],
-            lane=lane,
-            length=0.0,
-            is_open=False,
-            is_hopo=False,
-            velocity=100,
-            difficulty_pitch=KEYS_BASE_PITCH + lane,  # Actual MIDI pitch for keys
-        )
-        expert_notes.append(note)
-    
-    # 4. HOPO detection for keys (adjacent semitones within 120ms)
+    for i, tones in enumerate(chord_tone_lists):
+        for f in tones:
+            midi_note = hz_to_midi_note(f)
+            if midi_note < KEYS_BASE_PITCH or midi_note > KEYS_BASE_PITCH + KEYS_NUM_KEYS - 1:
+                continue  # Outside the 2-octave keys range
+            lane = min(4, max(0, (midi_note - KEYS_BASE_PITCH) // 5))
+            expert_notes.append(ChartNote(
+                time=onset_times[i],
+                lane=lane,
+                length=0.0,
+                is_open=False,
+                is_hopo=False,
+                velocity=100,
+                difficulty_pitch=KEYS_BASE_PITCH + lane,
+            ))
+
+    # 4. HOPO detection for keys (adjacent semitones within 120ms). Skip notes
+    #    sharing a time (chord members).
     expert_notes.sort(key=lambda n: n.time)
     for i in range(1, len(expert_notes)):
-        prev = expert_notes[i-1]
+        prev = expert_notes[i - 1]
         curr = expert_notes[i]
+        if curr.time == prev.time:
+            continue
         time_diff = curr.time - prev.time
         lane_diff = abs(curr.lane - prev.lane)
-        
-        if (time_diff <= 0.12 and
-            lane_diff == 1 and
-            not prev.is_open and not curr.is_open):
-            # Same direction check
+        if time_diff <= 0.12 and lane_diff == 1:
             if i + 1 < len(expert_notes):
-                next_note = expert_notes[i+1]
+                next_note = expert_notes[i + 1]
                 if (next_note.lane > curr.lane) == (curr.lane > prev.lane):
                     curr.is_hopo = True
                     curr.velocity = 127
-    
+
     # 5. Build Expert chart
     expert_chart = InstrumentChart(
         notes=expert_notes,
@@ -201,7 +209,6 @@ def transcribe_keys(
             'num_onsets': len(expert_notes),
         },
     )
-    
     return expert_chart
 
 

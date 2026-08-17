@@ -381,6 +381,69 @@ def detect_string_pitches(
     return out
 
 
+def detect_chord_tones(
+    stem_path: Path,
+    times: np.ndarray,
+    sr: int = 44100,
+    top_k: int = 4,
+    win: float = 0.03,
+) -> list:
+    """
+    Multi-pitch (chord) detection: for each onset time, return the list of
+    simultaneously-sounding pitches so that a strummed chord becomes several
+    lanes instead of a single monophonic note.
+
+    A single CREPE f0 cannot represent a chord, and spectral-flux onset
+    detection emits ONE onset per strum — so the legacy per-onset monophonic
+    path collapsed every chord to one note and gated density on CREPE
+    confidence (``conf_thresh``). Here we keep the (dense) onset backbone but
+    estimate multiple pitches per onset from a CQT salience column, rejecting
+    harmonics so a note and its overtones don't both become "chord tones".
+
+    Returns a list (aligned to ``times``) of frequency lists.
+    """
+    y, _ = librosa.load(stem_path, sr=sr, mono=True)
+    hop = 512
+    fmin = librosa.note_to_hz('E2')
+    C = np.abs(librosa.cqt(
+        y, sr=sr, hop_length=hop, fmin=fmin, n_bins=60, bins_per_octave=12))
+    freqs = librosa.cqt_frequencies(n_bins=60, fmin=fmin, bins_per_octave=12)
+    ftimes = librosa.frames_to_time(np.arange(C.shape[1]), sr=sr, hop_length=hop)
+
+    out = []
+    for t in times:
+        lo = max(0, int(np.argmin(np.abs(ftimes - (t - win)))))
+        hi = min(C.shape[1] - 1, int(np.argmin(np.abs(ftimes - (t + win)))))
+        col = C[:, lo:hi + 1].max(axis=1)
+        if col.size == 0 or col.max() <= 0:
+            out.append([])
+            continue
+        thr = col.max() * 0.25
+        peaks = []
+        for i in range(1, len(col) - 1):
+            if col[i] >= thr and col[i] >= col[i - 1] and col[i] >= col[i + 1]:
+                peaks.append((col[i], freqs[i]))
+        peaks.sort(reverse=True)
+        chosen = []
+        for _mag, f in peaks:
+            if f < 70 or f > 1200:
+                continue
+            harmonic = False
+            for _cm, cf in chosen:
+                for h in (0.5, 1 / 3, 2.0, 3.0):
+                    if abs(f - cf * h) < 8:
+                        harmonic = True
+                        break
+                if harmonic:
+                    break
+            if not harmonic:
+                chosen.append((_mag, f))
+            if len(chosen) >= top_k:
+                break
+        out.append([f for _m, f in chosen])
+    return out
+
+
 def transcribe_guitar(
     stem_path: Path,
     tempo_map: list,
@@ -399,97 +462,100 @@ def transcribe_guitar(
     Returns:
         InstrumentChart with Expert difficulty (other difficulties generated separately)
     """
-    # 1-2. Shared onset + pitch detection (guitar and keys use the same list so
-    # the two parts stay consistent — Demucs cannot separate them).
-    onsets = detect_string_pitches(stem_path, sr=sr, min_strength=0.15, conf_thresh=0.5)
+    # 1-2. Onset backbone (dense rhythm) — NO monophonic CREPE confidence gate,
+    # which previously dropped ~90% of onsets and flattened every chord to one
+    # note. Chord content is recovered separately in step 4.
+    onset_result = detect_onsets_librosa(stem_path, sr=sr)
+    onset_result = merge_nearby_onsets(onset_result, min_interval=0.03)
+    onset_result = filter_onsets_by_strength(onset_result, min_strength=0.25)
+    onset_times = onset_result.times
+    onset_strs = onset_result.strengths
 
-    # 3. Detect tuning from pitch distribution
-    pitches = np.array([o['pitch_hz'] for o in onsets])
-    tuning = detect_tuning_from_pitches(pitches, 'guitar')
-    capo = detect_capo(pitches, tuning)
+    # 3. Multi-pitch (chord) detection per onset — the core fix for chords.
+    chord_tone_lists = detect_chord_tones(stem_path, onset_times, sr=sr, top_k=4)
+
+    # 4. Tuning + capo from the full set of detected tones.
+    all_tones = np.array([f for tones in chord_tone_lists for f in tones])
+    if all_tones.size == 0:
+        all_tones = np.array([110.0])  # fallback: A2
+    tuning = detect_tuning_from_pitches(all_tones, 'guitar')
+    capo = detect_capo(all_tones, tuning)
     # Guard against a bogus capo (e.g. from a skewed pitch distribution) that
     # would shift every note out of the playable fret range. Real capos are
     # 0-12; clamp so downstream fret mapping never receives an impossible pitch.
     capo = max(0, min(12, int(round(capo))))
-
-    # Adjust pitches for capo
     if capo > 0:
-        for o in onsets:
-            o['pitch_hz'] *= 2 ** (capo / 12)
+        chord_tone_lists = [
+            [f * (2 ** (capo / 12)) for f in tones] for tones in chord_tone_lists
+        ]
 
-    # 4. Detect chords (rebuild GuitarOnset objects for the existing helpers)
+    # 5. Build a per-onset GuitarOnset (primary = strongest tone) so the existing
+    #    holds / solo / BRE helpers still work. Chord expansion happens at step 8.
     onsets_with_pitch = [
-        GuitarOnset(time=o['time'], pitch_hz=o['pitch_hz'],
-                    confidence=o['confidence'], strength=o['strength'])
-        for o in onsets
+        GuitarOnset(
+            time=onset_times[i],
+            pitch_hz=(chord_tone_lists[i][0] if chord_tone_lists[i] else 0.0),
+            confidence=1.0,
+            strength=float(onset_strs[i]),
+        )
+        for i in range(len(onset_times))
     ]
     onsets_with_pitch = detect_chords(onsets_with_pitch)
-
-    # 5. Detect holds
     onsets_with_pitch = detect_holds(onsets_with_pitch, stem_path, sr=sr)
-
-    # 6. Detect solo sections
     solos = detect_solo_sections(onsets_with_pitch, tempo_map)
-
-    # 7. Detect BRE
     bre = detect_bre_section(onsets_with_pitch, tempo_map, song_end)
 
-    # 8. Build lane map (pitches → 5 lanes)
-    onset_pitches = [(o.time, o.pitch_hz) for o in onsets_with_pitch]
-    lane_notes = build_lane_map(onset_pitches, tuning, 'expert')
-    
-    # 8b. Add chord info to lane notes
-    for i, lane_note in enumerate(lane_notes):
-        if i < len(onsets_with_pitch):
-            onset = onsets_with_pitch[i]
-            lane_note['is_chord_root'] = onset.is_chord_root
-            lane_note['hold_duration'] = getattr(onset, 'hold_duration', 0)
-    
-    # 9. Convert to ChartNotes (Expert)
+    # 8. Expand each onset into its chord tones → multiple 5-lane notes.
     expert_notes = []
-    for lane_note in lane_notes:
-        is_open = lane_note['is_open']
-        is_hopo = False  # Will be set in HOPO detection pass
-        
-        # Determine if this is a HOPO (adjacent lane, within 120ms, same direction)
-        # This is a simplified check - full HOPO detection needs neighbor analysis
-        
-        note = ChartNote(
-            time=lane_note['time'],
-            lane=lane_note['lane'],
-            length=lane_note.get('hold_duration', 0),
-            is_open=is_open,
-            is_hopo=False,  # Set in post-process
-            velocity=100,
-            difficulty_pitch=lane_note['difficulty_pitch'],
-            is_chord=lane_note.get('is_chord_root', False),
-        )
-        expert_notes.append(note)
-    
-    # 10. HOPO detection pass (adjacent lanes ≤120ms, same direction)
+    for i, tones in enumerate(chord_tone_lists):
+        if not tones:
+            continue
+        used_lanes = []
+        for f in tones:
+            fps = pitch_to_fret_string(f, tuning)
+            lane = fret_string_to_lane(fps, tuning.num_strings)
+            if lane < 0 or lane > 4:
+                lane = 0
+            if lane in used_lanes:
+                continue  # two chord tones mapping to the same lane -> keep one
+            used_lanes.append(lane)
+            is_open = fps.fret == 0
+            hold = getattr(onsets_with_pitch[i], 'hold_duration', 0) if lane == used_lanes[0] else 0
+            expert_notes.append(ChartNote(
+                time=onset_times[i],
+                lane=lane,
+                length=hold,
+                is_open=is_open,
+                is_hopo=False,
+                velocity=100,
+                difficulty_pitch=LANE_BASE['expert'] + lane,
+                is_chord=len(used_lanes) > 1,
+            ))
+
+    # 9. HOPO detection pass (adjacent lanes ≤120ms, same direction). Skip notes
+    #    that share a time with another (chord members) — they're not HOPOs.
     expert_notes.sort(key=lambda n: n.time)
     for i in range(1, len(expert_notes)):
-        prev = expert_notes[i-1]
+        prev = expert_notes[i - 1]
         curr = expert_notes[i]
+        if curr.time == prev.time:
+            continue
         time_diff = curr.time - prev.time
         lane_diff = abs(curr.lane - prev.lane)
-        
-        if (time_diff <= 0.12 and  # 120ms
+        if (time_diff <= 0.12 and
             lane_diff == 1 and
-            not prev.is_chord and not curr.is_chord and
             not prev.is_open and not curr.is_open):
-            # Same direction check
-            if (curr.lane > prev.lane) == (expert_notes[min(i+1, len(expert_notes)-1)].lane > curr.lane):
+            if (curr.lane > prev.lane) == (expert_notes[min(i + 1, len(expert_notes) - 1)].lane > curr.lane):
                 curr.is_hopo = True
                 curr.velocity = 127
-    
-    # 11. Build Expert chart
+
+    # 10. Build Expert chart
     expert_chart = InstrumentChart(
         notes=expert_notes,
         tempo_map=tempo_map,
         solo_sections=solos,
         bre_section=bre,
-        overdrive_phrases=[],  # Will be populated by overdrive detector
+        overdrive_phrases=[],
         metadata={
             'instrument': 'guitar',
             'tuning': tuning.name,
@@ -497,7 +563,6 @@ def transcribe_guitar(
             'num_onsets': len(expert_notes),
         },
     )
-    
     return expert_chart
 
 

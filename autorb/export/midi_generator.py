@@ -259,8 +259,7 @@ def build_instrument_track(
         'medium': 72,
         'easy': 60,
     }
-    OPEN_PITCH = 67  # G4
-    
+
     # Drum pitches (same across difficulties)
     DRUM_PITCHES = {
         'kick': 36,
@@ -318,10 +317,16 @@ def build_instrument_track(
                 if lane < 0 or lane > 4:
                     lane = 0
                 pitch = base + lane
-            elif note.is_open:
-                pitch = OPEN_PITCH
             else:
-                pitch = base + note.lane
+                # Rock Band 5-button guitar/bass charts have NO "open" notes; an
+                # open-string hit is just a normal strum at its lane. `note.lane`
+                # is -1 for open strings (see `fret_string_to_lane`), so clamp to
+                # the valid 0-4 range — otherwise `base + (-1)` falls outside the
+                # 60-100 difficulty ranges and ForgeTool drops the note.
+                lane = note.lane if note.lane is not None else 0
+                if lane < 0 or lane > 4:
+                    lane = 0
+                pitch = base + lane
             
             duration = max(48, int((note.length * 480 * 120 / 60)) if note.length > 0 else 120)
             all_notes.append((target_start, pitch, note.velocity, duration, diff))
@@ -329,24 +334,31 @@ def build_instrument_track(
     # Sort all notes by time, then by difficulty order (expert first for same time)
     diff_order = {'expert': 0, 'hard': 1, 'medium': 2, 'easy': 3}
     all_notes.sort(key=lambda x: (x[0], diff_order.get(x[4] if len(x) > 4 else 'expert', 0)))
-    
-    # Build events
+
+    # Build a flat, time-sorted event list of note-on / note-off pairs. Writing
+    # each note as a back-to-back (on, off) block and advancing last_tick by the
+    # note DURATION (the old approach) displaced any simultaneous chord note to
+    # AFTER the previous note ended, so chords never rendered as chords. Using a
+    # flat list keyed on absolute tick (on before off at the same tick) keeps
+    # simultaneous notes truly simultaneous.
+    flat = []
+    for target_start, pitch, velocity, duration, _ in all_notes:
+        dur = max(48, duration)
+        flat.append((target_start, 0, pitch, velocity))      # note-on
+        flat.append((target_start + dur, 1, pitch, 0))        # note-off
+    flat.sort(key=lambda e: (e[0], e[1]))
+
     events = bytearray()
     last_tick = 0
-    
-    for note_data in all_notes:
-        target_start, pitch, velocity, duration, _ = note_data
-        
-        delta = max(0, target_start - last_tick)
+    for tick, typ, pitch, vel in flat:
+        delta = max(0, tick - last_tick)
         events.extend(encode_varlen(delta))
-        events.extend(b"\x90" + bytes([pitch, velocity]))
-        
-        duration = max(48, duration)
-        events.extend(encode_varlen(duration))
-        events.extend(b"\x80" + bytes([pitch, 0]))
-        
-        last_tick = target_start + duration
-    
+        if typ == 0:
+            events.extend(b"\x90" + bytes([pitch, vel]))
+        else:
+            events.extend(b"\x80" + bytes([pitch, 0]))
+        last_tick = tick
+
     track_name = f"PART {instrument.upper()}"
     return build_track(track_name, bytes(events))
 
