@@ -468,21 +468,24 @@ def _make_drum_mid(path: Path, rb_pitches=(96, 97, 98)):
 def test_remap_drums_for_clone_hero_uses_ch_offset_format(tmp_path: Path):
     """Clone Hero's .mid drums must be difficulty-offset (Easy 60 / Medium 72 /
     Hard 84 / Expert 96 + lane 0-4). The CON `PART DRUMS` is already in this scheme
-    (ForgeTool/PKG requires it), and `remap_drums_for_clone_hero` re-emits every hit
-    into all four difficulties so Clone Hero loads a drums player. Each input hit
-    becomes one note per difficulty."""
+    (ForgeTool/PKG requires it). `remap_drums_for_clone_hero` must PRESERVE each
+    hit in its own difficulty — NOT duplicate every hit into all four (that made
+    Medium/Easy identical to Expert in a Clone Hero playtest). So a mixed-difficulty
+    input round-trips with the same note count and the same per-difficulty bases."""
     mid = tmp_path / "d.mid"
-    _make_drum_mid(mid)
+    # One kick per difficulty at its own base (lane 0): Easy 60, Medium 72,
+    # Hard 84, Expert 96.
+    _make_drum_mid(mid, rb_pitches=(60, 72, 84, 96))
     remap_drums_for_clone_hero(mid)
 
     mf = mido.MidiFile(mid)
     dt = next(t for t in mf.tracks if t.name == "PART DRUMS")
     pitches = [m.note for m in dt if m.type == "note_on" and m.velocity > 0]
-    # 3 RB pitches x 4 difficulties = 12 notes, all in CH's 60-101 range.
-    assert len(pitches) == 12
+    # Preserved per-difficulty: 4 notes, one per difficulty, all in CH's 60-101 range.
+    assert len(pitches) == 4
     assert all(60 <= p <= 101 for p in pitches)
-    # kick(36)->0, snare(38)->1, open-hat(46)->2 ; each emitted in all 4 difficulties.
-    assert sorted(pitches) == [60, 61, 62, 72, 73, 74, 84, 85, 86, 96, 97, 98]
+    # Each input hit stays in its own difficulty (no duplication across difficulties).
+    assert sorted(pitches) == [60, 72, 84, 96]
 
 
 def test_chart_drums_use_lanes_not_midi_pitches(tmp_path: Path):

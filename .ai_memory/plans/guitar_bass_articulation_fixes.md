@@ -1,6 +1,10 @@
 # Plan: Guitar/Bass Articulation Fixes (rapid strums & bass hold-merge)
 
-**Status:** Proposed (v0.0.98 caveat → roadmap)
+**Status:** Rapid-strum + bass-merge **fixed in v0.0.99** (hold-cap to next
+onset; bass onset `wait=3` + lower conf gate; chord over-detection tightened).
+Expert **authoring-compliance** rules now researched — see
+`[[difficulty_charting]]` §1 for the full RB spec; the rework below is the
+next step.
 **Owner:** AutoRB
 **Symptoms (user playtest, v0.0.98):**
 - *Guitar:* "the doubled notes are being blended into single notes (should be
@@ -66,6 +70,32 @@ gap to the *next* bass note, so the first note's sustain reaches the second —
 Both fixes want a `cap_hold_to_next_onset(notes)` helper in
 `autorb/transcribe/instruments/difficulty.py` (or a shared module) used by
 `transcribe_guitar` and `transcribe_bass` right after hold detection.
+
+## Expert authoring-compliance rules (next rework — `[[difficulty_charting]]` §1)
+
+After the articulation fixes, the *derived* difficulties must follow the RB
+rules, not just density caps. Key constraints to encode in `difficulty.py`:
+
+- **Hard:** no Green/Orange or 3-note chords (Green/Blue & Red/Orange OK); all
+  Expert chords retained unless they represent harmonizing parts / strong
+  harmonics; remove 16th-and-faster variations.
+- **Medium:** **no chords of type Green/Blue, Green/Orange, or Red/Orange; no
+  3-note chords**; remove remaining 8th notes (keep strong quarter-note beats);
+  **pull sustain durations back** (≈ quarter-note gap between notes); add orange
+  only in appropriate, infrequent spots, restricting patterns to 4 lanes.
+- **Easy:** **no chords at all** (reduce to most prominent single note); remove
+  remaining quarter notes (half-note spaces between strums); sustains pulled
+  back an extra 1/16; added blue/orange restricted to top three colors (Y B O).
+- **HOPOs:** never force on Medium/Easy; repeating same-color gems stay strummed.
+- **Lane consistency:** every lane used in Expert appears ≥ once in each lower
+  difficulty (trivial for 5-lane since all colors are available).
+- **Sustain spacing:** ≥ 1/16-note gap before next note everywhere; pull back
+  further on Medium/Easy ("reasonable to whammy").
+- **Fast songs (>160 BPM):** don't expect continuous 8ths; thin (remove every
+  4th note per half-measure).
+
+These are the authoritative rules; the current `DifficultyReducer` only does
+lane-drops + density caps and must be extended to enforce them.
 
 ## Validation
 - Unit `test_instrument_quality.py`: synthesize a bass line of 4 distinct 0.3 s

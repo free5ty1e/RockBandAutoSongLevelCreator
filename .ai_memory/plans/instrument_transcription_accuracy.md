@@ -26,6 +26,31 @@ Those are tracked in dedicated plans (see `guitar_bass_articulation_fixes.md`,
 accuracy work that remains after those targeted fixes, plus the **validation
 harness** needed to stop shipping un-playtested charts.
 
+## v0.0.99 playtest findings (new)
+
+- **Double bass in Expert drums is non-compliant.** User: "there are a lot of
+  double bass pedal hits which is not really normally part of the rock band
+  allowed patterns." Rock Band does **not** support fully-authored double bass
+  (see `[[difficulty_charting]]` §2.1) — Expert must use **single-foot kick
+  patterns**. The rapid alternating kicks in our Expert chart come from
+  (a) bass-guitar low-end bleeding into the kick band and (b) the per-band energy
+  classifier over-triggering kick. **Fix:** after Expert assembly, run a
+  single-foot kick reducer — merge any kick burst faster than one foot can play
+  into a single-foot pattern (keep the dominant kick grid; optionally emit a
+  parallel `PART DRUMS_2X` chart for the full kicks). This is an **Expert
+  authoring** fix, paired with tightening kick classification (don't classify
+  low bass energy as kick).
+- **Clone Hero flattens drum difficulty (rendering bug).** The user "saw no
+  difference on Medium" — but the packed MIDI *does* carry distinct per-difficulty
+  drums. `remap_drums_for_clone_hero` (`autorb/export/clone_hero.py`) copies
+  every hit into all four CH difficulty sections. **Fix:** write the *actual
+  reduced* drums to each CH section (Clone Hero supports per-difficulty drum
+  charts). Until fixed, playtest drum difficulty on PS4 or by parsing the packed
+  MIDI, not Clone Hero.
+- **Grid quantization is partially in:** drums are 1/8-gridded in the reducer;
+  guitar/bass are **not** quantized before writing (onsets are raw spectral-flux
+  peaks). The "rhythm alignment" gap (item 3 below) remains for guitar/bass.
+
 ## Remaining accuracy gaps (cross-cutting)
 
 1. **Pitch / fret accuracy.** `pitch_to_fret_string` + `fret_string_to_lane`

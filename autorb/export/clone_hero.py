@@ -40,11 +40,12 @@ CHARTER_NAME = "AutoRB"
 CHART_DIFFICULTIES = ("Easy", "Medium", "Hard", "Expert")
 
 #: Clone Hero's `.mid` drums use **difficulty-offset pitches** (Easy 60 / Medium 72
-#: / Hard 84 / Expert 96 + lane 0-4), the same packed scheme AutoRB now writes for
-#: the CON `.mid`. The CON's `PART DRUMS` is therefore already in this form, so the
-#: remap below just recovers the lane (`pitch - base`) and re-emits each hit into
-#: every CH difficulty.
+#: / Hard 84 / Expert 96 + lane 0-4), the same packed scheme AutoRB writes for the
+#: CON `.mid`. The CON's `PART DRUMS` already carries **distinct per-difficulty**
+#: notes at those bases (Easy 60-64, Medium 72-76, Hard 84-88, Expert 96-100), so the
+#: remap must preserve that — each hit stays in its own difficulty, NOT copied to all.
 CH_DRUM_MID_BASES = {"Easy": 60, "Medium": 72, "Hard": 84, "Expert": 96}
+_CH_DRUM_BASES = tuple(CH_DRUM_MID_BASES.values())
 
 
 def _rb_drum_pitch_to_ch_lane(midi_note: int) -> int:
@@ -52,21 +53,33 @@ def _rb_drum_pitch_to_ch_lane(midi_note: int) -> int:
     / Hard 84 / Expert 96 + lane). 0=kick, 1=red, 2=yellow(hat), 3=blue(tom),
     4=green(cymbal)."""
     m = int(round(midi_note))
-    for base in (60, 72, 84, 96):
+    for base in _CH_DRUM_BASES:
         if base <= m < base + 5:
             return m - base
     return 0
 
 
+def _rb_drum_pitch_base(midi_note: int) -> int:
+    """Return the difficulty base (60/72/84/96) a drum pitch falls into, else Expert."""
+    m = int(round(midi_note))
+    for base in _CH_DRUM_BASES:
+        if base <= m < base + 5:
+            return base
+    return 96
+
+
 def remap_drums_for_clone_hero(midi_path: Path) -> None:
-    """Rewrite ``PART DRUMS`` in a Clone Hero ``notes.mid`` so every hit is present
-    in all four Clone Hero difficulties (Easy/Medium/Hard/Expert) at ``base + lane``.
+    """Normalize ``PART DRUMS`` in a Clone Hero ``notes.mid`` so each hit keeps its
+    own difficulty.
 
     AutoRB's CON `PART DRUMS` is packed with difficulty-offset pitches (Easy 60 …
-    Expert 96 + lane 0-4), which is exactly Clone Hero's drum scheme — so we recover
-    the lane from the pitch and re-emit it into every CH difficulty. This is what
-    makes Clone Hero actually create a drums player; without it CH reports "no players
-    were loaded". Guitar/bass/keys/vocals tracks are left untouched.
+    Expert 96 + lane 0-4) and **already encodes the four reduced difficulties as
+    separate notes at separate bases**. Rock Band / Clone Hero do NOT support
+    fully-authored double bass, and lower difficulties must be genuinely simpler
+    (see `llm-wiki-kb/difficulty_charting.md` §2), so we must NOT copy every hit
+    into all four difficulties (that made Medium/Easy identical to Expert in a
+    Clone Hero playtest). Each note is re-emitted at its own base+lane only.
+    Guitar/bass/keys/vocals tracks are left untouched.
     """
     mf = mido.MidiFile(str(midi_path))
     for i, tr in enumerate(mf.tracks):
@@ -76,12 +89,12 @@ def remap_drums_for_clone_hero(midi_path: Path) -> None:
         for tick, msg in _iter_abs(tr):
             if msg.type == "note_on" and msg.velocity > 0:
                 lane = _rb_drum_pitch_to_ch_lane(msg.note)
-                for base in CH_DRUM_MID_BASES.values():
-                    new_abs.append((tick, msg.copy(note=base + lane)))
+                base = _rb_drum_pitch_base(msg.note)
+                new_abs.append((tick, msg.copy(note=base + lane)))
             elif msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
                 lane = _rb_drum_pitch_to_ch_lane(msg.note)
-                for base in CH_DRUM_MID_BASES.values():
-                    new_abs.append((tick, msg.copy(note=base + lane)))
+                base = _rb_drum_pitch_base(msg.note)
+                new_abs.append((tick, msg.copy(note=base + lane)))
             else:
                 new_abs.append((tick, msg))
         # note_on before note_off at the same tick; preserve absolute ordering.

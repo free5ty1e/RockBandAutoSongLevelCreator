@@ -91,7 +91,13 @@ def transcribe_drums(
         fills,
         tempo_map,
     )
-    
+
+    # 7b. Rock Band does NOT support fully-authored double bass (alternating
+    # pedal). Author only what a single foot can play: collapse rapid kick
+    # bursts (two kicks closer than ~MIN_KICK_GAP) into a single foot hit.
+    # See llm-wiki-kb/difficulty_charting.md §2.1.
+    expert_notes = reduce_double_bass(expert_notes, min_gap=0.11)
+
     # 8. Build Expert chart
     expert_chart = InstrumentChart(
         notes=expert_notes,
@@ -332,6 +338,27 @@ def build_drum_notes(
         i = j
     
     return merged
+
+
+def reduce_double_bass(notes: list, min_gap: float = 0.11) -> list:
+    """Collapse rapid kick bursts into single-foot hits.
+
+    Rock Band does not support fully-authored double bass (alternating pedal);
+    Expert kick patterns must be playable with one foot. Any kick (lane 0) whose
+    onset is within ``min_gap`` seconds of the previously kept kick is dropped,
+    keeping the first of the burst. Other lanes are untouched. This removes the
+    "double bass pedal" runs the transcription otherwise emits from low-end bleed
+    and fast classifier onsets (see ``llm-wiki-kb/difficulty_charting.md`` §2.1).
+    """
+    out: list = []
+    last_kick_t = -1e9
+    for n in sorted(notes, key=lambda x: x.time):
+        if getattr(n, "lane", None) == 0:  # kick
+            if n.time - last_kick_t < min_gap:
+                continue
+            last_kick_t = n.time
+        out.append(n)
+    return out
 
 
 def generate_all_difficulties(expert_chart: InstrumentChart) -> dict:

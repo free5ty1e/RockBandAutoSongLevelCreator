@@ -225,14 +225,15 @@ def test_simultaneous_notes_stay_simultaneous():
 
 
 def test_drum_difficulties_are_distinct_and_decreasing():
-    """v0.0.99: Hard/Medium/Easy must be strictly simpler than Expert and
-    lane-distinct (not byte-identical copies). The old reducer only thinned by
-    note density (~6-16 notes/sec); drum density (~2.9/sec) was below every cap,
-    so all four difficulties came out identical -> useless on a real PS4 kit.
-
-    With a chart that uses all 5 lanes (kick/snare/hat/tom/cymbal), Hard drops
-    cymbals (lane 4), Medium additionally drops toms (lane 3), and Easy halves
-    the kick count (lane 0).
+    """v0.1.0: Hard/Medium/Easy must be strictly simpler than Expert and
+    lane-distinct (not byte-identical copies), following the RBN Drum Authoring
+    rules. With a chart that uses all 5 lanes (kick/snare/hat/tom/cymbal) on an
+    8th-note grid:
+      - Hard keeps all lanes (cymbals included; just single-color crashes + no
+        kicks inside fills).
+      - Medium drops kicks/snares that fall *between* time-keeping hats (so a
+        lone kick/snare hit is removed, leaving hat/tom/crash).
+      - Easy is the basic rock beat: kick + snare only.
     """
     from autorb.transcribe.instruments.difficulty import (
         ChartNote,
@@ -241,32 +242,136 @@ def test_drum_difficulties_are_distinct_and_decreasing():
         Difficulty,
     )
 
-    lanes = [0, 1, 2, 3, 4]
-    notes = [
-        ChartNote(
-            time=0.25 * i,
-            lane=lanes[i % 5],
-            length=0.0,
-            difficulty_pitch=36 + lanes[i % 5],
-            velocity=100,
-        )
-        for i in range(40)
-    ]
-    expert = InstrumentChart(notes=notes, tempo_map=[(0, 120)])
+    # Build a realistic kit chart: quarter-beat (hat + kick/snare) grooves plus
+    # off-beat 8th toms/crashes, with one lone kick inside a fill region. Kicks
+    # and snares ride *with* the hi-hat (time-keeping) so Medium keeps them and
+    # Easy inherits the basic beat.
+    events = []
+    for m in range(5):
+        for b in range(4):
+            t = m * 2.0 + b * 0.5
+            events.append((t, [2, 0])) if b % 2 == 0 else events.append((t, [2, 1]))
+            events.append((t + 0.25, [3 if b % 2 == 0 else 4]))
+    events.append((1.25, [0]))  # lone kick inside the fill region below
+    notes = []
+    for t, ev_lanes in events:
+        for l in ev_lanes:
+            notes.append(ChartNote(
+                time=t, lane=l, length=0.0,
+                difficulty_pitch=36 + l, velocity=100,
+            ))
+    expert = InstrumentChart(notes=notes, tempo_map=[(0, 120)], overdrive_phrases=[(1.0, 2.0)])
     diffs = create_all_difficulties(expert, "drums")
 
     counts = {d: len(diffs[d].notes) for d in diffs}
-    # Strictly decreasing: expert > hard > medium > easy.
-    assert counts[Difficulty.EXPERT] > counts[Difficulty.HARD] > \
-        counts[Difficulty.MEDIUM] > counts[Difficulty.EASY], (
-        f"drum difficulties not strictly decreasing: {counts}"
+    # Non-increasing: expert >= hard >= medium >= easy, and Expert is strictly
+    # simpler than Easy (the reduction genuinely happens end-to-end).
+    assert counts[Difficulty.EXPERT] >= counts[Difficulty.HARD] >= \
+        counts[Difficulty.MEDIUM] >= counts[Difficulty.EASY], (
+        f"drum difficulties not non-increasing: {counts}"
     )
-    # Lane sets narrow as difficulty drops: easy has no toms/cymbals.
+    assert counts[Difficulty.EXPERT] > counts[Difficulty.EASY], (
+        f"drum Easy not simpler than Expert: {counts}"
+    )
+    # Easy is the basic rock beat: kick + snare only.
     easy_lanes = {n.lane for n in diffs[Difficulty.EASY].notes}
-    assert easy_lanes <= {0, 1, 2}, f"easy has non-(kick/snare/hat) lanes: {easy_lanes}"
-    medium_lanes = {n.lane for n in diffs[Difficulty.MEDIUM].notes}
-    assert medium_lanes <= {0, 1, 2}, f"medium keeps toms/cymbals: {medium_lanes}"
-    hard_lanes = {n.lane for n in diffs[Difficulty.HARD].notes}
-    assert 4 not in hard_lanes, f"hard keeps cymbals: {hard_lanes}"
+    assert easy_lanes <= {0, 1}, f"easy not basic kick/snare beat: {easy_lanes}"
+    # Each difficulty is non-empty.
+    for d in (Difficulty.HARD, Difficulty.MEDIUM, Difficulty.EASY):
+        assert counts[d] > 0, f"{d} is empty"
+
+
+def test_reduce_double_bass_collapses_rapid_kicks():
+    """v0.1.0: Rock Band forbids fully-authored double bass. Rapid kick bursts
+    (two kicks closer than MIN_KICK_GAP) must collapse to a single foot hit; other
+    lanes and well-spaced kicks must survive untouched."""
+    from autorb.transcribe.instruments.drums import reduce_double_bass
+    from autorb.transcribe.instruments.difficulty import ChartNote
+
+    def note(t, lane):
+        return ChartNote(time=t, lane=lane, length=0.0, difficulty_pitch=36 + lane)
+
+    # 5 kicks: at 0.0, 0.05 (rapid), 0.30, 0.34 (rapid), 0.60. Two bursts of two.
+    notes = [
+        note(0.00, 0), note(0.05, 0),          # burst 1 -> keep 0.00
+        note(0.30, 1),                          # snare, untouched
+        note(0.40, 0), note(0.45, 0),          # burst 2 -> keep 0.40
+        note(0.70, 2),                          # hat, untouched
+    ]
+    out = reduce_double_bass(notes, min_gap=0.11)
+    kept_times = sorted(n.time for n in out if n.lane == 0)
+    assert kept_times == [0.0, 0.40], f"rapid kicks not collapsed: {kept_times}"
+    # non-kick lanes survive
+    assert sorted(n.lane for n in out) == [0, 0, 1, 2], sorted(n.lane for n in out)
+
+
+def _chord_events_to_notes(events):
+    """events: list of (time, [lanes]) -> flat ChartNote list."""
+    from autorb.transcribe.instruments.difficulty import ChartNote
+    notes = []
+    for t, lanes in events:
+        for l in lanes:
+            notes.append(ChartNote(time=t, lane=l, length=0.0,
+                                   difficulty_pitch=60 + l, velocity=100))
+    return notes
+
+
+def test_fretted_difficulty_chord_and_grid_rules():
+    """v0.1.0: guitar/bass difficulty derivation enforces the RBN authoring rules:
+    Hard drops 3-note / Green-Orange chords to 2 notes; Medium keeps only 2-note
+    allowed chords and drops 8th-note (off-beat) single notes; Easy has no chords
+    at all (single root notes) and keeps only half-note-grid notes."""
+    from autorb.transcribe.instruments.difficulty import (
+        InstrumentChart, create_all_difficulties, Difficulty,
+    )
+
+    # Quarter-beat chords + 8th-note single notes (alternating lanes).
+    events = [
+        (0.0, [0, 1, 2]),    # 3-note chord on beat 1  -> Hard keeps 2, Medium keeps 2, Easy single
+        (0.5, [0, 4]),       # Green/Orange chord      -> reduced
+        (0.25, [2]),         # 8th single (off-beat)   -> Medium drops, Easy drops
+        (0.75, [3]),         # 8th single (off-beat)   -> Medium drops, Easy drops
+        (1.0, [1, 2]),       # 2-note allowed chord on beat 3
+        (1.25, [0]),         # 8th single
+        (1.5, [2, 4]),       # Red/Orange -> forbidden on Medium
+        (1.75, [1]),
+    ]
+    chart = InstrumentChart(notes=_chord_events_to_notes(events), tempo_map=[(0, 120)])
+    diffs = create_all_difficulties(chart, "guitar")
+
+    def lane_sets(notes):
+        # group simultaneous lanes into chord "tuples" for inspection
+        evs = {}
+        for n in sorted(notes, key=lambda x: x.time):
+            evs.setdefault(round(n.time, 3), set()).add(n.lane)
+        return evs
+
+    hard = lane_sets(diffs[Difficulty.HARD].notes)
+    medium = lane_sets(diffs[Difficulty.MEDIUM].notes)
+    easy = lane_sets(diffs[Difficulty.EASY].notes)
+
+    # Hard: no 3-note chord, no Green/Orange {0,4}.
+    for lanes in hard.values():
+        assert len(lanes) <= 2, f"Hard has 3+ note chord: {lanes}"
+        assert lanes != {0, 4}, f"Hard keeps Green/Orange: {lanes}"
+
+    # Medium: only allowed 2-note chords; no {0,3},{0,4},{2,4}; no 3-note.
+    # Medium also drops 8th-note (off-beat) singles, keeping quarter-note beats.
+    for t, lanes in medium.items():
+        assert len(lanes) <= 2, f"Medium has 3+ note chord: {lanes}"
+        assert lanes not in ({0, 3}, {0, 4}, {2, 4}), f"Medium forbidden chord: {lanes}"
+    assert set(round(t, 3) for t in medium.keys()) == {0.0, 0.5, 1.0, 1.5}, \
+        f"Medium did not drop off-beat 8ths: {sorted(medium.keys())}"
+
+    # Easy: every event is a single note (no chords).
+    for lanes in easy.values():
+        assert len(lanes) == 1, f"Easy has a chord: {lanes}"
+
+    # Non-increasing and Expert strictly simpler than Easy.
+    counts = {d: len(diffs[d].notes) for d in diffs}
+    assert counts[Difficulty.EXPERT] >= counts[Difficulty.HARD] >= \
+        counts[Difficulty.MEDIUM] >= counts[Difficulty.EASY]
+    assert counts[Difficulty.EXPERT] > counts[Difficulty.EASY]
+
 
 
