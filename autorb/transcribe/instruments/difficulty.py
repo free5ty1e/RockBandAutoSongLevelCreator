@@ -18,6 +18,58 @@ class Difficulty(Enum):
     EASY = "easy"
 
 
+def _local_bpm(tempo_map, t):
+    """BPM in effect at time ``t`` given a (time, bpm) tempo map."""
+    bpm = 120.0
+    if tempo_map:
+        for (tt, bb) in tempo_map:
+            if tt <= t:
+                bpm = bb
+            else:
+                break
+    return bpm
+
+
+def _snap(time: float, tempo_map, divisions: int = 2) -> float:
+    """Snap a time to the nearest ``divisions``-per-beat grid at the local BPM.
+
+    divisions=2 -> 1/8 notes. Used to de-"sporadic"-ify drum charts so hits
+    land where a drummer expects them on the beat grid.
+    """
+    if not tempo_map:
+        return time
+    step = (60.0 / _local_bpm(tempo_map, time)) / divisions
+    return round(time / step) * step
+
+
+def _drum_reduce(notes, tempo_map, keep_lanes, divisions: int = 2, half_kick: bool = False):
+    """Role/lane-based drum difficulty reduction.
+
+    Keeps only the requested lanes (0=kick, 1=snare, 2=hat, 3=tom/ride,
+    4=crash), snaps to the beat grid, and (for Easy) drops every other kick so
+    the chart is strictly simpler than Medium. Returns fresh ChartNotes.
+    """
+    out = []
+    kick_count = 0
+    for n in sorted(notes, key=lambda x: x.time):
+        if n.lane not in keep_lanes:
+            continue
+        if half_kick and n.lane == 0:
+            kick_count += 1
+            if kick_count % 2 == 0:
+                continue
+        out.append(ChartNote(
+            time=_snap(n.time, tempo_map, divisions),
+            lane=n.lane,
+            length=0,
+            is_open=False,
+            is_hopo=False,
+            velocity=100,
+            difficulty_pitch=n.difficulty_pitch,
+        ))
+    return out
+
+
 @dataclass
 class ChartNote:
     """A single note in a chart."""
@@ -91,7 +143,21 @@ class DifficultyReducer:
         Expert → Hard: Remove ~20-30% notes.
         Keep all HOPOs, chords, holds, solo/BRE sections.
         Cap density at ~14 notes/sec.
+
+        Drums: drop cymbals (lane 4) and snap to the 1/8 grid so Hard is a
+        strictly simpler, on-grid kit chart than Expert.
         """
+        if self.instrument == 'drums':
+            notes = _drum_reduce(chart.notes, chart.tempo_map, keep_lanes={0, 1, 2, 3}, divisions=2)
+            return InstrumentChart(
+                notes=notes,
+                tempo_map=chart.tempo_map,
+                solo_sections=chart.solo_sections,
+                bre_section=chart.bre_section,
+                overdrive_phrases=chart.overdrive_phrases,
+                metadata={**chart.metadata, 'difficulty': 'hard'},
+            )
+
         notes = self._thin_notes(chart.notes, target_density=14.0, preserve_important=True)
         
         return InstrumentChart(
@@ -107,9 +173,20 @@ class DifficultyReducer:
         """
         Hard → Medium:
         - Guitar/Bass: Remove HOPOs (convert to strums), max 2-note chords, no orange lane
-        - Drums: Ride → Hi-hat, remove tom fills, basic kick/snare/hat pattern
+        - Drums: Keep kick/snare/hat (drop toms + cymbals) and snap to the 1/8 grid
         - Cap density at ~10 notes/sec
         """
+        if self.instrument == 'drums':
+            notes = _drum_reduce(chart.notes, chart.tempo_map, keep_lanes={0, 1, 2}, divisions=2)
+            return InstrumentChart(
+                notes=notes,
+                tempo_map=chart.tempo_map,
+                solo_sections=chart.solo_sections,
+                bre_section=chart.bre_section,
+                overdrive_phrases=chart.overdrive_phrases,
+                metadata={**chart.metadata, 'difficulty': 'medium'},
+            )
+
         notes = []
         
         for note in chart.notes:
@@ -136,18 +213,6 @@ class DifficultyReducer:
                 if new_note.is_chord and len(new_note.chord_notes) > 1:
                     # Keep only root + one other (simplified)
                     pass  # Handled at chord level
-            
-            # Drums: map ride/crash to hi-hat, remove toms
-            if self.instrument == 'drums':
-                if new_note.lane == 3:  # Blue (ride)
-                    new_note.lane = 2  # Map to yellow (hi-hat)
-                    new_note.difficulty_pitch = 42  # Hi-hat pitch
-                elif new_note.lane == 4:  # Orange (crash)
-                    new_note.lane = 2  # Map to yellow (hi-hat)
-                    new_note.difficulty_pitch = 42
-                elif new_note.lane >= 2 and new_note.length == 0:  # Toms (often on yellow/red/green)
-                    # Keep only if it's a clear tom pattern, otherwise skip
-                    pass  # Simplified: remove tom fills
             
             notes.append(new_note)
         
@@ -194,22 +259,14 @@ class DifficultyReducer:
                 notes.append(new_note)
         
         elif self.instrument == 'drums':
-            # Basic rock beat pattern
-            # This is a simplified approach - in practice you'd quantize to a grid
-            # and only keep kick on 1/3, snare on 2/4, hat on eighths
-            for note in chart.notes:
-                if note.lane in (0, 1, 2):  # Kick, snare, hat only
-                    new_note = ChartNote(
-                        time=note.time,
-                        lane=note.lane,
-                        length=0,
-                        is_open=False,
-                        is_hopo=False,
-                        velocity=100,
-                        difficulty_pitch=note.difficulty_pitch,
-                    )
-                    notes.append(new_note)
-        
+            # Basic rock beat: kick/snare/hat on the 1/8 grid, every other kick
+            # dropped so Easy is strictly simpler than Medium. (Toms/cymbals are
+            # already gone after _to_medium.)
+            notes = _drum_reduce(
+                chart.notes, chart.tempo_map,
+                keep_lanes={0, 1, 2}, divisions=2, half_kick=True,
+            )
+
         # Thin to density cap
         notes = self._thin_notes(notes, target_density=6.0, preserve_important=False)
         

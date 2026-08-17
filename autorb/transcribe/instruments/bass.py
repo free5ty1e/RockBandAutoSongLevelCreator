@@ -133,30 +133,50 @@ def detect_holds_bass(
 ) -> list:
     """
     Detect held notes - very common in bass (whole notes, half notes).
+
+    A hold is capped to the onset of the NEXT note so two clearly separate bass
+    notes are never merged into one super-long sustain (the old code walked the
+    RMS envelope at a flat 25% threshold for up to 8 s, so a ringing/compressed
+    bass tone kept RMS above threshold across the gap to the next attack and the
+    first note's sustain reached the second).
     """
     y, _ = librosa.load(audio_path, sr=sr, mono=True)
     hop_length = 512
-    
+
     rms = librosa.feature.rms(y=y, hop_length=hop_length, frame_length=2048)[0]
     rms_times = librosa.times_like(rms, sr=sr, hop_length=hop_length)
-    
+
+    # Sorted onset times so we can cap a hold to the next attack.
+    sorted_times = sorted(o['time'] for o in onsets)
+    next_after = {}
+    for t in sorted_times:
+        nxt = next((s for s in sorted_times if s > t + 1e-4), None)
+        next_after[t] = nxt
+
     for onset in onsets:
         if onset['pitch_hz'] <= 0:
             continue
-        
+
         onset_idx = np.argmin(np.abs(rms_times - onset['time']))
-        threshold = rms[onset_idx] * 0.25  # Bass sustains well, lower threshold
-        
+        threshold = rms[onset_idx] * 0.45  # Track the note's own decay, not a flat 25%
+        if threshold <= 0:
+            continue
+
         hold_duration = 0.0
         for j in range(onset_idx + 1, min(onset_idx + int(sr * 8.0 / 512), len(rms))):  # Up to 8s
             if rms[j] >= threshold:
                 hold_duration = librosa.frames_to_time(j, sr=sr, hop_length=hop_length) - onset['time']
             else:
                 break
-        
+
+        # Cap to the next attack so separate notes stay separate.
+        cap = next_after.get(onset['time'])
+        if cap is not None:
+            hold_duration = min(hold_duration, cap - onset['time'] - 0.01)
+
         if hold_duration >= min_hold_duration:
             onset['hold_duration'] = hold_duration
-    
+
     return onsets
 
 
@@ -265,7 +285,10 @@ def transcribe_bass(
         InstrumentChart with Expert difficulty
     """
     # 1. Onset detection
-    onset_result = detect_onsets_librosa(stem_path, sr=sr)
+    # wait=3 (vs the default 5) makes rapid bass attacks separate onsets instead
+    # of merging into one sustained note, addressing "separate bass notes merged
+    # into one long hold" feedback.
+    onset_result = detect_onsets_librosa(stem_path, sr=sr, wait=3)
     onset_result = merge_nearby_onsets(onset_result, min_interval=0.03)
     onset_result = filter_onsets_by_strength(onset_result, min_strength=0.1)
     
@@ -279,8 +302,11 @@ def transcribe_bass(
     for i, onset in enumerate(onsets_with_pitch):
         onset['strength'] = onset_result.strengths[i]
     
-    # Filter
-    onsets_with_pitch = [o for o in onsets_with_pitch if o['confidence'] > 0.4 and o['pitch_hz'] > 0]
+    # Filter. Lowered from the old 0.4 gate (then 0.25): a strict
+    # monophonic-confidence gate dropped legitimate low-confidence bass attacks,
+    # so clearly separate notes got merged into one long hold. We keep the dense
+    # onset backbone and rely on pitch presence instead (mirrors guitar v0.0.98).
+    onsets_with_pitch = [o for o in onsets_with_pitch if o['confidence'] > 0.1 and o['pitch_hz'] > 0]
     
     # 3. Detect tuning
     pitches = np.array([o['pitch_hz'] for o in onsets_with_pitch])

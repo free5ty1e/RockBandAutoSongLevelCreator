@@ -223,3 +223,50 @@ def test_simultaneous_notes_stay_simultaneous():
         f"single note 97 collided with chord tick: {onsets_by_tick}"
     )
 
+
+def test_drum_difficulties_are_distinct_and_decreasing():
+    """v0.0.99: Hard/Medium/Easy must be strictly simpler than Expert and
+    lane-distinct (not byte-identical copies). The old reducer only thinned by
+    note density (~6-16 notes/sec); drum density (~2.9/sec) was below every cap,
+    so all four difficulties came out identical -> useless on a real PS4 kit.
+
+    With a chart that uses all 5 lanes (kick/snare/hat/tom/cymbal), Hard drops
+    cymbals (lane 4), Medium additionally drops toms (lane 3), and Easy halves
+    the kick count (lane 0).
+    """
+    from autorb.transcribe.instruments.difficulty import (
+        ChartNote,
+        InstrumentChart,
+        create_all_difficulties,
+        Difficulty,
+    )
+
+    lanes = [0, 1, 2, 3, 4]
+    notes = [
+        ChartNote(
+            time=0.25 * i,
+            lane=lanes[i % 5],
+            length=0.0,
+            difficulty_pitch=36 + lanes[i % 5],
+            velocity=100,
+        )
+        for i in range(40)
+    ]
+    expert = InstrumentChart(notes=notes, tempo_map=[(0, 120)])
+    diffs = create_all_difficulties(expert, "drums")
+
+    counts = {d: len(diffs[d].notes) for d in diffs}
+    # Strictly decreasing: expert > hard > medium > easy.
+    assert counts[Difficulty.EXPERT] > counts[Difficulty.HARD] > \
+        counts[Difficulty.MEDIUM] > counts[Difficulty.EASY], (
+        f"drum difficulties not strictly decreasing: {counts}"
+    )
+    # Lane sets narrow as difficulty drops: easy has no toms/cymbals.
+    easy_lanes = {n.lane for n in diffs[Difficulty.EASY].notes}
+    assert easy_lanes <= {0, 1, 2}, f"easy has non-(kick/snare/hat) lanes: {easy_lanes}"
+    medium_lanes = {n.lane for n in diffs[Difficulty.MEDIUM].notes}
+    assert medium_lanes <= {0, 1, 2}, f"medium keeps toms/cymbals: {medium_lanes}"
+    hard_lanes = {n.lane for n in diffs[Difficulty.HARD].notes}
+    assert 4 not in hard_lanes, f"hard keeps cymbals: {hard_lanes}"
+
+

@@ -181,12 +181,14 @@ def detect_holds(
     onsets: list[GuitarOnset],
     audio_path: Path,
     sr: int = 44100,
-    min_hold_duration: float = 1.0,  # Minimum 1 beat at 60 BPM
+    min_hold_duration: float = 0.3,  # A genuine sustain, not a decaying strum
 ) -> list[GuitarOnset]:
     """
     Detect held notes by checking energy decay after onset.
     
-    If energy stays high after onset, it's likely a held note.
+    If energy stays high after onset, it's likely a held note. Holds are capped
+    to the next onset later in transcribe_guitar so a sustained chord never
+    bleeds into (and merges with) the following strum.
     """
     y, _ = librosa.load(audio_path, sr=sr, mono=True)
     hop_length = 512
@@ -203,9 +205,9 @@ def detect_holds(
         
         # Look ahead for energy decay
         hold_duration = 0.0
-        threshold = rms[onset_idx] * 0.3  # 30% of initial energy
+        threshold = rms[onset_idx] * 0.25  # 25% of initial energy
         
-        for j in range(onset_idx + 1, min(onset_idx + int(sr * min_hold_duration / hop_length), len(rms))):
+        for j in range(onset_idx + 1, min(onset_idx + int(sr * 2.0 / hop_length), len(rms))):
             if rms[j] >= threshold:
                 hold_duration = rms_times[j] - onset.time
             else:
@@ -418,7 +420,10 @@ def detect_chord_tones(
         if col.size == 0 or col.max() <= 0:
             out.append([])
             continue
-        thr = col.max() * 0.25
+        # Only consider strong partials (>= 50% of the column peak). The old
+        # 0.25 threshold let spectral leakage into neighbouring semitones and weak
+        # overtones register as extra "chord tones", ballooning the note count.
+        thr = col.max() * 0.5
         peaks = []
         for i in range(1, len(col) - 1):
             if col[i] >= thr and col[i] >= col[i - 1] and col[i] >= col[i + 1]:
@@ -428,15 +433,22 @@ def detect_chord_tones(
         for _mag, f in peaks:
             if f < 70 or f > 1200:
                 continue
-            harmonic = False
+            reject = False
             for _cm, cf in chosen:
-                for h in (0.5, 1 / 3, 2.0, 3.0):
-                    if abs(f - cf * h) < 8:
-                        harmonic = True
-                        break
-                if harmonic:
+                # Spectral leakage: a single note's energy smears into the
+                # adjacent +/-1-2 semitone CQT bins, which otherwise read as
+                # separate tones. Reject anything within ~1.5 semitones.
+                if abs(12.0 * np.log2(f / cf)) < 1.5:
+                    reject = True
                     break
-            if not harmonic:
+                # Harmonic partials (and their sub-octaves) are not chord tones.
+                for h in (0.5, 1 / 3, 1 / 4, 2.0, 3.0, 4.0, 5.0):
+                    if abs(f - cf * h) < 6:
+                        reject = True
+                        break
+                if reject:
+                    break
+            if not reject:
                 chosen.append((_mag, f))
             if len(chosen) >= top_k:
                 break
@@ -472,7 +484,7 @@ def transcribe_guitar(
     onset_strs = onset_result.strengths
 
     # 3. Multi-pitch (chord) detection per onset — the core fix for chords.
-    chord_tone_lists = detect_chord_tones(stem_path, onset_times, sr=sr, top_k=4)
+    chord_tone_lists = detect_chord_tones(stem_path, onset_times, sr=sr, top_k=3)
 
     # 4. Tuning + capo from the full set of detected tones.
     all_tones = np.array([f for tones in chord_tone_lists for f in tones])
@@ -502,6 +514,13 @@ def transcribe_guitar(
     ]
     onsets_with_pitch = detect_chords(onsets_with_pitch)
     onsets_with_pitch = detect_holds(onsets_with_pitch, stem_path, sr=sr)
+    # Cap every hold to the next onset so a sustained note never reaches (and
+    # merges with) the next strum — two rapid strums must stay two notes.
+    _onset_times = sorted(o.time for o in onsets_with_pitch)
+    _next = {t: next((s for s in _onset_times if s > t + 1e-4), None) for t in _onset_times}
+    for o in onsets_with_pitch:
+        if getattr(o, 'hold_duration', 0) and _next.get(o.time) is not None:
+            o.hold_duration = min(o.hold_duration, _next[o.time] - o.time - 0.01)
     solos = detect_solo_sections(onsets_with_pitch, tempo_map)
     bre = detect_bre_section(onsets_with_pitch, tempo_map, song_end)
 

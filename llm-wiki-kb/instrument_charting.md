@@ -1,6 +1,6 @@
 # AutoRB Knowledge Base - Instrument Charting
 
-How AutoRB turns separated stems into playable 5-lane instrument charts (guitar, bass, drums, keys) and how those charts are serialized to MIDI and to the Clone Hero `.chart` format. Captured at **v0.0.92** (first alpha with *real*, non-placeholder instrument charts); drum element classification + fill detection reworked in **v0.0.94**; chord (multi-pitch) transcription + simultaneous-note MIDI fix in **v0.0.98**.
+How AutoRB turns separated stems into playable 5-lane instrument charts (guitar, bass, drums, keys) and how those charts are serialized to MIDI and to the Clone Hero `.chart` format. Captured at **v0.0.92** (first alpha with *real*, non-placeholder instrument charts); drum element classification + fill detection reworked in **v0.0.94**; chord (multi-pitch) transcription + simultaneous-note MIDI fix in **v0.0.98**; bass-merge / guitar-chord-overdetection / drum-difficulty fixes in **v0.0.99**.
 
 ## Overview (v0.0.92, drum logic reworked in v0.0.94)
 
@@ -28,6 +28,15 @@ Before v0.0.98 the transcription was **monophonic**: one CREPE f0 per onset, and
 - Verified on "Open Road Song": guitar Expert went 150 monophonic → **257 with 154 chord-onsets**; keys 243 with 150 chord-onsets. PKG still builds.
 
 **Known limitation (still alpha):** chord *presence* and note *density* are now representative, but pitch/fret accuracy, strum-vs-HOPO, and rhythm alignment are unplaytest-validated and may need tuning (the CQT threshold / harmonic-rejection are first-pass). Drums remain the weakest.
+
+### v0.0.99 — bass merges, guitar chord over-detection, drum difficulty derivation
+Three playback fixes driven by PS4/Clone Hero playtest feedback (see `[[instrument_transcription_accuracy]]` and the `.ai_memory/plans/*` docs):
+
+- **Bass: separate notes no longer merge into one super-long hold.** The `> 0.4` confidence gate dropped low-confidence bass attacks, so the next *detected* onset could be seconds away and the previous note's sustain stretched across the gap. Fixed by lowering the gate to `> 0.1`, lowering onset `wait` to 3 (separate rapid attacks now register as separate onsets), and capping every hold to the next onset (`detect_holds_bass`). On "Open Road Song": bass 131 notes / max hold 6.0 s (many merged) → 227 notes / max hold 3.8 s, only 4 holds > 1.5 s.
+- **Guitar: chords are now real 2–3 note voicings, not 4-note over-detection, and sustains survive without blending.** `detect_chord_tones` was catching spectral leakage (±1 semitone around the fundamental) and weak overtones — 96 % of onsets became "chords" and 60 % carried 4 tones, ballooning the chart to 1281 notes. Tightened: salience threshold raised to 0.5 of the column peak, tones within ~1.5 semitones of an already-chosen one rejected (leakage), 4th/5th-harmonic rejection added, `top_k` lowered 4→3. Sustains were previously dropped entirely (holder required ≥1.0 s); minimum lowered to 0.3 s with the next-onset cap retained, so held chords ring and two rapid strums stay two notes. Result: 1281 → 859 notes (67 % chords, 4.1 notes/sec) with 510 capped sustains preserved.
+- **Drums: Hard/Medium/Easy are now distinct, on-grid, playable charts.** The old reducer only thinned by note density (caps 6–16/sec); drum density (~2.9/sec) was below every cap, so Hard/Medium/Easy came out byte-identical to Expert (~612 each) — useless on a real PS4 kit. `DifficultyReducer` now does role/lane-based reduction (`_drum_reduce` in `difficulty.py`): Hard drops cymbals (lane 4) and grid-quantizes to 1/8; Medium additionally drops toms (lane 3); Easy keeps kick/snare/hat and halves the kick count. Verified: Expert 800 → Hard 768 → Medium 543 → Easy 421, strictly decreasing and lane-distinct. Regression test: `tests/test_midi_structure.py::test_drum_difficulties_are_distinct_and_decreasing`.
+
+See the detailed plans in `.ai_memory/plans/instrument_transcription_accuracy.md`, `.ai_memory/plans/guitar_bass_articulation_fixes.md`, and `.ai_memory/plans/drum_difficulty_derivation.md`.
 
 ## Pipeline flow
 
@@ -70,14 +79,16 @@ The RB3 MIDI packs 4 difficulties per track; the `.chart` format wants one `[<Di
 
 ## Difficulty reduction engine (`difficulty.py :: DifficultyReducer`)
 
-`create_all_difficulties(expert, instrument)` applies `DifficultyReducer` **progressively** (Expert→Hard→Medium→Easy) with per-difficulty density caps (notes/sec): Expert 16, Hard 14, Medium 10, Easy 6. `_thin_notes` slides a 1s window and drops the least-important notes (protected = HOPO/chord/hold/solo/BRE/fill) where density exceeds the cap.
+`create_all_difficulties(expert, instrument)` applies `DifficultyReducer` **progressively** (Expert→Hard→Medium→Easy) with per-difficulty density caps (notes/sec): Expert 16, Hard 14, Medium 10, Easy 6. For guitar/bass/keys, `_thin_notes` slides a 1s window and drops the least-important notes (protected = HOPO/chord/hold/solo/BRE/fill) where density exceeds the cap. **For drums**, the density cap is almost never hit (drum density ~2.9/sec < every cap), so difficulty is instead derived role/lane-based (see below).
 
 Per-instrument rules implemented:
-- **Hard**: ~20–30% thinning, keep HOPOs/chords/holds/solos/BRE.
-- **Medium**: HOPOs→strums, drop orange lane (lane 4) for guitar/bass, ride/crash→hihat for drums, cap 10/sec.
-- **Easy**: single notes only, no blue/orange, no chords/HOPOs/solos/BRE for guitar/bass; kick/snare/hat only for drums, cap 6/sec.
+- **Hard**: ~20–30% thinning, keep HOPOs/chords/holds/solos/BRE (guitar/bass/keys). **Drums:** drop cymbals (lane 4) and snap to the 1/8 beat grid (`_drum_reduce`).
+- **Medium**: HOPOs→strums, drop orange lane (lane 4) for guitar/bass, cap 10/sec. **Drums:** keep kick/snare/hat only (drop toms lane 3 + cymbals), grid-quantized.
+- **Easy**: single notes only, no blue/orange, no chords/HOPOs/solos/BRE for guitar/bass; cap 6/sec. **Drums:** keep kick/snare/hat, grid-quantized, and **halve the kick count** so Easy is strictly simpler than Medium.
 
-**Known limitation (critical, v0.0.92):** the reducer is heuristic (density caps + lane drops), **NOT** a Rock Band-authoring pass. The actual RB rules for deriving difficulties from Expert — cascade, lane consistency, HOPO→strum on Medium/Easy, sustain pull-back, per-difficulty chord restrictions — are documented in `[[difficulty_charting]]` and are **not yet implemented**. The packed-MIDI encoding (above) also means drum/keys reductions are lost when serialized to a single track / `.chart`. This is the single biggest gap between AutoRB's instrument charts and playable, RB-correct charts.
+**Drum difficulty helper (`_drum_reduce`):** keeps only `keep_lanes` (Hard {0,1,2,3}, Medium/Easy {0,1,2}); snaps each retained note to the nearest 1/8-beat via `_snap(time, tempo_map, divisions=2)` (local BPM from the `tempo_map`); Easy additionally drops every other kick (`half_kick=True`). Lane semantics: 0=kick, 1=snare, 2=hat, 3=tom/ride, 4=crash.
+
+**Known limitation (still open):** the reducer is heuristic (density caps + role/lane drops + a coarse 1/8 grid), **NOT** a Rock Band-authoring pass. The actual RB rules for deriving difficulties from Expert — cascade, lane consistency, HOPO→strum on Medium/Easy, sustain pull-back, per-difficulty chord restrictions — are documented in `[[difficulty_charting]]` and are **not yet implemented**. The packed-MIDI encoding (above) also means drum/keys reductions are flattened when serialized to a single track / `.chart`. This remains the biggest gap between AutoRB's instrument charts and playable, RB-correct charts.
 
 ### Guitar vs Keys note-count mismatch (v0.0.92)
 Guitar and Keys both transcribe the same Demucs `other` stem, so they should represent the **same note events** (keys = actual pitches, guitar = those pitches mapped to frets/lanes). They currently diverge because `transcribe_guitar` and `transcribe_keys` run **separate** pitch-detection passes with different `fmin/fmax` (guitar pyin 80–1200 Hz, keys pyin 65–600 Hz) and guitar additionally filters through tuning/fret mapping (`build_lane_map`) that drops notes. Result: e.g. ~102 guitar vs ~87 keys notes on the test song. Fix: share one onset+pitch-detection result, then map to both lane (guitar) and piano-roll (keys). Low absolute counts on this env are mostly because **`crepe` is not installed** (see Transcription backends) — both fall back to weak librosa pyin on the polyphonic `other` stem.
@@ -91,7 +102,7 @@ Each transcriber tries a high-quality backend and falls back to librosa:
 ## Known limitations (instrument charts, v0.0.92)
 
 - **Not yet playtest-validated.** Charts are loadable and no longer crash ForgeTool, but note accuracy, HOPO/chord/sustain decisions, and drum-lane assignment need playtest tuning.
-- **Drum/Keys difficulty not differentiated** in the packed MIDI or `.chart` (pitch-ambiguous; CH needs fixed drum pitches). Easy/Medium/Hard drums == Expert in the exported chart.
+- **Keys difficulty not differentiated** beyond density thinning in the packed MIDI / `.chart` (Easy/Medium may still equal Expert when key density is low). **Drums ARE now differentiated** (v0.0.99): Hard drops cymbals, Medium drops toms, Easy halves the kick, all grid-quantized — so PS4 kit players get a genuinely easier chart per difficulty. Clone Hero still shows identical drum counts across difficulties (CH requires every hit in every difficulty), which is expected.
 - **Clone Hero does not support Keys** — `[*Keys]` sections are emitted but ignored by CH; validate keys only in RB3/RB4.
 - **Guitar/Bass sparseness (largely fixed in v0.0.98).** The old CREPE-confidence gate dropped ~90% of onsets; v0.0.98 recovers density via a dense onset backbone + per-onset multi-pitch, so chord *presence* and note *count* are now representative even without CREPE. Remaining gap is pitch/fret **accuracy** and rhythm alignment, not raw count.
 - **Guitar + Keys share the Demucs `other` stem**, so keys transcription is a re-map of the guitar onsets, not a separate keys source.
