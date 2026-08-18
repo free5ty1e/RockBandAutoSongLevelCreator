@@ -245,11 +245,13 @@ def _reduce_fretted(notes, tempo_map, difficulty, all_lanes: bool):
     out = dedup
 
     # Keep only notes that sit on the difficulty's *coarser* grid — this is what
-    # actually thins the chart (Medium = quarter notes, Easy = half notes); Hard
+    # actually thins the chart (Medium = 1/8 notes, Easy = half notes); Hard
     # keeps the 1/8 grid. We filter rather than snap off-beats onto the beat, so
-    # an 8th-note run becomes a quarter-note run, not a stack of chords.
+    # an 8th-note run becomes an 8th-note (or sparser) run, not a stack of chords.
+    # Medium allows eighths (a steady 8th-note groove is standard RB Medium and
+    # keeps the kit/guitar feeling like a beat instead of a sparse quarter grid).
     if difficulty == Difficulty.MEDIUM:
-        out = [n for n in out if _on_grid(n.time, tempo_map, 1)]
+        out = [n for n in out if _on_grid(n.time, tempo_map, 2)]
     elif difficulty == Difficulty.EASY:
         out = [n for n in out if _on_grid(n.time, tempo_map, 0.5)]
 
@@ -451,9 +453,12 @@ class DifficultyReducer:
         if target == Difficulty.HARD:
             return hard_chart
         medium = _reduce_fretted(hard_chart.notes, expert_chart.tempo_map,
-                                 Difficulty.MEDIUM, all_lanes)
-        medium = _ensure_lane_consistency(expert_chart.notes, medium,
-                                           expert_chart.tempo_map, Difficulty.MEDIUM)
+                                  Difficulty.MEDIUM, all_lanes)
+        # NOTE: lane-consistency is intentionally NOT applied to Medium. Medium
+        # is allowed to use fewer lanes than Hard (e.g. it legitimately drops
+        # orange / certain 2-note pairs), and forcing every Expert lane into
+        # Medium would make Medium denser than Hard, inverting the difficulty
+        # ordering. Hard and Easy still get lane-consistency below.
         medium_chart = self._wrap(medium, expert_chart, "medium")
         if target == Difficulty.MEDIUM:
             return medium_chart

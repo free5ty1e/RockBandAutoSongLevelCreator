@@ -293,8 +293,12 @@ def build_instrument_track(
         base = LANE_BASE[diff]
         
         if chart is None:
-            # Should not happen since we handled all-None case above, but safety fallback
-            pitch = LANE_BASE[diff] if instrument != 'drums' else 36
+            # Safety fallback: always use the difficulty-offset base pitch (base + lane 0)
+            # so ForgeTool's AddGem() places the note in the correct difficulty slot.
+            # Raw drum pitches (35-51) fall in ForgeTool's DrumAnimStart..DrumAnimEnd range
+            # and cause AddGem() to return false, leaving gem_tracks[diff] null and crashing
+            # the subsequent .Select(g => g.ToArray()) call with a NullReferenceException.
+            pitch = base + 0  # lane 0 at the correct difficulty base
             all_notes.append((count_in_ticks, pitch, 100, 120, diff))
             continue
         
@@ -302,8 +306,20 @@ def build_instrument_track(
         
         for note in chart.notes:
             target_start = time_to_tick(note.time) + count_in_ticks
-            target_end = target_start + int(note.length * 480 * 120 / 60) if note.length > 0 else target_start + 120
-            
+            # Derive the sustain in ticks from the REAL tempo map (time_to_tick),
+            # NOT a hardcoded 120 BPM. The old `note.length * 480 * 120 / 60`
+            # conversion silently stretched/compressed every sustain for any song
+            # not at exactly 120 BPM (e.g. ~76 BPM made a 2.0s-cap render as
+            # ~3.14s and bled into the next same-lane note).
+            if note.length > 0:
+                end_tick = time_to_tick(note.time + note.length) + count_in_ticks
+                target_end = end_tick
+                duration = end_tick - target_start
+            else:
+                target_end = target_start + 120
+                duration = 120
+            duration = max(48, int(round(duration)))
+
             # Determine MIDI pitch for this note.
             # ForgeTool (LibForge) requires difficulty-offset pitches for EVERY
             # instrument: Easy 60 / Medium 72 / Hard 84 / Expert 96, lane = key - base
@@ -328,9 +344,34 @@ def build_instrument_track(
                     lane = 0
                 pitch = base + lane
             
-            duration = max(48, int((note.length * 480 * 120 / 60)) if note.length > 0 else 120)
             all_notes.append((target_start, pitch, note.velocity, duration, diff))
-    
+
+    # Defensive passes to guarantee a legal Rock Band instrument track:
+    #   1. Collapse exact (tick, pitch) duplicates (a note charted twice on the
+    #      same lane at the same instant renders as overlapping MIDI gems).
+    #   2. Clamp every note's tail to one tick before the next same-pitch note.
+    #      Source charts cap `length` but `build_instrument_track` floors
+    #      zero-length notes at 120 ticks, which can bleed past a close successor;
+    #      Rock Band forbids overlapping same-lane gems, so we enforce it here.
+    # Tuple layout: (tick, pitch, velocity, duration, difficulty)
+    _seen = {}
+    for _ts, _pitch, _vel, _dur, _diff in all_notes:
+        _k = (_ts, _pitch)
+        if _k not in _seen or _dur > _seen[_k][3]:
+            _seen[_k] = (_ts, _pitch, _vel, _dur, _diff)
+    _by_pitch = {}
+    for _rec in sorted(_seen.values(), key=lambda r: (r[1], r[0])):
+        _ts, _pitch, _vel, _dur, _diff = _rec
+        _prev = _by_pitch.get(_pitch)
+        if _prev is not None:
+            _pts, _pdur = _prev
+            if _ts <= _pts + _pdur:
+                _new = max(1, _ts - _pts - 1)
+                _old = _seen[(_pts, _pitch)]
+                _seen[(_pts, _pitch)] = (_pts, _pitch, _old[2], _new, _old[4])
+        _by_pitch[_pitch] = (_ts, _dur)
+    all_notes = list(_seen.values())
+
     # Sort all notes by time, then by difficulty order (expert first for same time)
     diff_order = {'expert': 0, 'hard': 1, 'medium': 2, 'easy': 3}
     all_notes.sort(key=lambda x: (x[0], diff_order.get(x[4] if len(x) > 4 else 'expert', 0)))
@@ -343,7 +384,10 @@ def build_instrument_track(
     # simultaneous notes truly simultaneous.
     flat = []
     for target_start, pitch, velocity, duration, _ in all_notes:
-        dur = max(48, duration)
+        # `duration` already carries its 48-tick floor (set when each note was
+        # built) and any same-pitch clamp from the de-overlap pass above; do NOT
+        # re-floor here, or a clamped tail would be re-inflated past its stop.
+        dur = max(1, int(duration))
         flat.append((target_start, 0, pitch, velocity))      # note-on
         flat.append((target_start + dur, 1, pitch, 0))        # note-off
     flat.sort(key=lambda e: (e[0], e[1]))

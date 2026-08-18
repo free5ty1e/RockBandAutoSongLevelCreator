@@ -317,10 +317,11 @@ def _chord_events_to_notes(events):
 
 
 def test_fretted_difficulty_chord_and_grid_rules():
-    """v0.1.0: guitar/bass difficulty derivation enforces the RBN authoring rules:
+    """Guitar/bass difficulty derivation enforces the RBN authoring rules:
     Hard drops 3-note / Green-Orange chords to 2 notes; Medium keeps only 2-note
-    allowed chords and drops 8th-note (off-beat) single notes; Easy has no chords
-    at all (single root notes) and keeps only half-note-grid notes."""
+    allowed chords (no {0,3}/{0,4}/{2,4}) and keeps the 1/8 grid (so eighth-note
+    grooves survive — Medium is no longer quarter-only); Easy has no chords at all
+    (single root notes) and keeps only half-note-grid notes."""
     from autorb.transcribe.instruments.difficulty import (
         InstrumentChart, create_all_difficulties, Difficulty,
     )
@@ -329,8 +330,8 @@ def test_fretted_difficulty_chord_and_grid_rules():
     events = [
         (0.0, [0, 1, 2]),    # 3-note chord on beat 1  -> Hard keeps 2, Medium keeps 2, Easy single
         (0.5, [0, 4]),       # Green/Orange chord      -> reduced
-        (0.25, [2]),         # 8th single (off-beat)   -> Medium drops, Easy drops
-        (0.75, [3]),         # 8th single (off-beat)   -> Medium drops, Easy drops
+        (0.25, [2]),         # 8th single (off-beat)   -> kept on Medium 1/8 grid
+        (0.75, [3]),         # 8th single (off-beat)   -> kept
         (1.0, [1, 2]),       # 2-note allowed chord on beat 3
         (1.25, [0]),         # 8th single
         (1.5, [2, 4]),       # Red/Orange -> forbidden on Medium
@@ -356,22 +357,94 @@ def test_fretted_difficulty_chord_and_grid_rules():
         assert lanes != {0, 4}, f"Hard keeps Green/Orange: {lanes}"
 
     # Medium: only allowed 2-note chords; no {0,3},{0,4},{2,4}; no 3-note.
-    # Medium also drops 8th-note (off-beat) singles, keeping quarter-note beats.
+    # Medium keeps the 1/8 grid, so off-beat 8th singles survive (not dropped).
     for t, lanes in medium.items():
         assert len(lanes) <= 2, f"Medium has 3+ note chord: {lanes}"
         assert lanes not in ({0, 3}, {0, 4}, {2, 4}), f"Medium forbidden chord: {lanes}"
-    assert set(round(t, 3) for t in medium.keys()) == {0.0, 0.5, 1.0, 1.5}, \
-        f"Medium did not drop off-beat 8ths: {sorted(medium.keys())}"
+    assert set(round(t, 3) for t in medium.keys()) == \
+        {0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75}, \
+        f"Medium did not keep off-beat 8ths on the 1/8 grid: {sorted(medium.keys())}"
 
     # Easy: every event is a single note (no chords).
     for lanes in easy.values():
         assert len(lanes) == 1, f"Easy has a chord: {lanes}"
 
-    # Non-increasing and Expert strictly simpler than Easy.
+    # Expert is the richest; Easy is the sparsest. Hard >= Medium holds because
+    # Medium drops more chord types (and does not get lane-consistency).
     counts = {d: len(diffs[d].notes) for d in diffs}
-    assert counts[Difficulty.EXPERT] >= counts[Difficulty.HARD] >= \
-        counts[Difficulty.MEDIUM] >= counts[Difficulty.EASY]
+    assert counts[Difficulty.EXPERT] >= counts[Difficulty.HARD]
+    assert counts[Difficulty.HARD] >= counts[Difficulty.MEDIUM]
+    assert counts[Difficulty.MEDIUM] >= counts[Difficulty.EASY]
     assert counts[Difficulty.EXPERT] > counts[Difficulty.EASY]
+
+
+def _same_lane_overlaps_for_pitch_range(track_bytes, base):
+    """Count overlapping note pairs on the same lane within a difficulty."""
+    import io
+    import struct
+
+    from collections import defaultdict
+
+    full = b"MThd" + struct.pack(">IHHH", 6, 1, 1, 480) + track_bytes
+    mid = mido.MidiFile(file=io.BytesIO(full))
+    on, off = [], {}
+    t = 0
+    for msg in mid.tracks[0]:
+        t += msg.time
+        if msg.type == "note_on" and msg.velocity > 0:
+            on.append((t, msg.note))
+        elif msg.type == "note_off":
+            off[(t, msg.note)] = 1
+    ends = []
+    for (t, p) in on:
+        e = t
+        for (ot, q) in off:
+            if q == p and ot >= t:
+                e = ot
+                break
+        ends.append((t, e, p))
+    by = defaultdict(list)
+    ov = 0
+    for (t, e, p) in sorted(ends):
+        lane = p - base
+        for (ps, pe) in by[lane]:
+            if t < pe - 1:
+                ov += 1
+        by[lane].append((t, e))
+    return ov
+
+
+def test_instrument_tracks_have_no_same_lane_overlaps():
+    """Regression: zero-length floors and cross-group (time, lane) duplicates
+    must not produce overlapping same-lane MIDI gems (illegal in Rock Band).
+
+    Reproduces two failure modes fixed in 0.1.2:
+      * a length=0 note floored at 120 ticks bleeding past a close successor, and
+      * two notes on the same lane at the same quantized time (chord-group collision).
+    """
+    from autorb.export.midi_generator import build_instrument_track
+    from autorb.transcribe.instruments.difficulty import (
+        ChartNote,
+        Difficulty,
+        InstrumentChart,
+    )
+
+    # Expert chart: A (len=0 -> 120-tick floor) at 1.0s, B at 1.087s same lane 0
+    # (overlap unless clamped); plus a cross-group duplicate on lane 1 at 2.0s.
+    notes = [
+        ChartNote(time=1.0, lane=0, length=0.0, difficulty_pitch=60, velocity=100),
+        ChartNote(time=1.087, lane=0, length=0.2, difficulty_pitch=60, velocity=100),
+        ChartNote(time=2.0, lane=1, length=0.1, difficulty_pitch=61, velocity=100),
+        ChartNote(time=2.0, lane=1, length=0.3, difficulty_pitch=61, velocity=100),
+    ]
+    charts = {Difficulty.EXPERT: InstrumentChart(notes=notes, tempo_map=[(0, 120)])}
+    time_to_tick = lambda s: int(s * 480)  # 120 BPM -> 480 ticks/sec
+
+    data = build_instrument_track(charts, "guitar", 0, time_to_tick)
+    for base, name in [(96, "expert"), (84, "hard"), (72, "medium"), (60, "easy")]:
+        assert _same_lane_overlaps_for_pitch_range(data, base) == 0, (
+            f"{name} track has overlapping same-lane notes"
+        )
 
 
 
