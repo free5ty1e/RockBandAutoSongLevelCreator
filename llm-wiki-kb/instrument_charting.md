@@ -1,6 +1,6 @@
 # AutoRB Knowledge Base - Instrument Charting
 
-How AutoRB turns separated stems into playable 5-lane instrument charts (guitar, bass, drums, keys) and how those charts are serialized to MIDI and to the Clone Hero `.chart` format. Captured at **v0.0.92** (first alpha with *real*, non-placeholder instrument charts); drum element classification + fill detection reworked in **v0.0.94**; chord (multi-pitch) transcription + simultaneous-note MIDI fix in **v0.0.98**; bass-merge / guitar-chord-overdetection / drum-difficulty fixes in **v0.0.99**; Clone Hero drum-flattening fix + Expert double-bass reducer in **v0.1.0** (difficulty-derivation rules documented in `[[difficulty_charting]]`); difficulty-derivation rewrite in **v0.1.1**; illegal same-lane-overlap fix in **v0.1.2**.
+How AutoRB turns separated stems into playable 5-lane instrument charts (guitar, bass, drums, keys) and how those charts are serialized to MIDI and to the Clone Hero `.chart` format. Captured at **v0.0.92** (first alpha with *real*, non-placeholder instrument charts); drum element classification + fill detection reworked in **v0.0.94**; chord (multi-pitch) transcription + simultaneous-note MIDI fix in **v0.0.98**; bass-merge / guitar-chord-overdetection / drum-difficulty fixes in **v0.0.99**; Clone Hero drum-flattening fix + Expert double-bass reducer in **v0.1.0** (difficulty-derivation rules documented in `[[difficulty_charting]]`); difficulty-derivation rewrite in **v0.1.1**; illegal same-lane-overlap fix in **v0.1.2**; drum onset fix + guitar over-charting reduction + bass frequency filter in **v0.1.3**.
 
 ## Overview (v0.0.92, drum logic reworked in v0.0.94)
 
@@ -37,6 +37,18 @@ Three playback fixes driven by PS4/Clone Hero playtest feedback (see `[[instrume
 - **Drums: Hard/Medium/Easy are now distinct, on-grid, playable charts.** The old reducer only thinned by note density (caps 6–16/sec); drum density (~2.9/sec) was below every cap, so Hard/Medium/Easy came out byte-identical to Expert (~612 each) — useless on a real PS4 kit. `DifficultyReducer` now does role/lane-based reduction (`_drum_reduce` in `difficulty.py`): Hard drops cymbals (lane 4) and grid-quantizes to 1/8; Medium additionally drops toms (lane 3); Easy keeps kick/snare/hat and halves the kick count. Verified: Expert 800 → Hard 768 → Medium 543 → Easy 421, strictly decreasing and lane-distinct. Regression test: `tests/test_midi_structure.py::test_drum_difficulties_are_distinct_and_decreasing`.
 
 See the detailed plans in `.ai_memory/plans/instrument_transcription_accuracy.md`, `.ai_memory/plans/guitar_bass_articulation_fixes.md`, and `.ai_memory/plans/drum_difficulty_derivation.md`.
+
+### v0.1.3 — Drum onset fix + Guitar over-charting reduction + Bass frequency filter
+
+Three major playability fixes driven by PS4/Clone Hero playtest feedback:
+
+1. **Drums: First 54 seconds were missing.** Root cause: `detect_onsets_librosa` used global strength normalization (95th percentile over entire 291s song). Early quiet drum hits had normalized strength ~0.09, below the 0.08 filter threshold, while later loud crashes pushed the 95th percentile to ~1.0. Only 1 onset survived in the first 60s (at 21.7s). **Fix:** Added windowed onset detection (`window_seconds=30.0`) with local 95th-percentile normalization per 30s window. Drums now start at **0.10s**. The librosa fallback is now used (madmom is broken on this platform) with 30s windows and local 95th-percentile normalization. Strength threshold lowered to 0.05 for drums.
+
+2. **Guitar: Massive over-charting (3,435 → 1,829 expert notes).** Basic Pitch on the shared Demucs "other" stem (guitar + keys) detected keys/piano as guitar. **Fixes:** (a) Raised Basic Pitch thresholds (onset 0.4→0.55, frame 0.3→0.45) to reduce noise; (b) Added guitar frequency filter (75–1250 Hz) to reject piano/keys bleed; (c) Tightened chord grouping window (30ms→25ms); (d) Minimum note length 20ms. Result: 47% reduction (3,435→1,829 expert notes). Keys still reuses guitar transcription (known limitation).
+
+3. **Bass: Frequency filter added** (38–420 Hz) matching bass guitar range; guitar filter 75–1250 Hz. Prevents guitar/keys bleed on bass stem and vice versa.
+
+**Verified:** All 4 instruments × 4 difficulties now report **0 same-lane overlaps** in validation MIDI. CON + PS4 PKG build successfully. Regression test added: `tests/test_midi_structure.py::test_instrument_tracks_have_no_same_lane_overlaps`.
 
 ### v0.1.2 — illegal same-lane-overlap fix (Rock Band requires non-overlapping gems)
 

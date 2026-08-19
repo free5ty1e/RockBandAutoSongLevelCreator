@@ -51,16 +51,18 @@ def transcribe_drums(
     Returns:
         InstrumentChart with Expert difficulty
     """
-    # 1. Onset detection (try madmom for drums, fallback to librosa)
+    # 1. Onset detection (try madmom for drums, fallback to librosa with windowed normalization)
     y, _ = librosa.load(stem_path, sr=sr, mono=True)
     try:
         onset_result = detect_onsets_madmom(stem_path)
-        onset_result = merge_nearby_onsets(onset_result, min_interval=0.02)  # Drums can be faster
-        onset_result = filter_onsets_by_strength(onset_result, min_strength=0.08)
-    except Exception:
-        onset_result = detect_onsets_librosa(stem_path, sr=sr)
         onset_result = merge_nearby_onsets(onset_result, min_interval=0.02)
         onset_result = filter_onsets_by_strength(onset_result, min_strength=0.08)
+    except Exception:
+        # Use windowed detection (30s windows) to get local strength normalization
+        # This prevents early quiet sections from being crushed by later loud crashes
+        onset_result = detect_onsets_librosa(stem_path, sr=sr, window_seconds=30.0)
+        onset_result = merge_nearby_onsets(onset_result, min_interval=0.02)
+        onset_result = filter_onsets_by_strength(onset_result, min_strength=0.05)
 
     # Augment full-signal onsets with high-band onsets so quiet hi-hats /
     # cymbals (often attenuated by stem separation) are not missed.

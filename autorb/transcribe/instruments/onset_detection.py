@@ -30,60 +30,160 @@ def detect_onsets_librosa(
     post_avg: int = 100,
     delta: float = 0.02,
     wait: int = 5,
+    window_seconds: float = 0.0,  # 0 = whole file (legacy global normalization)
 ) -> OnsetResult:
     """
     Detect onsets using librosa's spectral flux method.
     
     Works well for guitar, bass, and general instrument stems.
+    
+    If `window_seconds` > 0, processes audio in windows with local strength
+    normalization to prevent early quiet sections from being crushed by later
+    loud transients (the global 95th-percentile normalization problem).
     """
     y, _ = librosa.load(audio_path, sr=sr, mono=True)
     
-    # Compute onset envelope (spectral flux)
+    if window_seconds > 0:
+        return _detect_onsets_windowed(
+            y, sr, hop_length, backtrack, pre_max, post_max,
+            pre_avg, post_avg, delta, wait, window_seconds
+        )
+    
+    # Legacy whole-file processing (global normalization)
+    return _detect_onsets_legacy(y, sr, hop_length, backtrack, pre_max, post_max,
+                                  pre_avg, post_avg, delta, wait)
+
+
+def _detect_onsets_legacy(
+    y: np.ndarray, sr: int, hop_length: int, backtrack: bool,
+    pre_max: int, post_max: int, pre_avg: int, post_avg: int,
+    delta: float, wait: int,
+) -> OnsetResult:
+    """Original whole-file onset detection with global normalization."""
     onset_env = librosa.onset.onset_strength(
         y=y, sr=sr, hop_length=hop_length,
         aggregate=np.median, fmax=8000, n_mels=128
     )
     
-    # Find peaks in onset envelope
     onset_frames = librosa.onset.onset_detect(
-        onset_envelope=onset_env,
-        sr=sr,
-        hop_length=hop_length,
-        backtrack=backtrack,
-        pre_max=pre_max,
-        post_max=post_max,
-        pre_avg=pre_avg,
-        post_avg=post_avg,
-        delta=delta,
-        wait=wait,
+        onset_envelope=onset_env, sr=sr, hop_length=hop_length,
+        backtrack=backtrack, pre_max=pre_max, post_max=post_max,
+        pre_avg=pre_avg, post_avg=post_avg, delta=delta, wait=wait,
     )
     
     onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=hop_length)
     onset_samples = librosa.frames_to_samples(onset_frames, hop_length=hop_length)
-
-    # Strength must be taken from the envelope PEAK in a small window *after* each
-    # onset. With backtrack=True the onset frame sits at the onset *start* (envelope
-    # ~0 there), so indexing onset_env[onset_frames] directly yields ~0 for almost
-    # every hit and any strength filter would discard them all.
+    
     win = max(1, int(wait))
     onset_strengths = np.array([
         float(onset_env[f: f + win + 1].max()) if f + win < len(onset_env) else float(onset_env[f])
         for f in onset_frames
     ])
-
-    # Normalize strengths to 0-1. Use the 95th percentile (not the global max) as
-    # the reference so a single loud transient doesn't crush every other hit to
-    # near-zero — otherwise downstream strength filters drop the vast majority of
-    # legitimate onsets on a track with one dominant hit (e.g. a big crash).
+    
     if onset_strengths.size > 0:
         ref = float(np.percentile(onset_strengths, 95)) or float(onset_strengths.max())
         if ref > 0:
             onset_strengths = np.clip(onset_strengths / ref, 0.0, 1.0)
-
+    
     return OnsetResult(
-        times=onset_times,
+        times=librosa.frames_to_time(onset_frames, sr=sr, hop_length=hop_length),
         strengths=onset_strengths,
-        sample_indices=onset_samples,
+        sample_indices=librosa.frames_to_samples(onset_frames, hop_length=hop_length),
+    )
+
+
+def _detect_onsets_windowed(
+    y: np.ndarray, sr: int, hop_length: int, backtrack: bool,
+    pre_max: int, post_max: int, pre_avg: int, post_avg: int,
+    delta: float, wait: int, window_seconds: float,
+) -> OnsetResult:
+    """Windowed onset detection with local strength normalization."""
+    window_samples = int(window_seconds * sr)
+    hop_samples = hop_length
+    
+    all_times = []
+    all_strengths = []
+    all_samples = []
+    
+    # Process in overlapping windows
+    window_step = int(window_seconds * sr * 0.5)  # 50% overlap
+    n_samples = len(y)
+    
+    for start in range(0, n_samples, window_step):
+        end = min(start + window_samples, n_samples)
+        if end - start < sr * 0.5:  # Skip very short final window
+            break
+            
+        y_win = y[start:end]
+        win_sr = sr
+        
+        onset_env = librosa.onset.onset_strength(
+            y=y_win, sr=sr, hop_length=hop_length,
+            aggregate=np.median, fmax=8000, n_mels=128
+        )
+        
+        onset_frames = librosa.onset.onset_detect(
+            onset_envelope=onset_env, sr=sr, hop_length=hop_length,
+            backtrack=True, pre_max=20, post_max=20,
+            pre_avg=100, post_avg=100, delta=0.02, wait=5,
+        )
+        
+        if len(onset_frames) == 0:
+            continue
+            
+        # Local strength normalization within this window
+        win = max(1, 5)  # wait=5 frames
+        onset_strengths = np.array([
+            float(onset_env[f: f + win + 1].max()) if f + win < len(onset_env) else float(onset_env[f])
+            for f in onset_frames
+        ])
+        
+        if onset_strengths.size > 0:
+            ref = float(np.percentile(onset_strengths, 95)) or float(onset_strengths.max())
+            if ref > 0:
+                onset_strengths = np.clip(onset_strengths / ref, 0.0, 1.0)
+        
+        # Convert to global time
+        frame_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=hop_length)
+        global_times = frame_times + (start / sr)
+        global_samples = librosa.frames_to_samples(onset_frames, hop_length=hop_length) + start
+        
+        all_times.extend(global_times)
+        all_strengths.extend(onset_strengths)
+        all_samples.extend(global_samples)
+    
+    if not all_times:
+        return OnsetResult(times=np.array([]), strengths=np.array([]), sample_indices=np.array([]))
+    
+    # Merge overlapping detections from adjacent windows
+    all_times = np.array(all_times)
+    all_strengths = np.array(all_strengths)
+    all_samples = np.array(all_samples)
+    
+    # Sort by time
+    order = np.argsort(all_times)
+    all_times = all_times[order]
+    all_strengths = all_strengths[order]
+    all_samples = all_samples[order]
+    
+    # Deduplicate nearby detections (from window overlap)
+    min_interval = 0.02  # 20ms minimum separation
+    keep = [True]
+    for i in range(1, len(all_times)):
+        if all_times[i] - all_times[i-1] < 0.02:
+            # Keep the stronger one
+            if all_strengths[i] > all_strengths[i-1]:
+                keep[-1] = False
+                keep.append(True)
+            else:
+                keep.append(False)
+        else:
+            keep.append(True)
+    
+    return OnsetResult(
+        times=all_times[keep],
+        strengths=all_strengths[keep],
+        sample_indices=all_samples[keep],
     )
 
 

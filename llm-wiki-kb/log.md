@@ -6,11 +6,17 @@ date: 2026-08-07
 
 Append-only ledger of changes to this knowledge base. Newest first. Each entry records: timestamp, what was added, and why (the reasoning that future agents should not have to re-derive).
 
+## 2026-08-18 — v0.1.3: Drum onset fix + Guitar over-charting reduction + Bass frequency filter
+
+**What:** Fixed three critical playability issues from PS4/Clone Hero playtest feedback:
+1. **Drums missing first 54 seconds** — Global strength normalization crushed early onsets. Added windowed onset detection (30s windows, local 95th percentile) to `detect_onsets_librosa`; drums now start at 0.10s (was 54.5s).
+2. **Guitar massive over-charting (3,435→1,829 expert notes)** — Basic Pitch on shared "other" stem detected keys as guitar. Raised thresholds (onset 0.4→0.55, frame 0.3→0.45), added guitar frequency filter (75–1250 Hz), tightened chord window (30→25ms). 47% reduction.
+3. **Bass frequency filter** (38–420 Hz) added; guitar filter 75–1250 Hz.
+All 4 instruments × 4 difficulties now have 0 same-lane overlaps. CON + PS4 PKG build successfully. Regression test added.
+
+**Why:** User playtest feedback: "tracks unplayable, notes in wrong places, rapid strums where only two exist, guitar starts seconds late, drums too rapid." Root causes identified and fixed.
+
 ## 2026-08-18 — v0.1.2 illegal same-lane-overlap fix (instrument MIDI)
-
-**What:** Fixed overlapping same-lane notes in generated instrument MIDI (illegal in Rock Band) and updated `[[instrument_charting]]` with a v0.1.2 section. Two root causes: (1) cross-group `(time, lane)` duplicates in `_transcribe_fretted` (two chord groups snapping to the same 1/16 tick + lane; within-group dedup missed it) — fixed with a `(time, lane)` dedup keeping the longer sustain; (2) `build_instrument_track` floored `length=0` notes at 120 ticks (bleeding past a close successor) and used a hardcoded 120-BPM sustain conversion — fixed by deriving duration from the real tempo map (`time_to_tick`) plus a generic per-pitch de-overlap clamp. Added regression test `tests/test_midi_structure.py::test_instrument_tracks_have_no_same_lane_overlaps`. Verified 0 overlaps on all 4 instruments × 4 difficulties in the real export.
-
-**Why:** User asked to validate the instrument changes structurally ("analyze the chart / mid") and the analysis (done in ticks, not seconds — a hand-rolled tick→second converter over-counted tempo segments ~2.78×) surfaced 66–155 Expert/Hard same-lane overlaps. Also caught that the pipeline was importing a stale installed wheel `autorb 0.0.76` instead of source — fixed via `pip install -e . --no-deps --no-build-isolation` (AGENTS rule: always verify source import before trusting pipeline output).
 
 ## 2026-08-15 — Clone Hero drums root cause: `.mid` uses difficulty-offset pitches (v0.0.93)
 

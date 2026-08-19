@@ -38,18 +38,18 @@ _BP_CACHE = {}
 
 # Chord grouping window (seconds): Basic Pitch reports the onsets of the tones
 # of one strum within a few tens of ms of each other — group them into one chord.
-CHORD_WINDOW = 0.03
+CHORD_WINDOW = 0.025
 
 # Grid resolution the Expert chart is quantized to (divisions per beat).
 # 4 = 1/16 note: fine enough for eighth/sixteenth strum runs.
 SNAP_DIVISIONS = 4
 
 # Basic Pitch confidence thresholds. Defaults (0.5 / 0.3) silently drop quiet
-# guitar/bass notes and fast ghost strums; lowering them recovers the missing
-# notes the playtester reported (at the cost of a little extra noise, which the
-# subsequent grid quantization + difficulty reduction cleans up).
-ONSET_THRESHOLD = 0.4
-FRAME_THRESHOLD = 0.3
+# guitar/bass notes; lowering recovers missing notes but adds noise (keys on
+# the shared "other" stem). Raising reduces keys bleed at cost of missing
+# quiet guitar notes.
+ONSET_THRESHOLD = 0.55
+FRAME_THRESHOLD = 0.45
 
 
 def _basic_pitch_notes(stem_path: Path):
@@ -94,15 +94,26 @@ def _transcribe_fretted(
 
     # 2. Build per-note raw records (pre-quantization) with lane + open flag.
     raw = []
+    # Instrument-specific frequency ranges to reject bleed:
+    # Guitar: ~E2 (82 Hz) to ~D6 (1175 Hz)
+    # Bass: ~E1 (41 Hz) to ~G4 (392 Hz)
+    if instrument == "bass":
+        FMIN, FMAX = 38.0, 420.0
+    else:  # guitar
+        FMIN, FMAX = 75.0, 1250.0
     for (start, end, pitch_midi, _amp, _bends) in note_events:
         if pitch_midi <= 0:
             continue
         hz = _hz(pitch_midi)
+        if not (FMIN <= hz <= FMAX):
+            continue  # Reject bleed outside instrument range
         fps = pitch_to_fret_string(hz, tuning)
         lane = fret_string_to_lane(fps, tuning.num_strings)
         if lane < 0 or lane > 4:
             lane = 0
         length = end - start
+        if length < 0.02:  # Reject too-short ghost notes (<20ms)
+            continue
         raw.append({
             "start": float(start),
             "lane": lane,

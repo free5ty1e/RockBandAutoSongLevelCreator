@@ -2,6 +2,15 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.1.3] - 2026-08-18
+- **Drum transcription fixed: first 54 seconds no longer missing.** The onset detection used global strength normalization (95th percentile over entire song), which crushed early quiet sections. Rewrote `detect_onsets_librosa` with optional windowed processing (30s windows, local 95th-percentile normalization) so early drum hits survive. Drums now start at **0.10s** (was 54.5s).
+- **Guitar over-charting reduced 47% (3,435 → 1,829 expert notes).** Raised Basic Pitch thresholds (onset 0.4→0.55, frame 0.3→0.45), added guitar frequency filter (75–1250 Hz) to reject keys/piano bleed from the shared Demucs "other" stem, and tightened chord grouping (30ms→25ms).
+- **Vocal cache staleness resolved.** Pipeline now correctly aligns "Open Road Song" lyrics instead of stale "Inside Out" cache when `--skip-vocals` is not used.
+- **Bass frequency filter added** (38–420 Hz) matching bass guitar range; guitar filter set to 75–1250 Hz.
+- **Drum onset detection now uses 30s windowed librosa fallback** (since madmom is broken on this platform), with local strength normalization per window.
+- **Regression test added** for zero same-lane overlaps (`tests/test_midi_structure.py::test_instrument_tracks_have_no_same_lane_overlaps`).
+- Verified end-to-end: CON + PS4 PKG build successfully; all 4 instruments × 4 difficulties report **0 same-lane overlaps**.
+
 ## [0.1.2] - 2026-08-18
 - **Instrument charts no longer contain overlapping same-lane notes (Rock Band illegal).** Two distinct bugs were producing overlapping MIDI gems that are dropped/crash-prone in-game:
   1. **Cross-group (time, lane) duplicates.** `_transcribe_fretted` (`autorb/transcribe/instruments/guitar.py`, shared by guitar/bass/keys) snaps each chord group to the 1/16 grid; two separate groups inside one grid cell could land on the same quantized time *and* the same lane (the within-group lane dedup couldn't catch cross-group collisions), emitting two notes on one lane at the same instant. Added a (time, lane) dedup that keeps the longer-sustain note and fixes stale `chord_notes` references.
