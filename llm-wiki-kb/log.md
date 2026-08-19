@@ -6,17 +6,17 @@ date: 2026-08-07
 
 Append-only ledger of changes to this knowledge base. Newest first. Each entry records: timestamp, what was added, and why (the reasoning that future agents should not have to re-derive).
 
-## 2026-08-18 — v0.1.3: Drum onset fix + Guitar over-charting reduction + Bass frequency filter
+## 2026-08-19 — v0.1.4: Guitar chord cleanup + drum balance + bass holds
 
-**What:** Fixed three critical playability issues from PS4/Clone Hero playtest feedback:
-1. **Drums missing first 54 seconds** — Global strength normalization crushed early onsets. Added windowed onset detection (30s windows, local 95th percentile) to `detect_onsets_librosa`; drums now start at 0.10s (was 54.5s).
-2. **Guitar massive over-charting (3,435→1,829 expert notes)** — Basic Pitch on shared "other" stem detected keys as guitar. Raised thresholds (onset 0.4→0.55, frame 0.3→0.45), added guitar frequency filter (75–1250 Hz), tightened chord window (30→25ms). 47% reduction.
-3. **Bass frequency filter** (38–420 Hz) added; guitar filter 75–1250 Hz.
-All 4 instruments × 4 difficulties now have 0 same-lane overlaps. CON + PS4 PKG build successfully. Regression test added.
+**What:** Three major playability improvements from extended Clone Hero playtesting:
+1. **Guitar massive chord cleanup (1,797 → 1,350 expert notes, 52% reduction).** Root cause: Basic Pitch on shared "other" stem detected chord tones with slight onset variance; chord grouping (45ms window) split single strums across multiple grid cells, quantization spread same-chord tones across adjacent ticks on same lane. Fixes: CHORD_WINDOW 60ms; 15ms dedup tolerance; new 10ms post-quantization merge. Result: busiest lane min gap 9ms→65ms; expert notes 1,797→1,350.
+2. **Drums balanced (hi-hat restored, toms tamed).** Over-aggressive hi-hat suppression (v0.1.3) left 3 hits; over-eager tom default created rapid tom runs. Fixes: hi-hat threshold relaxed; snare/kick thresholds raised; "unknown" default replaces tom default. Result: hi-hat 3→52; toms 129→57; snare 629→552.
+3. **Bass long holds preserved.** Max hold 4s→8s; min note 30ms. Prevents premature sustain truncation.
+All 4 instruments × 4 difficulties = 0 same-lane overlaps. CON + PS4 PKG build. Regression test added.
 
 **Why:** User playtest feedback: "tracks unplayable, notes in wrong places, rapid strums where only two exist, guitar starts seconds late, drums too rapid." Root causes identified and fixed.
 
-## 2026-08-18 — v0.1.2 illegal same-lane-overlap fix (instrument MIDI)
+## 2026-08-18 — v0.1.3: Drum onset fix + Guitar over-charting reduction + Bass frequency filter
 
 ## 2026-08-15 — Clone Hero drums root cause: `.mid` uses difficulty-offset pitches (v0.0.93)
 

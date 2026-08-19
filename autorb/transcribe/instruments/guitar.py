@@ -31,14 +31,15 @@ from .difficulty import (
     _snap,
 )
 
-
 # Basic Pitch is slow; cache note events per stem path so the same stem is not
 # transcribed twice (guitar and keys share the "other" stem).
 _BP_CACHE = {}
 
 # Chord grouping window (seconds): Basic Pitch reports the onsets of the tones
 # of one strum within a few tens of ms of each other — group them into one chord.
-CHORD_WINDOW = 0.025
+# Wider window (60ms) to catch all tones of a strummed chord whose tones may arrive
+# at slightly different times due to pick angle / string physics / neural net variance.
+CHORD_WINDOW = 0.060
 
 # Grid resolution the Expert chart is quantized to (divisions per beat).
 # 4 = 1/16 note: fine enough for eighth/sixteenth strum runs.
@@ -50,6 +51,11 @@ SNAP_DIVISIONS = 4
 # quiet guitar notes.
 ONSET_THRESHOLD = 0.55
 FRAME_THRESHOLD = 0.45
+
+# Deduplication tolerance for (time, lane) - notes within this many seconds
+# are considered duplicates. Guitar chords can have slight timing variations
+# between strings due to pick attack physics.
+DEDUP_TIME_TOL = 0.015  # 15ms
 
 
 def _basic_pitch_notes(stem_path: Path):
@@ -93,14 +99,15 @@ def _transcribe_fretted(
     # so we intentionally keep capo = 0 to avoid spurious octave/fret errors.
 
     # 2. Build per-note raw records (pre-quantization) with lane + open flag.
-    raw = []
     # Instrument-specific frequency ranges to reject bleed:
-    # Guitar: ~E2 (82 Hz) to ~D6 (1175 Hz)
+    # Guitar: ~E2 (82 Hz) to ~E6 (1318 Hz) - extended for high frets/harmonics
     # Bass: ~E1 (41 Hz) to ~G4 (392 Hz)
     if instrument == "bass":
         FMIN, FMAX = 38.0, 420.0
     else:  # guitar
-        FMIN, FMAX = 75.0, 1250.0
+        FMIN, FMAX = 70.0, 1400.0
+
+    raw = []
     for (start, end, pitch_midi, _amp, _bends) in note_events:
         if pitch_midi <= 0:
             continue
@@ -170,6 +177,9 @@ def _transcribe_fretted(
 
     # 4. Cap sustains so a held note never bleeds into the next same-lane note,
     #    and never exceeds a sane maximum ring.
+    # Bass holds can be much longer than guitar; guitar chords rarely exceed 2s.
+    max_hold = 8.0 if instrument == "bass" else 2.0
+    min_note_len = 0.04 if instrument == "guitar" else 0.03  # 40ms guitar, 30ms bass
     for lane in range(5):
         lane_notes = [n for n in expert_notes if n.lane == lane]
         for k in range(len(lane_notes) - 1):
@@ -178,35 +188,37 @@ def _transcribe_fretted(
             if lane_notes[k].length > max_len:
                 lane_notes[k].length = max_len
         for n in lane_notes:
-            if n.length > 2.0:
-                n.length = 2.0
-            if 0 < n.length < 0.08:
+            if n.length > max_hold:
+                n.length = max_hold
+            if 0 < n.length < min_note_len:
                 n.length = 0.0
 
     # 5. Expert HOPO pass: a non-chord, non-open note that follows the previous
     #    note on an adjacent lane within 120 ms (same direction) becomes a HOPO.
-    expert_notes.sort(key=lambda n: (n.time, n.lane))
-    for i in range(1, len(expert_notes)):
-        prev, curr = expert_notes[i - 1], expert_notes[i]
-        if curr.time == prev.time or curr.is_chord:
-            continue
-        td = curr.time - prev.time
-        ld = abs(curr.lane - prev.lane)
-        if td <= 0.12 and ld == 1 and not prev.is_open and not curr.is_open:
-            nxt = expert_notes[min(i + 1, len(expert_notes) - 1)]
-            if (curr.lane > prev.lane) == (nxt.lane > curr.lane):
-                curr.is_hopo = True
-                curr.velocity = 127
+    #    Bass does not have HOPOs in Rock Band.
+    if instrument != "bass":
+        expert_notes.sort(key=lambda n: (n.time, n.lane))
+        for i in range(1, len(expert_notes)):
+            prev, curr = expert_notes[i - 1], expert_notes[i]
+            if curr.time == prev.time or curr.is_chord:
+                continue
+            td = curr.time - prev.time
+            ld = abs(curr.lane - prev.lane)
+            if td <= 0.12 and ld == 1 and not prev.is_open and not curr.is_open:
+                nxt = expert_notes[min(i + 1, len(expert_notes) - 1)]
+                if (curr.lane > prev.lane) == (nxt.lane > curr.lane):
+                    curr.is_hopo = True
+                    curr.velocity = 127
 
-    # 6. Collapse exact (time, lane) duplicates. Two separate chord groups can
-    #    snap to the same quantized time and assign the same lane (the within-group
+    # 6. Collapse near-duplicate (time, lane) duplicates. Two separate chord groups can
+    #    snap to nearby quantized times and assign the same lane (the within-group
     #    lane dedup can't catch cross-group collisions), producing two notes on the
-    #    same lane at the same instant -- illegal in Rock Band and rendered as
+    #    same lane at nearly the same instant -- illegal in Rock Band and rendered as
     #    overlapping MIDI gems. Keep the longer-sustain note and fix chord refs.
     from collections import defaultdict as _defdict
     _bylane = _defdict(list)
     for n in expert_notes:
-        _bylane[(round(n.time, 4), n.lane)].append(n)
+        _bylane[(round(n.time / DEDUP_TIME_TOL) * DEDUP_TIME_TOL, n.lane)].append(n)
     _dropped = set()
     _cleaned = []
     for _key, _grp in _bylane.items():
@@ -218,6 +230,28 @@ def _transcribe_fretted(
     for n in _cleaned:
         if n.chord_notes:
             n.chord_notes = [c for c in n.chord_notes if id(c) not in _dropped]
+    expert_notes = sorted(_cleaned, key=lambda n: (n.time, n.lane))
+
+    solos = _detect_solo_sections(expert_notes, tempo_map)
+    bre = _detect_bre_section(expert_notes, song_end)
+
+    # 7. Final pass: merge notes on the same lane within a tiny time window
+    #    (catches any remaining near-duplicates from quantization spread).
+    from collections import defaultdict as _defdict
+    _bylane = _defdict(list)
+    for n in expert_notes:
+        _bylane[n.lane].append(n)
+    _cleaned = []
+    for _lane, _notes in _bylane.items():
+        _notes.sort(key=lambda n: n.time)
+        _merged = []
+        for n in _notes:
+            if _merged and abs(n.time - _merged[-1].time) < 0.010:  # 10ms merge window
+                # Merge: keep the earlier time, extend sustain to cover both
+                _merged[-1].length = max(_merged[-1].length, n.time + n.length - _merged[-1].time)
+            else:
+                _merged.append(n)
+        _cleaned.extend(_merged)
     expert_notes = sorted(_cleaned, key=lambda n: (n.time, n.lane))
 
     solos = _detect_solo_sections(expert_notes, tempo_map)

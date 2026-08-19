@@ -88,28 +88,28 @@ def classify_drum_onsets_energy(
         ehf = _band_rms(seg, sr, 2000, 14000)
         tot = ek + em + eh + ec + 1e-9
         elem, lane, pitch, conf = 'unknown', 0, 36, 0.0
-        if max(eh, ec) > 0.2 * tot:
-            if eh >= ec * 0.6:
+        # Hi-hat / cymbal detection: require strong high-freq presence but not too strict
+        if max(eh, ec) > 0.35 * tot:
+            if eh >= ec * 0.75:
                 elem, lane, pitch = 'hihat', 2, 42
             else:
-                # Cymbal-band hit: a drummer keeps time on the RIDE (lane 3),
-                # reserving the CRASH (lane 4) for loud accents. Default to ride
-                # and only call it a crash when the high-freq content dominates.
-                if (eh + ec) > 0.6 * tot:
+                # Cymbal-band hit: default to ride, crash only for loud accents
+                if (eh + ec) > 0.75 * tot:
                     elem, lane, pitch = 'crash', 4, 49
                 else:
                     elem, lane, pitch = 'ride', 3, 51
             conf = max(eh, ec) / tot
         else:
-            if ek > em * 1.5:
+            if ek > em * 2.0:
                 elem, lane, pitch = 'kick', 0, 36
                 conf = ek / (ek + em + 1e-9)
             else:
-                if ehf > 0.18 * (ek + em + 1e-9):
+                if ehf > 0.25 * (ek + em + 1e-9):
                     elem, lane, pitch = 'snare', 1, 38
                     conf = ehf / (ek + em + 1e-9)
                 else:
-                    elem, lane, pitch = 'tom1', 2, 48
+                    # Default to unknown - do NOT default to tom
+                    elem, lane, pitch = 'unknown', 2, 48
                     conf = em / (ek + em + 1e-9)
         results.append(DrumElement(elem, float(min(conf, 1.0)), lane, pitch))
     return results

@@ -55,20 +55,21 @@ def transcribe_drums(
     y, _ = librosa.load(stem_path, sr=sr, mono=True)
     try:
         onset_result = detect_onsets_madmom(stem_path)
-        onset_result = merge_nearby_onsets(onset_result, min_interval=0.02)
-        onset_result = filter_onsets_by_strength(onset_result, min_strength=0.08)
+        onset_result = merge_nearby_onsets(onset_result, min_interval=0.03)
+        onset_result = filter_onsets_by_strength(onset_result, min_strength=0.1)
     except Exception:
         # Use windowed detection (30s windows) to get local strength normalization
         # This prevents early quiet sections from being crushed by later loud crashes
         onset_result = detect_onsets_librosa(stem_path, sr=sr, window_seconds=30.0)
-        onset_result = merge_nearby_onsets(onset_result, min_interval=0.02)
-        onset_result = filter_onsets_by_strength(onset_result, min_strength=0.05)
+        onset_result = merge_nearby_onsets(onset_result, min_interval=0.03)
+        onset_result = filter_onsets_by_strength(onset_result, min_strength=0.08)
 
     # Augment full-signal onsets with high-band onsets so quiet hi-hats /
     # cymbals (often attenuated by stem separation) are not missed.
-    hat_t = _band_onsets(y, sr, 7000, 14000, delta=0.12, wait=3)
-    cym_t = _band_onsets(y, sr, 3000, 9000, delta=0.12, wait=4)
-    times = np.asarray(_merge_times([onset_result.times, hat_t, cym_t], tol=0.025), dtype=float)
+    # Use more conservative parameters to avoid false positive hi-hat detections.
+    hat_t = _band_onsets(y, sr, 7000, 14000, delta=0.15, wait=5)
+    cym_t = _band_onsets(y, sr, 3000, 9000, delta=0.15, wait=6)
+    times = np.asarray(_merge_times([onset_result.times, hat_t, cym_t], tol=0.03), dtype=float)
 
     # 2. Classify each onset into a drum element by band-energy ratios.
     drum_elements = classify_drum_onsets_energy(y, sr, times, window_ms=60)

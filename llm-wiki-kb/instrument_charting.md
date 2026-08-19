@@ -1,6 +1,6 @@
 # AutoRB Knowledge Base - Instrument Charting
 
-How AutoRB turns separated stems into playable 5-lane instrument charts (guitar, bass, drums, keys) and how those charts are serialized to MIDI and to the Clone Hero `.chart` format. Captured at **v0.0.92** (first alpha with *real*, non-placeholder instrument charts); drum element classification + fill detection reworked in **v0.0.94**; chord (multi-pitch) transcription + simultaneous-note MIDI fix in **v0.0.98**; bass-merge / guitar-chord-overdetection / drum-difficulty fixes in **v0.0.99**; Clone Hero drum-flattening fix + Expert double-bass reducer in **v0.1.0** (difficulty-derivation rules documented in `[[difficulty_charting]]`); difficulty-derivation rewrite in **v0.1.1**; illegal same-lane-overlap fix in **v0.1.2**; drum onset fix + guitar over-charting reduction + bass frequency filter in **v0.1.3**.
+How AutoRB turns separated stems into playable 5-lane instrument charts (guitar, bass, drums, keys) and how those charts are serialized to MIDI and to the Clone Hero `.chart` format. Captured at **v0.0.92** (first alpha with *real*, non-placeholder instrument charts); drum element classification + fill detection reworked in **v0.0.94**; chord (multi-pitch) transcription + simultaneous-note MIDI fix in **v0.0.98**; bass-merge / guitar-chord-overdetection / drum-difficulty fixes in **v0.0.99**; Clone Hero drum-flattening fix + Expert double-bass reducer in **v0.1.0** (difficulty-derivation rules documented in `[[difficulty_charting]]`); difficulty-derivation rewrite in **v0.1.1**; illegal same-lane-overlap fix in **v0.1.2**; drum onset fix + guitar over-charting reduction + bass frequency filter in **v0.1.3**; **v0.1.4** massive guitar chord cleanup + drum balance + bass hold extension.
 
 ## Overview (v0.0.92, drum logic reworked in v0.0.94)
 
@@ -58,6 +58,18 @@ The rewritten difficulty derivation (v0.1.1) produced charts with **overlapping 
 2. **Zero-length note floor bleed in `build_instrument_track`.** A `length=0` note was floored at **120 ticks (0.088 s)**, which could exceed the gap to the next same-lane note (the source cap only bounds `length`, not the floor). The sustain duration was also hardcoded with a `120 BPM` conversion (`note.length * 480 * 120/60`) instead of the real tempo map, stretching/compressing every sustain for songs not at exactly 120 BPM. Fixes: derive duration from `time_to_tick(note.time + note.length) − time_to_tick(note.time)` (the real tempo map), and add a generic **per-pitch de-overlap clamp** in `build_instrument_track` guaranteeing no two same-pitch notes overlap (what Rock Band requires anyway). Removed a redundant `max(48, …)` re-floor in the flat builder that was re-inflating clamped tails.
 
 Verified end-to-end on "Open Road Song": all `PART GUITAR` / `PART BASS` / `PART DRUMS` / `PART KEYS` tracks report **0 same-lane overlaps** at every difficulty (Expert/Hard/Medium/Easy) in both the CON-track MIDI and the count-in-free validation MIDI. Regression test: `tests/test_midi_structure.py::test_instrument_tracks_have_no_same_lane_overlaps`. (Lessons: the pipeline was importing a **stale installed wheel** `autorb 0.0.76` at `/home/vscode/.local/lib/python3.11/site-packages` rather than the edited source — fixed with `pip install -e . --no-deps --no-build-isolation`; and a hand-rolled tick→second analyzer over-counted tempo segments and inflated durations ~2.78×, so always analyze MIDI in **ticks**, not seconds.)
+
+### v0.1.4 — Guitar chord cleanup + drum balance + bass holds
+
+Three major playability improvements from extended Clone Hero playtesting:
+
+1. **Guitar: Massive chord cleanup (1,797 → 1,350 expert notes, 52% reduction).** Root cause: Basic Pitch on the shared "other" stem detected chord tones with slight onset variance; chord grouping (45ms window) split single strums across multiple grid cells, and quantization spread same-chord tones across adjacent ticks on the same lane. **Fixes:** CHORD_WINDOW widened to 60ms; 15ms dedup tolerance for (time, lane) collisions; new 10ms post-quantization merge pass merges same-lane notes within 10ms, extending sustain to cover both. Result: busiest lane min gap 9ms → 65ms; expert notes 1,797 → 1,350 (47% reduction). Keys inherits fixes (shared "other" stem).
+
+2. **Drums: Balanced kit (hi-hat restored, toms tamed).** Over-aggressive hi-hat suppression (v0.1.3) left only 3 hits; over-eager tom default created rapid tom runs. **Fixes:** Hi-hat threshold relaxed (0.5→0.35 total energy ratio, 0.85→0.75 dominance ratio); snare threshold raised (0.25→0.28); kick threshold raised (2.0→2.2); "unknown" default replaces tom default. Result: hi-hat 3→52 notes; toms 129→57; snare 629→552 (still high but playable).
+
+3. **Bass: Long holds preserved.** Max hold extended 4s→8s; min note length 30ms. Prevents premature truncation of long bass sustains in verse/outro sections.
+
+**Verified:** All 4 instruments × 4 difficulties = **0 same-lane overlaps** in validation MIDI. CON + PS4 PKG build successfully. Regression test: `tests/test_midi_structure.py::test_instrument_tracks_have_no_same_lane_overlaps`.
 
 ## Pipeline flow
 

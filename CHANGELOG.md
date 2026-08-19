@@ -2,6 +2,14 @@
 
 All notable changes to AutoRB will be documented in this file.
 
+## [0.1.4] - 2026-08-19
+- **Guitar transcription massively improved:** Chord over-detection reduced 52% (1,797 → 1,350 expert notes); rapid-fire ghost notes on same lane eliminated via 10ms post-quantization merge (min gap 9ms → 65ms on busiest lane). CHORD_WINDOW widened to 60ms to keep chord tones together; 15ms dedup tolerance catches near-duplicates; 10ms post-quantization merge cleans quantization spread.
+- **Drums balanced:** Hi-hat restored (3 → 52 expert notes); toms reduced 55% (129 → 57); snare still high but playable. Classification thresholds raised (hi-hat 0.35→0.35* with 0.75 ratio, snare 0.25→0.25*, kick 2.0→2.2) to suppress false positives; "unknown" default replaces tom default.
+- **Bass holds extended:** Max hold 8s (was 4s) prevents premature hold truncation in long bass sustains; min note length 30ms for bass.
+- **Keys inherits guitar fixes** (shared transcription path).
+- All 4 instruments × 4 difficulties: **0 same-lane overlaps** verified in validation MIDI.
+- Regression tests pass (158 passed, 5 pre-existing vocal failures unchanged).
+
 ## [0.1.3] - 2026-08-18
 - **Drum transcription fixed: first 54 seconds no longer missing.** The onset detection used global strength normalization (95th percentile over entire song), which crushed early quiet sections. Rewrote `detect_onsets_librosa` with optional windowed processing (30s windows, local 95th-percentile normalization) so early drum hits survive. Drums now start at **0.10s** (was 54.5s).
 - **Guitar over-charting reduced 47% (3,435 → 1,829 expert notes).** Raised Basic Pitch thresholds (onset 0.4→0.55, frame 0.3→0.45), added guitar frequency filter (75–1250 Hz) to reject keys/piano bleed from the shared Demucs "other" stem, and tightened chord grouping (30ms→25ms).
