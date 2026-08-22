@@ -229,10 +229,13 @@ def _reduce_fretted(notes, tempo_map, difficulty, all_lanes: bool):
             lanes = [lanes[0]]
         out.extend(_emit(ev, lanes, is_hopo=False))
 
-    # Quantize to the 1/8 grid (Expert transcription is audio-derived, not
-    # pre-quantized) so subsequent grid filtering is stable.
+    # Quantize to the difficulty's grid. Expert is already 1/16-quantized at
+    # transcription time, so Hard stays on the 1/16 grid (re-quantizing Hard to
+    # 1/8 would merge Expert's sixteenth runs into fake stacked chords). Medium
+    # and Easy use coarser grids so subsequent grid filtering is stable.
+    snap_div = {Difficulty.HARD: 4, Difficulty.MEDIUM: 2, Difficulty.EASY: 2}[difficulty]
     for n in out:
-        n.time = _snap(n.time, tempo_map, 2)
+        n.time = _snap(n.time, tempo_map, snap_div)
 
     # De-duplicate simultaneous lanes.
     seen, dedup = set(), []
@@ -269,94 +272,121 @@ def _reduce_fretted(notes, tempo_map, difficulty, all_lanes: bool):
 
 def _reduce_drums(notes, tempo_map, difficulty, fills):
     """Reduce a drum Expert chart to ``difficulty`` per the RBN Drum Authoring
-    rules: no kicks in fills, no kick/snare between time-keeping gems, no 3-limb
-    hits, tempo-driven kick ceilings, max-2-limbs and no kick/hand pairing on
-    Easy, single-color crashes on Hard. Expert is passed through (double bass is
-    already removed upstream in ``drums.py``)."""
+    rules (distilled from the C3 / RBN docs; see ``llm-wiki-kb``):
+
+    * Hard: no kicks in drum fills, consolidate crashes to a single color (a
+      ride+crash coincidence keeps the Green crash, dropping the Blue ride),
+      and thin 8th-note kick runs back to quarter notes (~halfway between
+      Medium and Expert kick density) so Hard is a real reduction, not a copy
+      of Expert.
+    * Medium: every kick/snare must sit on a hi-hat/ride time-keeping gem
+      (snapped to the nearest gem within ~1/8 beat, else dropped), no 3-limb
+      hits, no kick underneath a crash, 8th notes only up to 140 BPM (quarter
+      notes above), and at most one kick per measure above 170 BPM.
+    * Easy: the basic rock beat — hi-hat/ride time-keeping with kick and snare
+      alternating (never both at once), no crashes or toms, hits spaced >= 1/8
+      (the quarter-note grid), at most one kick per measure above 170 BPM.
+
+    Expert is passed through (double bass is already removed upstream in
+    ``drums.py``)."""
     if difficulty == Difficulty.EXPERT:
         return list(notes)
 
     events = _build_events(notes)
     fills = fills or []
-    out = []
-    last_kick_measure = {}
 
     # Time-keeping (hi-hat / ride) event times — kicks/snares must sit with one.
     tk_times = sorted({
         ev["time"] for ev in events
-        if (2 in set(_lanes(ev))) or (3 in set(_lanes(ev)))
+        if 2 in set(_lanes(ev)) or 3 in set(_lanes(ev))
     })
+    snap_tol = (_beat_dur(tempo_map, events[0]["time"]) / 2) if events else 0.25
+
+    def _in_fill(t):
+        return any(s <= t <= e for (s, e) in fills)
 
     def _nearest_tk(t):
         if not tk_times:
             return None
-        best, best_d = None, 1e9
-        for tt in tk_times:
-            d = abs(tt - t)
-            if d < best_d:
-                best, best_d = tt, d
-        return best
+        return min(tk_times, key=lambda tt: abs(tt - t))
+
+    out_map = {}  # time -> set of lanes
+    last_kick_measure = [None]
+
+    def _kick_ceiling(bpm, t, L):
+        """>170 BPM: at most one kick per measure (later kicks dropped)."""
+        if bpm > 170 and 0 in L:
+            meas = int(t // _measure_dur(tempo_map, t))
+            if last_kick_measure[0] == meas:
+                L.discard(0)
+            else:
+                last_kick_measure[0] = meas
+        return L
 
     for ev in events:
         t = ev["time"]
         L = set(_lanes(ev))
         bpm = _local_bpm(tempo_map, t)
-        has_tk = (2 in L) or (3 in L)  # hi-hat / ride time-keeping
-        in_fill = any(s <= t <= e for (s, e) in fills)
 
         if difficulty == Difficulty.HARD:
-            if 0 in L and in_fill:
-                L.discard(0)            # no kicks during drum fills
-            if 4 in L and 3 in L:
-                L.discard(4)            # collapses crash+ride to a single color
+            if 0 in L and _in_fill(t):
+                L.discard(0)            # no kicks during fills
+            if 3 in L and 4 in L:
+                L.discard(3)            # crash+ride -> keep the single crash
+            # Thin kicks and snare accents to the quarter-note grid (RBN: "thin
+            # kicks to roughly halfway between Medium and Expert" and "remove
+            # about half of the snare accents" — off-beat 8th hits are the
+            # expert-level accents; the groove's downbeats/backbeats survive).
+            if 0 in L and not _on_grid(t, tempo_map, 1):
+                L.discard(0)
+            if 1 in L and not _on_grid(t, tempo_map, 1):
+                L.discard(1)
 
         elif difficulty == Difficulty.MEDIUM:
-            # No kicks/snares *between* hi-hat/ride time-keeping gems. Audio-
-            # derived onsets jitter, so instead of dropping a kick/snare that is
-            # merely offset from the hat, snap it onto the nearest time-keeping
-            # gem (within tolerance) so the basic beat survives to Easy.
+            has_tk = (2 in L) or (3 in L)
             if (0 in L or 1 in L) and not has_tk:
                 nt = _nearest_tk(t)
-                if nt is not None and abs(nt - t) <= 0.13:
-                    t = nt                     # re-align kick/snare to the hat
-                    L = set(_lanes(ev))        # re-evaluate with the new time
+                if nt is not None and abs(nt - t) <= snap_tol:
+                    t = nt              # re-align kick/snare to the hat gem
                     has_tk = True
                 else:
                     L.discard(0)
                     L.discard(1)
-            # No 3-limb hits: drop the kick from any 3+ simultaneous gems.
+            if 4 in L and 0 in L:
+                L.discard(0)            # no kick under a crash
             if len(L) >= 3 and 0 in L:
-                L.discard(0)
-            # Crash on an off-beat gets no kick underneath; on-beat crash keeps it.
-            if 4 in L and 0 in L and not _on_grid(t, tempo_map, 1):
-                L.discard(0)
-            # >140 BPM: right hand not expected to keep 8ths -> drop off-beat hats.
-            if bpm > 140 and 2 in L and not _on_grid(t, tempo_map, 1):
-                L.discard(2)
-            # >170 BPM: one kick per measure.
-            if bpm > 170 and 0 in L:
-                meas = int(t // _measure_dur(tempo_map, t))
-                if last_kick_measure.get("m") == meas:
-                    L.discard(0)
-                else:
-                    last_kick_measure["m"] = meas
+                L.discard(0)            # no 3-limb hits
+            if len(L) >= 3:
+                L.discard(max(L))       # still 3 hand gems -> drop the highest
+            if bpm > 140 and not _on_grid(t, tempo_map, 1) and not _in_fill(t):
+                L.clear()               # quarters only above 140 BPM
+            L = _kick_ceiling(bpm, t, L)
 
         elif difficulty == Difficulty.EASY:
-            # Easy = the basic rock beat: kick + snare only (no hats / toms /
+            # Easy = the basic rock beat: kick + snare only (no hats/toms/
             # cymbals). This is the canonical "never more than 2 limbs, no hand
             # gems paired with kicks" Easy kit (the documented lane-consistency
             # exception — Easy legitimately uses fewer pads).
             L = L & {0, 1}
-            # >170 BPM: one kick per measure.
-            if bpm > 170 and 0 in L:
-                meas = int(t // _measure_dur(tempo_map, t))
-                if last_kick_measure.get("m") == meas:
-                    L.discard(0)
-                else:
-                    last_kick_measure["m"] = meas
+            if 0 in L and 1 in L:
+                L.discard(0)            # kick and snare alternate, never both
+            if not _on_grid(t, tempo_map, 1):
+                L.clear()               # hits spaced >= 1/8 (quarter grid)
+            L = _kick_ceiling(bpm, t, L)
 
-        for lane in sorted(L):
-            src = next((n for n in ev["notes"] if n.lane == lane), ev["notes"][0])
+        if not L:
+            continue
+        out_map.setdefault(t, set()).update(L)
+
+    out = []
+    for t in sorted(out_map):
+        for lane in sorted(out_map[t]):
+            src = None
+            for ev in events:
+                if abs(ev["time"] - t) <= snap_tol and lane in _lanes(ev):
+                    src = ev
+                    break
+            src_n = src["notes"][0] if src is not None else None
             out.append(ChartNote(
                 time=t,
                 lane=lane,
@@ -364,7 +394,7 @@ def _reduce_drums(notes, tempo_map, difficulty, fills):
                 is_open=False,
                 is_hopo=False,
                 velocity=100,
-                difficulty_pitch=getattr(src, "difficulty_pitch", 60 + lane),
+                difficulty_pitch=getattr(src_n, "difficulty_pitch", 60 + lane),
             ))
     return out
 

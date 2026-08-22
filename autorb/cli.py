@@ -213,7 +213,14 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
     
     click.echo("  Transcribing drums...")
     try:
-        drum_expert = transcribe_drums(stems["drums"], list(zip(beat_times, dynamic_bpms)), song_end)
+        # Use original mixed audio for drum detection (Demucs drum stem fails in quiet intros)
+        drum_expert = transcribe_drums(
+            stems["drums"], 
+            list(zip(beat_times, dynamic_bpms)), 
+            song_end, 
+            other_stem_path=stems.get("other"),
+            mixed_audio_path=Path(audio_file)
+        )
         drum_charts = create_all_difficulties(drum_expert, "drums")
         click.echo("  Drum transcription complete.")
     except Exception as e:

@@ -37,9 +37,9 @@ _BP_CACHE = {}
 
 # Chord grouping window (seconds): Basic Pitch reports the onsets of the tones
 # of one strum within a few tens of ms of each other — group them into one chord.
-# Wider window (60ms) to catch all tones of a strummed chord whose tones may arrive
-# at slightly different times due to pick angle / string physics / neural net variance.
-CHORD_WINDOW = 0.060
+# Narrower window (30ms) to separate rapid double/triple strums that are
+# distinct strums, not chord tones. 60ms was merging rapid strums into chords.
+CHORD_WINDOW = 0.030
 
 # Grid resolution the Expert chart is quantized to (divisions per beat).
 # 4 = 1/16 note: fine enough for eighth/sixteenth strum runs.
@@ -48,9 +48,9 @@ SNAP_DIVISIONS = 4
 # Basic Pitch confidence thresholds. Defaults (0.5 / 0.3) silently drop quiet
 # guitar/bass notes; lowering recovers missing notes but adds noise (keys on
 # the shared "other" stem). Raising reduces keys bleed at cost of missing
-# quiet guitar notes.
-ONSET_THRESHOLD = 0.55
-FRAME_THRESHOLD = 0.45
+# quiet guitar notes. 0.45/0.35 balances recovery of rapid strums vs keys bleed.
+ONSET_THRESHOLD = 0.45
+FRAME_THRESHOLD = 0.35
 
 # Deduplication tolerance for (time, lane) - notes within this many seconds
 # are considered duplicates. Guitar chords can have slight timing variations
@@ -108,12 +108,35 @@ def _transcribe_fretted(
         FMIN, FMAX = 70.0, 1400.0
 
     raw = []
+    # For bass: pre-load stem audio to enable energy-based filtering of phantom notes
+    # in low-energy regions (stem separation bleed in intro/outro)
+    stem_audio = None
+    if instrument == "bass":
+        import librosa
+        stem_audio, _ = librosa.load(stem_path, sr=sr, mono=True)
+        global_rms = np.sqrt(np.mean(stem_audio**2)) if len(stem_audio) > 0 else 1.0
+    
     for (start, end, pitch_midi, _amp, _bends) in note_events:
         if pitch_midi <= 0:
             continue
         hz = _hz(pitch_midi)
         if not (FMIN <= hz <= FMAX):
             continue  # Reject bleed outside instrument range
+        
+        # For bass: reject notes in near-silent regions (stem separation bleed)
+        if instrument == "bass" and stem_audio is not None:
+            i = int(start * sr)
+            half_win = int(0.025 * sr)  # 25ms half-window
+            start_idx = max(0, i - half_win)
+            end_idx = min(len(stem_audio), i + half_win)
+            seg = stem_audio[start_idx:end_idx]
+            if len(seg) > 0:
+                seg_rms = np.sqrt(np.mean(seg**2))
+                if global_rms > 0:
+                    rel_energy = seg_rms / global_rms
+                    if rel_energy < 0.02:  # Less than 2% of global RMS
+                        continue  # Skip phantom note in silent region
+        
         fps = pitch_to_fret_string(hz, tuning)
         lane = fret_string_to_lane(fps, tuning.num_strings)
         if lane < 0 or lane > 4:
@@ -126,6 +149,7 @@ def _transcribe_fretted(
             "lane": lane,
             "is_open": bool(fps.fret == 0),
             "length": float(length),
+            "pitch": float(pitch_midi),
         })
 
     if not raw:
@@ -146,6 +170,44 @@ def _transcribe_fretted(
             groups.append(cur)
             cur = [r]
     groups.append(cur)
+
+    # 3b. Reconstruct strummed chords. Basic Pitch leans monophonic and usually
+    # reports the single dominant tone of each strum, so a rock rhythm-guitar
+    # part gets charted as single notes. Where the audio at a charted note's
+    # frame is clearly chordal (>= 3 strong chroma pitch-classes — a strummed
+    # chord, not a melodic note), add the perfect-fifth to turn it into a
+    # playable 2-note power chord. Bass is left single-note.
+    if instrument == "guitar":
+        import librosa as _lr
+        _y, _ = _lr.load(stem_path, sr=sr, mono=True)
+        _hop = 512
+        _chroma = _lr.feature.chroma_stft(y=_y, sr=sr, hop_length=_hop)
+        for _g in groups:
+            if len(_g) != 1:
+                continue  # already a chord (or chord tones detected)
+            _r = _g[0]
+            _frame = int(_r["start"] * sr / _hop)
+            if not (0 <= _frame < _chroma.shape[1]):
+                continue
+            _c = _chroma[:, _frame]
+            _mx = _c.max()
+            if _mx <= 0:
+                continue
+            _strong = int(np.sum(_c > 0.5 * _mx))
+            if not (3 <= _strong <= 7):
+                continue  # not convincingly a strummed chord
+            _fifth_hz = _hz(_r["pitch"] + 7)
+            _fps = pitch_to_fret_string(_fifth_hz, tuning)
+            _f_lane = fret_string_to_lane(_fps, tuning.num_strings)
+            if _f_lane < 0 or _f_lane > 4 or _f_lane == _r["lane"]:
+                continue
+            _g.append({
+                "start": _r["start"],
+                "lane": _f_lane,
+                "is_open": bool(_fps.fret == 0),
+                "length": _r["length"],
+                "pitch": _r["pitch"] + 7,
+            })
 
     expert_notes = []
     for g in groups:

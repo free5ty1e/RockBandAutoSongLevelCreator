@@ -6,6 +6,63 @@ date: 2026-08-07
 
 Append-only ledger of changes to this knowledge base. Newest first. Each entry records: timestamp, what was added, and why (the reasoning that future agents should not have to re-derive).
 
+## 2026-08-21 — v0.1.7: Tom lane split by fundamental pitch (ADTOF drums closed loop)
+
+**What:** v0.1.6's ADTOF rewrite still dumped *every* tom on tom1 (Yellow, lane 2, the hi-hat pad) because `_refine_tom` used an attack spectral-centroid threshold — and a tom's stick attack is broadband-bright, so all toms read as "high". Result: tom-tom fills (the two big fills ~28-34s and ~122-128s, ~190 ADTOF toms) played as hi-hats, and the hi-hat lane ballooned to 523 notes. Fix:
+- Primary tom split by **fundamental pitch** via one `librosa.pyin` pass over the tom band (65–220 Hz) per hit: low <100 Hz → tom3 (Green, lane 4), mid 100–140 → tom2 (Blue, lane 3), high >140 → tom1 (Yellow, lane 2). ~58/190 hits lock a pitch.
+- Unpitched fallback (short rolls / tom+overhead) now uses **ring-window** (t+30–250 ms) sub-band energy 60–100 / 100–170 / 170–260 Hz, NOT attack centroid — a low tom has a bright attack but a low ring, so centroid misrouted low toms to mid. Ring energy gets ~132 unpitched toms: ~104 low (tom3/Green) + ~28 mid (tom2/Blue).
+
+**Verified on Eve6** (regenerated, count-in-free validation MIDI): Expert tom notes now ~134 low + 51 mid + 3 high; hi-hat lane (2) drops 523→339 (only real hi-hats remain); tom fills hit Green/Blue pads in descending feel; Expert 1327 → Hard 1036 → Medium 576 → Easy 197, Easy still kick+snare only; **intro 0-6s = 0 kicks** (ADTOF intro fix intact). Tests: 158 passed, 5 pre-existing vocal failures unchanged.
+
+**Why:** a tom is PITCHED but its attack is not — classification must use the ring/fundamental, not attack centroid. The ring-energy fallback matters because pyin fails on the ~34% of toms that are short or bled, and defaulting those to the hi-hat lane defeated the whole point of the ADTOF rewrite. Cross-checked against the stock 311 - Down `down2.mid` drum chart structure (Expert 1501 notes, toms on Blue/Green pads) as the RB convention template.
+
+**Artifact:** captures at intro(5s), tom fill(30s), tom fill(125s) in `/tmp/drums_5.png`, `/tmp/drums_fill30.png`, `/tmp/drums_fill125.png` for visual inspection; current rebuilt chart in `output/clone_hero/Eve 6 - Open Road Song/` and `output/validation/notes.mid`.
+
+
+## 2026-08-21 — v0.1.6 (revised): ADTOF neural drums + RBN drum difficulty + guitar chord reconstruction; bass intro fix reverted
+
+**What:** The v0.1.6 cycle's first deliverable (bass intro supplemented from `other.wav`) was **reverted after playtest** — on "Open Road Song" the bass genuinely does not play in the first ~16 measures (vocals/guitar/drums only), so the supplemented "bass" notes were guitar chords. The silent bass-stem intro is real content silence, NOT a Demucs routing artifact. What shipped instead:
+
+1. **ADTOF Frame-RNN neural drum transcription.** `drums.py` now runs the ADTOF 5-class model (kick/snare/toms/hi-hat/cymbals) on the **drums stem** (mixed audio only when the stem intro is digitally silent; librosa band fallback only if ADTOF absent). Cymbals re-split ride (Blue/3) vs crash (Green/4), toms into tom1/2/3 by spectral centroid; `DRUM_LANE_MAP` tom2→lane 3, tom3→lane 4 corrected to the RBN packing standard. Hits grid-quantized to 1/8. On correct Eve6 audio the intro charts **snare + hi-hat only, zero false kicks** (the v0.1.5 mixed-audio band path had charted 16–26 guitar/bass-lows-as-kicks per 5 s — see supersession note on the old entry below).
+2. **Real RBN/C3 drum difficulty reduction.** The fabricated "Hard drops cymbals" rule never fired (Hard == Expert). Now: Hard thins kicks/snare accents to the quarter grid + crash consolidation; Medium requires kick/snare on a hi-hat/ride gem, bans 3-limb hits and kick-under-crash, 8ths ≤140 BPM, one kick/measure >170 BPM; Easy = basic kick/snare beat. Cascade Expert 1326 → Hard 1036 → Medium 618 → Easy 577.
+3. **Guitar strummed-chord reconstruction** (Basic Pitch is monophonic-leaning): add the perfect-fifth where the audio is chordal (chroma), Expert chords 27 → 565; fixed `_reduce_fretted` re-quantizing Hard to 1/8 (166 fake chords).
+4. **ADTOF baked into `requirements.txt`** so devcontainer rebuilds get it.
+
+**Verified on correct Eve6 audio** (count-in-free validation MIDI): drums Expert 1326, bass 644, guitar 1485, keys 1485; 0 same-lane collisions; tests 158 passed, 5 pre-existing vocal failures unchanged.
+
+**Why:** The wrong-audio discovery (prior entry) invalidated the v0.1.5 drum approach and numbers; on the correct track the drums stem has the real intro (RMS 0.012 @ 0–10 s), so the mixed-audio intro hack was charting guitar/bass lows as kicks. The neural transcriber is both a better detector and classifier, and matches the research note that hand-tuned spectral drum classification is the weak point. The drum difficulty rewrite replaces invented rules with the RBN/C3-distilled ones, and the Hard 1/8-quantization was a genuine bug (16th runs → stacked chords).
+
+**Caveat logged:** drums Hard == Expert for *bass* (644 == 644) — `_reduce_fretted` Hard only drops forbidden chord shapes and the bass chart has none; acceptable (RB bass Hard ≈ Expert is common), a deliberate bass thinning rule is future work. Keys still reuses the guitar transcription (stems inseparable).
+
+## 2026-08-20 — v0.1.6: Intro bass restored + verification moved to the correct test track
+
+> **SUPERSEDED the same day.** The bass-intro supplement described below was **reverted** (playtest showed the "bass" notes were guitar chords — the bass genuinely doesn't play the intro). See the 2026-08-21 v0.1.6 (revised) entry above. The wrong-audio discovery (item 2 below) remains correct and is the reason all v0.1.5-era numbers are untrustworthy.
+
+**What:** Two changes:
+
+1. **Bass intro restored.** Same Demucs routing quirk as drums: the first ~12 s of bass go into `other.wav`, leaving `bass.wav` digitally silent there (band RMS 0.0001 vs 0.02+ after the body kicks in), so the bass chart started at ~11.9 s. `transcribe_bass` now takes `other_stem_path`; `_transcribe_fretted` supplements the silent-stem regions with **bass-range (38–420 Hz) Basic-Pitch notes from the shared `other` stem**, accepted only where the bass stem's local RMS < 2 % of global (same floor as the phantom-note filter). First bass note: **11.9 s → 0.5 s**. No extra inference — the `other` stem Basic-Pitch result is already cached by the guitar transcription.
+2. **Correct test track.** Discovered the entire `output/` dataset (291 s stems/tempo/vocals/validation/CON) was built from the **wrong audio** — correlation 0.994 between `preview_mix.wav` and `barenakedLadies-brianWilson.mp3`, while `eve6-openRoadSong.mp3` (the intended test track, 198 s) correlated 0.012. The full pipeline was regenerated on the correct MP3 (stems 198 s, 168.99 BPM avg / 534 beats, 284 aligned words, 407 vocal notes, CON + Clone Hero rebuilt). All v0.1.5-era drum counts were measured on the wrong audio and are superseded.
+
+**Verified on correct Eve6 audio** (count-in-free validation MIDI): drums first 0.25 s, bass 0.50 s, guitar 0.50 s, keys 0.50 s, vocals 0.26 s; Expert guitar 1093 / bass 719 / drums 801 / keys 1093; all 4 instruments × 4 difficulties 0 same-lane collisions. Tests: 158 passed, 5 pre-existing vocal failures unchanged.
+
+**Why:** The bass intro gap was the last remaining "instrument starts minutes late" defect, and it had the identical root cause as the drums fix — a future agent must know that *both* drums and bass stems are digitally silent in the intro because Demucs routes those hits to `other.wav`, and that `other.wav` is therefore the correct intro source for both. The wrong-audio discovery matters because it invalidates the v0.1.5 verification numbers and means future work must always confirm the `output/` artifacts actually match the input audio before trusting chart metrics.
+
+**Caveat logged:** drum **Hard == Expert** (both 801) on this track — `_drum_reduce` drops cymbals on Hard, but this song has few lane-4 hits so Hard is unchanged; Medium 235 / Easy 78 reduce correctly. See `[[difficulty_charting]]`.
+
+## 2026-08-20 — v0.1.5: Intro drums transcribed from the mixed audio + classifier hierarchy fix
+
+> **SUPERSEDED in v0.1.6.** Measured on the wrong audio file (Brian Wilson MP3) and replaced by the ADTOF neural transcriber on the drums stem — the mixed-audio intro band detection charted guitar/bass lows as kicks on the correct track. Kept below for the librosa band fallback logic.
+
+**What:** Two root-cause fixes make the drum chart start at the true first hit with a sane lane balance:
+
+1. **Intro drums now come from the original mixed audio, not the silent drums stem.** Demucs routes the first ~60 s of drums into `other.wav`, leaving `drums.wav` digitally silent (full RMS 0.0002 vs 0.045 after 60 s; kick band 0.000005). The v0.1.3 "drums at 0.10 s" was actually windowed-local-normalization charting *noise* as hi-hats. `transcribe_drums` now accepts `mixed_audio_path` and splits: **intro (0–60 s)** = band-specific onset detection on the mixed audio (kick 30–110 Hz, snare 150–350 Hz, hat 7–14 kHz) snapped onto the 1/8 beat grid (>35 % off-grid dropped; simultaneous slots → chords); **body (≥60 s)** = drums stem + standard windowed onset detection + classifier. First note now at the true ~0.25 s.
+2. **`classify_drum_onsets_energy` hierarchy corrected.** The old high-band-first rule sent every snare's 3–9 kHz crack into the hi-hat/ride branch (snare 7 notes, ride 282–418). New order: **kick (sub-dominant) → snare (mid 110–350 Hz dominant) → hi-hat (7–14 kHz over 3–9 kHz) → crash → ride → unknown**. On "Open Road Song": snare 7→534, ride 418→31, kick 310→469, hi-hat 462→253.
+3. **Fixed librosa 0.11 mel-filterbank collapse** in `_band_onsets`: `n_mels=64` + `aggregate=np.median` over a narrow band (30–110 Hz) → most mel bins outside the band, median ~0, zero onsets. `n_mels` now scaled to the band (`clamp(fmax/2000*64, 8, 64)`) and `aggregate=np.mean`.
+
+**Verified:** CON rebuilds end-to-end; all 4 difficulties 0 same-lane overlaps (Expert 1392: kick 469 / snare 534 / hat 253 / crash 105 / ride 31). Tests: 158 passed, 5 pre-existing vocal failures unchanged.
+
+**Why:** The intro was either silent (before v0.1.3) or noise-charted (v0.1.3+), and the classifier systematically misread snare crack as ride — the two dominant remaining drum-chart defects. The key non-obvious facts future agents should not re-derive: (a) the drums stem is *digitally silent* until ~60 s because Demucs routes those hits to `other.wav`, so the mixed audio is the only valid intro source; (b) mel `onset_strength` needs `n_mels` scaled to the band and `aggregate=np.mean`; (c) on a clean stem, mid-band dominance is the reliable snare signal, not the high-band crack.
+
 ## 2026-08-19 — v0.1.4: Guitar chord cleanup + drum balance + bass holds
 
 **What:** Three major playability improvements from extended Clone Hero playtesting:

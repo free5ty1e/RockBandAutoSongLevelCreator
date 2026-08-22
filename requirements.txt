@@ -31,4 +31,9 @@ crepe>=0.0.12          # High-quality pitch detection
 madmom>=0.16.1         # Drum onset detection, tempo
 scikit-learn>=1.3.0    # For drum classification
 
+# Neural drum transcription: ADTOF Frame-RNN (kick/snare/toms/hihat/cymbals).
+# Not on PyPI — installed from source (needs git, torch, librosa, pretty_midi).
+# Falls back to the librosa band-based detector+classifier when absent.
+adtof-pytorch @ git+https://github.com/xavriley/ADTOF-pytorch.git
+
 

@@ -22,17 +22,19 @@ class DrumElement:
     metadata: dict = None    # Additional info
 
 
-# Standard 5-lane drum mapping (Expert)
+# Standard 5-lane drum mapping (Expert). RBN / C3 packing convention:
+#   96=kick, 97=Red(snare), 98=Yellow(hi-hat/tom1), 99=Blue(ride/tom2),
+#   100=Green(crash/tom3). The raw GM drum pitches below ride the same lanes.
 DRUM_LANE_MAP = {
     'kick': (0, 36),        # Green lane, C2
     'snare': (1, 38),       # Red lane, D2
     'hihat': (2, 42),       # Yellow lane, F#2
     'hihat_open': (2, 46),  # Yellow lane, A#2 (same lane, different pitch)
     'ride': (3, 51),        # Blue lane, D#3
-    'crash': (4, 49),       # Orange lane, D#3
-    'tom1': (2, 48),        # Yellow lane, C3
-    'tom2': (1, 45),        # Red lane, A2
-    'tom3': (0, 43),        # Green lane, G2
+    'crash': (4, 49),       # Green lane, C#3
+    'tom1': (2, 48),        # Yellow lane, C3 (high tom)
+    'tom2': (3, 45),        # Blue lane, A2 (mid tom)
+    'tom3': (4, 43),        # Green lane, G2 (floor tom)
 }
 
 # Pro drums 7-lane additions
@@ -66,10 +68,74 @@ def classify_drum_onsets_energy(
     Classify onsets by per-band RMS energy ratios measured at each onset time.
 
     Band energy is computed on a band-passed signal so low/mid/high content is
-    isolated *before* the decision. This avoids the old spectral-score heuristic,
-    whose normalization excluded the low-mid/sub bands and inflated the kick and
-    tom scores so almost every hit collapsed to kick or tom regardless of the
-    actual audio.
+    isolated *before* the decision. The decision hierarchy matters:
+
+      kick   -> the sub-bass band (30-110 Hz) is the dominant band
+      snare  -> the mid band (110-350 Hz) dominates the high bands (snare body
+                + crack). Checking mid BEFORE the high bands is essential:
+                snares carry a strong 3-9 kHz crack, so a high-band-first rule
+                (the old code) classified most snares as ride/cymbal and
+                flooded the chart with false rides while under-charting snare.
+      hi-hat -> the 7-14 kHz band dominates the 3-9 kHz band
+      crash  -> both high bands dominate and the hit is loud
+      ride   -> high bands present but not dominant enough for a crash
+      unknown-> ambiguous (left uncharted)
+
+    The confidence is the share of the deciding band in the total, clipped to 1.
+    """
+    half = int(sr * window_ms / 1000 / 2)
+    results = []
+    for t in times:
+        i = int(t * sr)
+        start = max(0, i - half)
+        end = min(len(y), i + half)
+        seg = y[start:end]
+        if len(seg) < int(sr * 0.005):
+            results.append(DrumElement('unknown', 0.0, 0, 0))
+            continue
+        ek = _band_rms(seg, sr, 30, 110)
+        em = _band_rms(seg, sr, 110, 350)
+        eh = _band_rms(seg, sr, 7000, 14000)
+        ec = _band_rms(seg, sr, 3000, 9000)
+        tot = ek + em + eh + ec + 1e-9
+        elem, lane, pitch, conf = 'unknown', 0, 36, 0.0
+
+        # 1. Kick: sub-bass is the single dominant band (kick thump).
+        if ek > em and ek > eh and ek > ec:
+            elem, lane, pitch = 'kick', 0, 36
+            conf = ek / tot
+        # 2. Snare: the mid band dominates over the high bands (body + crack).
+        elif em > 0.25 * tot and em >= eh and em >= ec:
+            elem, lane, pitch = 'snare', 1, 38
+            conf = em / tot
+        # 3. Hi-hat: 7-14 kHz dominates the 3-9 kHz band.
+        elif eh >= ec * 0.6:
+            elem, lane, pitch = 'hihat', 2, 42
+            conf = eh / tot
+        # 4. Crash: both high bands dominate and the hit is loud.
+        elif (eh + ec) > 0.55 * tot:
+            elem, lane, pitch = 'crash', 4, 49
+            conf = (eh + ec) / tot
+        # 5. Ride: high bands present but not crash-loud.
+        elif (eh + ec) > 0.20 * tot:
+            elem, lane, pitch = 'ride', 3, 51
+            conf = (eh + ec) / tot
+        # else: ambiguous -> unknown (uncharted)
+        results.append(DrumElement(elem, float(min(conf, 1.0)), lane, pitch))
+    return results
+
+
+def classify_drum_onsets_energy_intro(
+    y: np.ndarray,
+    sr: int,
+    times: np.ndarray,
+    window_ms: int = 60,
+) -> list:
+    """
+    INTRO-SPECIFIC drum classification for first 60 seconds.
+    
+    Uses maximally aggressive kick/hi-hat detection and suppresses snare/ride/tom
+    to handle quiet intros where drums are present but quiet.
     """
     half = int(sr * window_ms / 1000 / 2)
     results = []
@@ -88,29 +154,30 @@ def classify_drum_onsets_energy(
         ehf = _band_rms(seg, sr, 2000, 14000)
         tot = ek + em + eh + ec + 1e-9
         elem, lane, pitch, conf = 'unknown', 0, 36, 0.0
-        # Hi-hat / cymbal detection: require strong high-freq presence but not too strict
-        if max(eh, ec) > 0.35 * tot:
-            if eh >= ec * 0.75:
+        
+        # INTRO MODE: Maximally aggressive hi-hat/kick detection, suppress everything else
+        if max(eh, ec) > 0.1 * tot:
+            if eh >= ec * 0.55:
                 elem, lane, pitch = 'hihat', 2, 42
             else:
-                # Cymbal-band hit: default to ride, crash only for loud accents
-                if (eh + ec) > 0.75 * tot:
+                # Cymbal-band: default to ride, crash only for very loud accents
+                if (eh + ec) > 0.5 * tot:
                     elem, lane, pitch = 'crash', 4, 49
                 else:
                     elem, lane, pitch = 'ride', 3, 51
             conf = max(eh, ec) / tot
         else:
-            if ek > em * 2.0:
+            if ek > em * 0.8:  # Very low kick threshold for intro
                 elem, lane, pitch = 'kick', 0, 36
                 conf = ek / (ek + em + 1e-9)
             else:
-                if ehf > 0.25 * (ek + em + 1e-9):
+                if ehf > 0.15 * (ek + em + 1e-9):
                     elem, lane, pitch = 'snare', 1, 38
                     conf = ehf / (ek + em + 1e-9)
                 else:
-                    # Default to unknown - do NOT default to tom
-                    elem, lane, pitch = 'unknown', 2, 48
-                    conf = em / (ek + em + 1e-9)
+                    # Default to hihat for any remaining rhythmic content in intro
+                    elem, lane, pitch = 'hihat', 2, 42
+                    conf = eh / (eh + ec + 1e-9) if (eh + ec) > 0 else 0.5
         results.append(DrumElement(elem, float(min(conf, 1.0)), lane, pitch))
     return results
 
