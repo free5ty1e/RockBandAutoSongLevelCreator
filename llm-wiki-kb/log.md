@@ -6,6 +6,28 @@ date: 2026-08-07
 
 Append-only ledger of changes to this knowledge base. Newest first. Each entry records: timestamp, what was added, and why (the reasoning that future agents should not have to re-derive).
 
+## 2026-08-23 — v0.1.8: Bass two-stage energy gate (phantom intro bleed eliminated)
+
+**What:** The bass energy gate in `_transcribe_fretted` (bass branch, `guitar.py`) compared each note to **whole-stem global RMS**, which collapses toward zero across the long silent intro (bass `bass.wav` is digitally silent until ~23 s on "Open Road Song"). With the mean dragged down, bleed at 20–40% of the *active* level passed the "2% of global" test — 12 phantom bass notes before the real first note at measure 17, including a 13.3 s A2 spike (band RMS 0.032) that sits in the same energy band as soft real bass and so cannot be killed by a single energy threshold without also dropping soft real notes.
+
+Fix: a **two-stage gate** on a bass-band (40–250 Hz) RMS envelope:
+1. **Hard floor at 35% of the 75th-percentile active level** — kills the quiet intro/0–16 s bleed (band RMS 0.01–0.022).
+2. **Density guard** — notes in the ambiguous band [floor, 0.5×active) are kept only if a neighboring bass note exists within 0.5 s. Real bass is rhythmically dense (≤0.5 s between onsets at 168 BPM); the 13.3 s spike's only surviving neighbor is the real first note 10 s later, so it is flagged phantom. Dense soft real bass (eighth-note or faster) is preserved.
+
+**Verified on Eve6** (regenerated, count-in-free MIDI at `output/validation/notes.mid`): bass Expert **612 notes, 0 notes before the genuine first bass note at 23.25 s (measure 17)**; the 23.25 s note is retained (band RMS 0.111, above stage 1). Guitar/keys/drums paths untouched (`git diff` = `guitar.py` only). `tests/test_midi_structure.py`: 10/10 pass. The 5 vocal-sync failures (`test_lyrics_parity`, `test_quality_validation`, `test_vocal_sync_fixes`) are pre-existing and unrelated (fixture/WhisperX-dependent; they do not import the instrument transcription path).
+
+**Why:** whole-stem RMS is a bad reference when the stem is silent for long stretches — the gate must be *local* (band-limited) and *relative to the active level*, and the one borderline bleed spike needs a *contextual* (density) discriminator because its raw energy is indistinguishable from soft real bass. This is the same "phantom onset in silence" class as the v0.1.3 drum onset fix, but bass has no separate onset detector — it inherits Basic Pitch's full tone stream, so the gate must live in `_transcribe_fretted`.
+
+### Guitar held-chord fragment merge (also v0.1.8)
+`_transcribe_fretted` (guitar branch) adds step 3c: a sustained power chord strummed an 8th-note is re-emitted by Basic Pitch every ~178 ms @ 169 BPM, reading as a "mass of overlapping chords" / "chopped into tiny fragments." Merge chord groups within ~1 beat (tempo-relative 0.5 s) that share the identical `(lane, is_open)` set, are chroma-stable (no pitch-class change → not a new chord), and
+
+envelope continuous (RMS ≥ 15% of peak between attacks) while preserving damped
+  strumming (envelope dips) and rapid distinct-chord changes (chroma flip). Generalizes
+  across tempos via a tempo-relative ~1-beat merge window. On Eve6: guitar Expert
+  1489→1334 notes, 0 same-lane overlaps, bridge strum rhythm (br2 203 attacks) untouched.
+  The envelope floor (0.15) may need per-song tuning if a part uses deliberately muted
+  single-lane 8th-note patterns.
+
 ## 2026-08-21 — v0.1.7: Tom lane split by fundamental pitch (ADTOF drums closed loop)
 
 **What:** v0.1.6's ADTOF rewrite still dumped *every* tom on tom1 (Yellow, lane 2, the hi-hat pad) because `_refine_tom` used an attack spectral-centroid threshold — and a tom's stick attack is broadband-bright, so all toms read as "high". Result: tom-tom fills (the two big fills ~28-34s and ~122-128s, ~190 ADTOF toms) played as hi-hats, and the hi-hat lane ballooned to 523 notes. Fix:

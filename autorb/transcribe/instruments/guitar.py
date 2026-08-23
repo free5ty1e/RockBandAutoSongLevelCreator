@@ -14,6 +14,7 @@ Difficulty reduction (Hard / Medium / Easy) is handled downstream in
 
 from pathlib import Path
 import numpy as np
+from scipy.signal import butter, sosfiltfilt
 
 import basic_pitch.inference as bp
 from basic_pitch import ICASSP_2022_MODEL_PATH
@@ -108,35 +109,59 @@ def _transcribe_fretted(
         FMIN, FMAX = 70.0, 1400.0
 
     raw = []
-    # For bass: pre-load stem audio to enable energy-based filtering of phantom notes
-    # in low-energy regions (stem separation bleed in intro/outro)
-    stem_audio = None
+    # For bass: pre-load stem audio and compute a bass-band (40-250 Hz) RMS
+    # envelope, used to reject phantom notes in low-energy regions caused by
+    # stem-separation bleed in the intro/outro. The previous version gated on
+    # whole-stem global RMS, which collapses toward zero when the bass is silent
+    # for long stretches -- making the "2% of global" threshold useless (bleed
+    # at ~20-30% of *active* level passed right through). Gating on the bass-band
+    # RMS relative to the track's own *active* level (75th percentile) cleanly
+    # separates bleed from real bass playing.
+    band_env_t = None
+    band_env = None
+    band_floor = 0.0
     if instrument == "bass":
         import librosa
         stem_audio, _ = librosa.load(stem_path, sr=sr, mono=True)
-        global_rms = np.sqrt(np.mean(stem_audio**2)) if len(stem_audio) > 0 else 1.0
-    
+        if len(stem_audio) > 0:
+            sos_b = butter(4, [40.0 / (sr / 2), 250.0 / (sr / 2)],
+                           btype="band", output="sos")
+            band = sosfiltfilt(sos_b, stem_audio)
+            _hop = 512
+            band_env = librosa.feature.rms(y=band, hop_length=_hop)[0]
+            band_env_t = librosa.frames_to_time(
+                np.arange(len(band_env)), sr=sr, hop_length=_hop)
+            _active = float(np.percentile(band_env, 75))
+            # A bass note is genuine only where the bass band (40-250 Hz) is
+            # actually active. We gate on the stem's own *active* level (75th
+            # percentile of the bass-band RMS) rather than whole-stem RMS (fixed
+            # above), which collapsed toward zero across the long silent intro and
+            # let bleed at ~20-30% of active level walk through. 35% of the active
+            # level gates the quiet intro bleed and the 12.9 / 13.1 / 13.9 s guitar-
+            # fundamental bleeds (band RMS ~0.01-0.022); the higher 13.3 s A2 spike
+            # (0.032) is caught by the density pass below. Soft *real* bass notes
+            # (~0.025-0.03 of active) survive stage 1 and are kept by the density
+            # pass (real bass is rhythmically dense). See
+            # llm-wiki-kb/instrument_charting.md#bass-energy-gate.
+            band_floor = _active * 0.35
+
     for (start, end, pitch_midi, _amp, _bends) in note_events:
         if pitch_midi <= 0:
             continue
         hz = _hz(pitch_midi)
         if not (FMIN <= hz <= FMAX):
             continue  # Reject bleed outside instrument range
-        
-        # For bass: reject notes in near-silent regions (stem separation bleed)
-        if instrument == "bass" and stem_audio is not None:
-            i = int(start * sr)
-            half_win = int(0.025 * sr)  # 25ms half-window
-            start_idx = max(0, i - half_win)
-            end_idx = min(len(stem_audio), i + half_win)
-            seg = stem_audio[start_idx:end_idx]
-            if len(seg) > 0:
-                seg_rms = np.sqrt(np.mean(seg**2))
-                if global_rms > 0:
-                    rel_energy = seg_rms / global_rms
-                    if rel_energy < 0.02:  # Less than 2% of global RMS
-                        continue  # Skip phantom note in silent region
-        
+
+        # For bass: reject notes where the bass band is not actually active
+        # (stem-separation bleed in the intro/outro). Real bass notes coincide
+        # with genuine low-band energy; bleed transients don't.
+        _note_band_rms = None
+        if instrument == "bass" and band_env is not None and band_floor > 0:
+            _bi = int(np.argmin(np.abs(band_env_t - start)))
+            _note_band_rms = float(band_env[_bi])
+            if _note_band_rms < band_floor:
+                continue  # quiet bleed (e.g. the intro, 12-13s guitar-fundamental bleed)
+
         fps = pitch_to_fret_string(hz, tuning)
         lane = fret_string_to_lane(fps, tuning.num_strings)
         if lane < 0 or lane > 4:
@@ -150,6 +175,7 @@ def _transcribe_fretted(
             "is_open": bool(fps.fret == 0),
             "length": float(length),
             "pitch": float(pitch_midi),
+            "band_rms": _note_band_rms,
         })
 
     if not raw:
@@ -157,6 +183,27 @@ def _transcribe_fretted(
             notes=[], tempo_map=tempo_map,
             metadata={"instrument": instrument, "num_onsets": 0},
         )
+
+    # 3a. For bass: second-pass density gate. A note that cleared the hard floor
+    # but sits in the ambiguous low-energy band ([floor, 0.5*active)) is only kept
+    # if it has a neighboring bass note within 0.5 s -- real bass is rhythmically
+    # dense; a lone bleed spike (e.g. the 13.3 s A2 at band RMS ~0.032, whose
+    # only neighbor is the real bass 10 s later) is phantom. Sparse *real* bass
+    # lines on eighth-notes or faster (~0.36 s at this tempo) are preserved.
+    if instrument == "bass" and band_env is not None and band_floor > 0:
+        _amb_hi = _active * 0.50
+        _starts = np.array([r["start"] for r in raw])
+        _to_drop = set()
+        for i, _rnote in enumerate(raw):
+            br = _rnote.get("band_rms")
+            if br is None or br < band_floor or br >= _amb_hi:
+                continue
+            dist = np.abs(_starts - _rnote["start"])
+            dist[i] = np.inf
+            if float(dist.min()) >= 0.5:
+                _to_drop.add(i)
+        if _to_drop:
+            raw = [r for j, r in enumerate(raw) if j not in _to_drop]
 
     # 3. Group near-simultaneous onsets into chord events, then snap the whole
     #    group to the shared quantized time so chords render simultaneously.
@@ -208,6 +255,58 @@ def _transcribe_fretted(
                 "length": _r["length"],
                 "pitch": _r["pitch"] + 7,
             })
+
+    # 3c. Collapse held-chord strum-fragments into one sustained chord (guitar
+    # only). On held-bridge sections the rhythm-guitar part is a single power chord
+    # held for 2+ beats while Basic Pitch re-emits it every 8th-note (~178 ms at
+    # 169 BPM) -> read as a "mass of overlapping chords" / "chopped into tiny
+    # fragments." A genuinely *held* chord has continuous energy between the
+    # re-emitted attacks (no envelope dip); a damped *strum* (new pitch or
+    # re-articulated chord) dips in amplitude and/or changes chroma. So we merge
+    # identical (lane, is_open) chord groups that are within a sub-eighth gap
+    # (1.2x an 8th note, ~210 ms @ 169 BPM) AND chroma-stable AND envelope-
+    # continuous (>=25% of peak RMS between attacks). Damped strums and rapid
+    # distinct-chord changes (chroma flip) are left untouched. Generalizes across
+    # tempos via the tempo-relative gap.
+    if instrument == "guitar":
+        _rms = _lr.feature.rms(y=_y, hop_length=_hop)[0]
+        _ct = _lr.frames_to_time(np.arange(_chroma.shape[1]), sr=sr, hop_length=_hop)
+        _bpm = float(np.median([bpm for _t, bpm in tempo_map])) if tempo_map else 120.0
+        _frag_gap = 0.5  # merge same-chord attacks up to ~1 beat apart (a held chord
+                         # strummed an 8th-note is re-emitted every ~178 ms @ 169 BPM;
+                         # distinct chord changes keep a new attack and are excluded by
+                         # the chroma check below, so this only glues one held chord).
+        def _stable(t0, t1):
+            j0 = int(np.clip(np.searchsorted(_ct, t0), 0, len(_ct) - 1))
+            j1 = int(np.clip(np.searchsorted(_ct, t1), 0, len(_ct) - 1))
+            return int(np.argmax(_chroma[:, j0])) == int(np.argmax(_chroma[:, j1]))
+        def _held(t0, t1):
+            j0 = int(np.clip(np.searchsorted(_ct, t0), 0, len(_ct) - 1))
+            j1 = int(np.clip(np.searchsorted(_ct, t1), 0, len(_ct) - 1))
+            if j1 < j0:
+                j0, j1 = j1, j0
+            seg = _rms[j0:j1 + 1]
+            if len(seg) < 2:
+                return False
+            mx = float(seg.max())
+            return mx > 0 and float(seg.min()) >= 0.15 * mx
+        def _laneset(g):
+            return frozenset((int(r["lane"]), bool(r["is_open"])) for r in g)
+        _merged = []
+        for _g in groups:
+            if _merged:
+                _pg = _merged[-1]
+                _gap = _g[0]["start"] - _pg[0]["start"]
+                if (0.0 < _gap < _frag_gap
+                        and _laneset(_g) == _laneset(_pg)
+                        and _stable(_pg[-1]["start"], _g[0]["start"])
+                        and _held(_pg[-1]["start"], _g[0]["start"])):
+                    _g_end = max(r["start"] + r["length"] for r in _g)
+                    for _r in _pg:
+                        _r["length"] = max(_r["length"], _g_end - _r["start"])
+                    continue  # absorb _g as a fragment of the held chord
+            _merged.append(_g)
+        groups = _merged
 
     expert_notes = []
     for g in groups:
