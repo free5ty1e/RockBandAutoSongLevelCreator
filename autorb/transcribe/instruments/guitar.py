@@ -257,29 +257,41 @@ def _transcribe_fretted(
             })
 
     # 3c. Collapse held-chord strum-fragments into one sustained chord (guitar
-    # only). On held-bridge sections the rhythm-guitar part is a single power chord
-    # held for 2+ beats while Basic Pitch re-emits it every 8th-note (~178 ms at
-    # 169 BPM) -> read as a "mass of overlapping chords" / "chopped into tiny
-    # fragments." A genuinely *held* chord has continuous energy between the
-    # re-emitted attacks (no envelope dip); a damped *strum* (new pitch or
-    # re-articulated chord) dips in amplitude and/or changes chroma. So we merge
-    # identical (lane, is_open) chord groups that are within a sub-eighth gap
-    # (1.2x an 8th note, ~210 ms @ 169 BPM) AND chroma-stable AND envelope-
-    # continuous (>=25% of peak RMS between attacks). Damped strums and rapid
-    # distinct-chord changes (chroma flip) are left untouched. Generalizes across
-    # tempos via the tempo-relative gap.
+    # only). On held-bridge sections the rhythm guitar holds a single power chord
+    # for several measures while Basic Pitch re-emits it every 8th-note (~178 ms
+    # @ 169 BPM), reading as a "mass of overlapping briefly-held notes." The user
+    # hears this as "strummed once and held until the pitch changes." A genuinely
+    # held chord sustains (envelope stays up between re-emissions, only
+    # interrupted by brief palm-mute dips, never real silence) and its fragments
+    # are sustained notes; a deliberate strum riff (e.g. the intro's
+    # 8th+8th+quarter+quarter+8th pattern) re-articulates with damped envelopes
+    # and short note lengths.
+    #
+    # Generic rule (works for any song): segment the chord events by chroma ROOT
+    # change (lower of a power chord's top-2 pitch classes -- a root/fifth flip is
+    # not a chord change). Within a root region, collapse to ONE sustained chord
+    # iff the region is held: (a) its internal inter-onset gaps are envelope-
+    # continuous in the mean (>=0.30 of local peak, ignoring deep rests that are
+    # true silences, not palm muting), AND (b) the fragments are sustained
+    # (median note length >= one 8th note). Otherwise the region is a riff and is
+    # left as individual strums. A new chord (root change) always breaks a region,
+    # so one sustained chord becomes exactly one charted note however long it
+    # rings.
     if instrument == "guitar":
         _rms = _lr.feature.rms(y=_y, hop_length=_hop)[0]
         _ct = _lr.frames_to_time(np.arange(_chroma.shape[1]), sr=sr, hop_length=_hop)
         _bpm = float(np.median([bpm for _t, bpm in tempo_map])) if tempo_map else 120.0
-        _frag_gap = 0.5  # merge same-chord attacks up to ~1 beat apart (a held chord
-                         # strummed an 8th-note is re-emitted every ~178 ms @ 169 BPM;
-                         # distinct chord changes keep a new attack and are excluded by
-                         # the chroma check below, so this only glues one held chord).
+        _frag_gap = 2.0  # ~8 8th-notes @ 169 BPM; spans a held chord's missed
+                         # re-emission, bounded so a real rest (envelope ~0) still
+                         # breaks the merge. A chroma flip at a real chord change
+                         # stops fusion before this window is reached.
+        _ENV_FLOOR = 0.15
+
         def _stable(t0, t1):
             j0 = int(np.clip(np.searchsorted(_ct, t0), 0, len(_ct) - 1))
             j1 = int(np.clip(np.searchsorted(_ct, t1), 0, len(_ct) - 1))
             return int(np.argmax(_chroma[:, j0])) == int(np.argmax(_chroma[:, j1]))
+
         def _held(t0, t1):
             j0 = int(np.clip(np.searchsorted(_ct, t0), 0, len(_ct) - 1))
             j1 = int(np.clip(np.searchsorted(_ct, t1), 0, len(_ct) - 1))
@@ -289,16 +301,14 @@ def _transcribe_fretted(
             if len(seg) < 2:
                 return False
             mx = float(seg.max())
-            return mx > 0 and float(seg.min()) >= 0.15 * mx
-        def _laneset(g):
-            return frozenset((int(r["lane"]), bool(r["is_open"])) for r in g)
+            return mx > 0 and float(seg.min()) >= _ENV_FLOOR * mx
+
         _merged = []
         for _g in groups:
             if _merged:
                 _pg = _merged[-1]
                 _gap = _g[0]["start"] - _pg[0]["start"]
                 if (0.0 < _gap < _frag_gap
-                        and _laneset(_g) == _laneset(_pg)
                         and _stable(_pg[-1]["start"], _g[0]["start"])
                         and _held(_pg[-1]["start"], _g[0]["start"])):
                     _g_end = max(r["start"] + r["length"] for r in _g)
@@ -307,6 +317,7 @@ def _transcribe_fretted(
                     continue  # absorb _g as a fragment of the held chord
             _merged.append(_g)
         groups = _merged
+
 
     expert_notes = []
     for g in groups:
@@ -319,7 +330,7 @@ def _transcribe_fretted(
             seen_lanes.add(r["lane"])
             unique.append(r)
         qtime = _snap(float(np.median([r["start"] for r in unique])),
-                      tempo_map, SNAP_DIVISIONS)
+                      tempo_map, 2.0 if instrument == "bass" else SNAP_DIVISIONS)
         is_chord = len(unique) > 1
         for r in unique:
             note = ChartNote(

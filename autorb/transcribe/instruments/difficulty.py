@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 from enum import Enum
 
+import numpy as _np
+
 
 class Difficulty(Enum):
     EXPERT = "expert"
@@ -26,6 +28,42 @@ class Difficulty(Enum):
 # --------------------------------------------------------------------------
 # Beat-grid helpers
 # --------------------------------------------------------------------------
+
+_BEAT_GRID_CACHE: dict = {}
+
+
+def _beat_grid(tempo_map, divisions: float) -> "_np.ndarray":
+    """Drift-correct subdivision grid derived from the tempo map's beat times.
+
+    ``tempo_map`` is a sequence of ``(beat_time, bpm)`` pairs (one per quarter
+    note, with per-measure tempo variation folded in as per-beat BPM). The
+    uniform ``round(time / step) * step`` snap quantizes against a grid anchored
+    at t=0 with a *single* (local) step size, which diverges from the real beat
+    positions when the tempo map drifts (this repo's tempo map spans
+    ~152-184 BPM, an ~18% drift) -- a note that is a few ms late on a genuine
+    beat gets pushed onto the *wrong* grid line, producing the "charted notes
+    off the beat" symptom. Snapping to the interpolated ``beat_times`` grid
+    instead keeps every note on the actual tempo grid so chart ticks line up
+    with the audio beats regardless of per-measure tempo drift.
+    """
+    key = (id(tempo_map), divisions)
+    grid = _BEAT_GRID_CACHE.get(key)
+    if grid is None:
+        beats = _np.array([float(t) for t, _ in tempo_map])
+        di = max(1, int(divisions))
+        subs = _np.empty((len(beats) - 1) * di + 1)
+        idx = 0
+        for k in range(len(beats) - 1):
+            b0, b1 = float(beats[k]), float(beats[k + 1])
+            span = (b1 - b0) / di
+            for d in range(di):
+                subs[idx] = b0 + span * d
+                idx += 1
+        subs[-1] = float(beats[-1])
+        grid = subs
+        _BEAT_GRID_CACHE[key] = grid
+    return grid
+
 
 def _local_bpm(tempo_map, t):
     """BPM in effect at time ``t`` given a (time, bpm) tempo map."""
@@ -49,28 +87,37 @@ def _measure_dur(tempo_map, t):
     return 4.0 * _beat_dur(tempo_map, t)
 
 
-def _snap(time: float, tempo_map, divisions: float = 2) -> float:
-    """Snap a time to the nearest ``divisions``-per-beat grid at the local BPM.
+def _snap(time: float, tempo_map, divisions: float = 2, tol: float = None) -> float:
+    """Snap ``time`` onto the drift-correct tempo grid.
 
-    divisions=1 -> quarter notes, 2 -> 1/8, 0.5 -> half notes. Used to put
-    reduced charts on the beat grid where a player expects them.
+    Snaps to the nearest ``divisions``-per-beat grid line derived from the
+    tempo map's actual beat positions (handles per-measure tempo drift). A note
+    is moved onto the grid only when it already lies within a half-step
+    tolerance of a grid line -- onset jitter inside that window is corrected
+    onto the true beat; genuinely off-beat onsets are left untouched so real
+    syncopation is not falsely straightened.
     """
     if not tempo_map:
         return time
-    step = _beat_dur(tempo_map, time) / divisions
-    if step <= 0:
-        return time
-    return round(time / step) * step
+    grid = _beat_grid(tempo_map, divisions)
+    cand = int(_np.clip(_np.searchsorted(grid, time), 0, len(grid) - 1))
+    if cand > 0 and abs(grid[cand - 1] - time) < abs(grid[cand] - time):
+        cand -= 1
+    nearest = float(grid[cand])
+    if tol is None:
+        tol = _beat_dur(tempo_map, time) / divisions * 0.5
+    if abs(time - nearest) <= tol:
+        return nearest
+    return time
 
 
 def _on_grid(time: float, tempo_map, divisions: float, tol: float = None) -> bool:
-    """True if ``time`` lies on the ``divisions``-per-beat grid."""
+    """True if ``time`` lies on the ``divisions``-per-beat (drift-correct) grid."""
     if not tempo_map:
         return True
-    step = _beat_dur(tempo_map, time) / divisions
-    snapped = round(time / step) * step
+    snapped = _snap(time, tempo_map, divisions, tol)
     if tol is None:
-        tol = step * 0.4
+        tol = _beat_dur(tempo_map, time) / divisions * 0.5
     return abs(time - snapped) <= tol
 
 
