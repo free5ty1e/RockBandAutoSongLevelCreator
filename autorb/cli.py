@@ -34,6 +34,7 @@ def _generate_ps4_pkg_id(artist: str, title: str, custom_id: str | None = None) 
 @click.option('--lyrics', type=click.Path(exists=True), default=None, help='Path to LRC file')
 @click.option('--output-dir', default='./output', type=click.Path(), help='Output directory')
 @click.option('--skip-separation', is_flag=True, help='Skip Demucs separation and use existing stems')
+@click.option('--use-ft-stems', is_flag=True, help='Use the fine-tuned htdemucs_ft Demucs model (cleaner stem separation; separated in 10 s overlapped chunks to bound memory, so it is slower than the default but will not OOM on long tracks)')
 @click.option('--skip-tempo-detection', is_flag=True, help='Skip beat tracking and use cached tempo map')
 @click.option('--skip-vocals', is_flag=True, help='Skip vocal alignment and pitch extraction (uses cached data)')
 @click.option('--skip-mogg', is_flag=True, help='Skip MOGG encoding and reuse the existing .mogg in the output dir (which is expected to already contain the count-in lead-in); the chart is still shifted to match it')
@@ -44,7 +45,7 @@ def _generate_ps4_pkg_id(artist: str, title: str, custom_id: str | None = None) 
 @click.option('--freestyle-drums', is_flag=True, help='Create drum freestyle mode: drum track gets only one placeholder note at the start, allowing free drum play throughout the song')
 @click.option('--package-con-dir', type=click.Path(exists=True, file_okay=False, dir_okay=True), default=None, help='Package all .con files in this directory into a single PS4 PKG installer (batch packaging mode)')
 @click.option('--ps4-pkg-id', type=str, default=None, help='Optional 16-char PS4 Content ID for the PKG (auto-generated from artist+title if omitted)')
-def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, build_clone_hero, generate_freestyle_vocals, freestyle_drums, package_con_dir, ps4_pkg_id):
+def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, use_ft_stems, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, build_clone_hero, generate_freestyle_vocals, freestyle_drums, package_con_dir, ps4_pkg_id):
     # Batch packaging mode: package all .con files in a directory into a single PS4 PKG
     if package_con_dir:
         click.echo(f"Batch packaging mode: packaging all .con files in {package_con_dir}")
@@ -94,7 +95,10 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
     else:
         click.echo("\n[1/5] Separating stems via Demucs...")
         from autorb.audio.stems import separate_stems
-        stems = separate_stems(audio_file, out_path, device=device)
+        model_name = "htdemucs_ft" if use_ft_stems else "htdemucs"
+        click.echo(f"Using Demucs model: {model_name}" +
+                   (" (ft, chunked to bound memory)" if use_ft_stems else ""))
+        stems = separate_stems(audio_file, out_path, device=device, model_name=model_name)
 
     click.echo(f"Stems ready: {stems}")
 

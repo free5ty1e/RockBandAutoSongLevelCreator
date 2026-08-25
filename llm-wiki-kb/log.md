@@ -6,6 +6,24 @@ date: 2026-08-07
 
 Append-only ledger of changes to this knowledge base. Newest first. Each entry records: timestamp, what was added, and why (the reasoning that future agents should not have to re-derive).
 
+## 2026-08-25 — v0.1.11: Sectioned `htdemucs_ft` separation (full 198 s completes on 8 GB)
+
+**What:** `separate_stems(model_name='htdemucs_ft')` now separates in **45 s overlapping strips** (10 s overlap) instead of one full-length chunked run (`autorb/audio/stems.py::_separate_strips`). Each strip is processed by the existing 10 s sine-window COLA chunker (with the v0.1.10 reflection-pad boundary fix), then strip-level stems are merged with a level-constant linear crossfade. The reason this was needed: `_separate_audio` allocates its `sources_p` accumulator over the *full* input, so even memory-bounded 10 s chunking still OOM-kills (SIGKILL, uncatchable) the 198 s Eve6 `htdemucs_ft` ensemble on this 8 GB host (~chunk 4). Sectioning bounds peak memory to one strip.
+
+**Verified on the full 198 s Eve6 track (this 8 GB devcontainer):** `htdemucs_ft` **completes** — peak RSS **1.7 GB**, all 4 stems 198.1 s, no boundary spike (first-50 ms max ≪ 1.0), seamless strip seams (seam-max 0.12–0.47 ≪ per-stem peak 0.20–0.95). Fallback chain intact: 45 s strips OOM → 20 s strips → stock `htdemucs`. Strips free'd eagerly (`del` + `gc.collect()`) and torch threads bounded to 4. (~30 min on CPU; GPU or `--skip-separation` is faster.)
+
+**A/B by ear (full song, RMS-matched to 0.12 so volume isn't a factor):** `output_ab/full/stock/preview_mix.wav` vs `output_ab/full/ft/preview_mix.wav` (+ `stems/` dir each). FT reads spikier/clearer: peak 0.894 vs stock 0.661 at matched loudness. `output_ab/60s/{stock,ft}/` has the same comparison on a faster 60 s clip. NOTE: `htdemucs_ft` improves stem cleanliness but, per the v0.1.10 bridge analysis, **does not fix the guitar bridge**.
+
+## 2026-08-24 — v0.1.10: Opt-in htdemucs_ft separator + bridge chord-identity analysis
+
+**What:** Added `--use-ft-stems` (CLI) / `model_name` param (`autorb/audio/stems.py::separate_stems`). `htdemucs_ft` is a `BagOfModels` ensemble that OOMs the 198 s Eve6 track on CPU in one pass (silent kill), so it is separated in **10 s 50%-overlapping sine-windowed chunks with constant-overlap overlap-add** (no seams), with an OOM→6 s→stock-`htdemucs` fallback. 20 s chunks + 12 default threads thrash-stall on chunk 4, so 10 s is the shipped default; torch CPU threads are also bounded to 4. NOTE: the 10 s chunked path bounds *per-chunk* memory but its `sources_p` accumulator is still sized to the full input, so a *full* 198 s ft run still OOM-killed on 8 GB (chunk ~4) — resolved in v0.1.11 by **sectioned 45 s-strip separation** (see above), which makes the full run complete at ~1.7 GB peak.
+
+**Chunked-OLA boundary-spike fix:** the sine-window reconstructor divides by the running sum of window-squared, which is ~0 at sample 0 (only one window covers the edge) — this clipped every (chunked) stem to ±1.0 at t≈0.003 s. Fixed by reflection-padding the input by one hop (`torch.nn.functional.pad(wav_n, (step, step), mode='reflect')`) so every real sample is in the 2-window COLA interior (`sin²+sin²≡1`); first-50 ms max is now 0.001 (was 1.0), no clipping. Verified on a 60 s clip (13 chunks, no spike, sane gain).
+
+**Bridge chord-identity analysis (why the guitar bridge can't merge to 4):** per-frame root+5th interval-pair flips **36× on stock `other.wav`** and **41× on a 17 s `htdemucs_ft`-clean bridge segment** — overdriven power-chord voicings + palm-mute re-articulation make the detected fundamental unstable *per strum*, so no per-strum identity merge reaches 4 (and ignoring identity collapses to the n=1 whole-track bug). A **3–4 s chord-sized windowed majority vote** recovers roots `[A, D, E, D, E]` → **3 chords (D/E/A), 4 real change-points** — the bridge is a short power-chord *progression*, not one held chord. Reducing 23→4 needs a **windowed-chord-identity** merge (future item, song-parameterized on chord length/tempo). `htdemucs_ft` improves stem cleanliness but does **not** fix the bridge. Authoring to exactly 4 is deliberately not done.
+
+**Artifacts for A/B by ear (both RMS-matched, spike-free):** `output_ab/60s/stock/` (htdemucs) vs `output_ab/60s/ft/` (htdemucs_ft) — 60 s preview mix + 4 stems each. `output_ab/full/{stock,ft}/` has the **full 198 s** A/B (+ stems) now that sectioned separation completes (v0.1.11).
+
 ## 2026-08-23 — v0.1.9: Drift-correct tempo grid (the "off-the-beat" fix) + safe guitar merge
 
 **What:** Two changes to `autorb/transcribe/instruments/difficulty.py` (grid) and `guitar.py` (bass grain + guitar held-chord merge).

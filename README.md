@@ -360,6 +360,7 @@ python3 -m autorb.cli \
 | `-o, --output-dir` | Path | Destination folder for the compiled CON file (Default: `./output`). |
 | `--album-art` | Path | Optional. Custom album art image (PNG/JPG) for the CON's `_keep.png_xbox` texture. Defaults to a generated "Chris Prime Custom" cover (stacked CHRIS/PRIME text with an orange "BOT" badge in the top-right and a "CP" monogram in the top-left: a thick orange C forming the outer circle with a white P inscribed inside). The art's font is bundled with the package, so it renders legibly on any OS (no system font paths required). |
 | `--skip-separation` | Flag | Skip AI stem separation; requires `drums.wav`, `bass.wav`, `vocals.wav`, `other.wav` in `[output-dir]/stems`. |
+| `--use-ft-stems` | Flag | Use the fine-tuned `htdemucs_ft` Demucs model for cleaner stem separation (less bleed). It is a `BagOfModels` ensemble that OOMs a full-length track on CPU in one pass, so it is separated in 10 s 50%-overlapping sine-windowed chunks with constant-overlap overlap-add (no seams), falling back to 6 s chunks on OOM and then to stock `htdemucs` — never a silent kill. Slower than the default on CPU (~15 min / 3 min of audio here); use a GPU, or `--skip-separation` with master stems. Improves stem *cleanliness* but does **not** reduce the guitar bridge's ~23 re-strum attacks (the re-articulation is in the audio, not the bleed — see Known Limitations). |
 | `--skip-tempo-detection` | Flag | Skip beat tracking; loads `tempo_map.json` from the output directory. |
 | `--skip-vocals` | Flag | Skip WhisperX alignment and basic-pitch; loads `vocals_cache.json`. |
 | `--skip-mogg` | Flag | Skip MOGG encoding; reuses the existing `.mogg` file (which is expected to already contain the count-in lead-in). The chart is still shifted past the count-in to match the reused audio. |
@@ -484,6 +485,8 @@ audio_file: (Required) Path to the input audio file.
 --output-dir: The directory to save all output files (default: ./output).
 
 --skip-separation: Skips the AI stem separation. Requires drums.wav, bass.wav, vocals.wav, and other.wav in the [output-dir]/stems folder.
+
+--use-ft-stems: Uses the fine-tuned htdemucs_ft Demucs model for cleaner stem separation (less bleed). The model is a BagOfModels ensemble that OOMs a full-length track on CPU in one pass, so it is separated in 10 s 50%-overlapping sine-windowed chunks with constant-overlap overlap-add (no seams), falling back to 6 s chunks on OOM and then to stock htdemucs — never a silent kill. Slower than the default on CPU (~15 min / 3 min of audio here); use a GPU or --skip-separation with master stems. Improves stem cleanliness but does NOT reduce the guitar bridge's ~23 re-strum attacks (the re-articulation is in the audio, not the bleed — see Known Limitations).
 
 --skip-tempo-detection: Skips librosa beat tracking and loads tempo_map.json from the output directory.
 
