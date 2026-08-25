@@ -11,29 +11,31 @@ from demucs.apply import apply_model
 from demucs.pretrained import get_model
 
 def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu",
-                  model_name: str = "htdemucs") -> dict:
+                   model_name: str = "htdemucs", shifts: int = 1,
+                   overlap: float = 0.25, segment: float = None,
+                   strip_seconds: float = 45.0) -> dict:
     out_dir = Path(out_dir)
     stems_dir = out_dir / "stems"
     stems_dir.mkdir(parents=True, exist_ok=True)
 
     click.echo(f"Loading Demucs model '{model_name}' on {device}...")
     model = get_model(model_name)
-    # htdemucs_ft ships as a BagOfModels *ensemble* (several fine-tuned sub-models
-    # averaged together). The ensemble is ~4x the weight footprint and OOMs most
-    # CPUs on a full track even chunked, so when chunking we unwrap to a single
-    # sub-model (still cleaner separation than stock htdemucs, and usable on CPU).
-    if model_name == "htdemucs_ft" and hasattr(model, "models") and model.models:
-        model = model.models[0]
-        click.echo("  htdemucs_ft ensemble -> using single sub-model (fits CPU RAM).")
+    # NOTE: htdemucs_ft is a BagOfModels *ensemble* of several fine-tuned
+    # sub-models averaged by apply_model. Do NOT unwrap to a single sub-model
+    # (model.models[0]) here: the sub-models are not interchangeable and one of
+    # them bleeds bass/other 5x worse (verified on the Open Road Song 60s clip,
+    # bass<->other NCC 0.172 single-sub vs 0.034 full ensemble). The full
+    # ensemble is the quality winner. Sectioned stripping (below) bounds its
+    # memory so it fits on an 8 GB CPU regardless.
     # Bound torch's CPU thread pool BEFORE any model use. torch allocates a
-    # per-thread workspace that scales with num_threads; on a many-core box the
+    # per-thread workspace that scales with num_threads; on a many-core host the
     # default (all cores) balloons peak memory enough to OOM-kill (SIGKILL,
-    # uncatchable) a full 198s separation mid-run -- even chunked, even with the
-    # ensemble unwrapped to a single sub-model. 4 threads is the verified-safe
-    # ceiling on an 8 GB host (the full ensemble ran to completion at this setting
-    # in ft_full_clean.py; the unbounded-CPU default is what died at chunk 31).
+    # uncatchable). 4 threads is the verified-safe ceiling on an 8 GB host.
     torch.set_num_threads(min(4, torch.get_num_threads()))
     model.to(device)
+
+    apply_kwargs = {"shifts": shifts, "overlap": overlap}
+
 
     click.echo(f"Loading audio file '{audio_path}'...")
     wav_np, sr = librosa.load(str(audio_path), sr=None, mono=False)
@@ -46,29 +48,33 @@ def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu",
         wav = wav.unsqueeze(0)
 
     n = wav.shape[2]
-    click.echo("Separating stems (this may take a while)...")
+    if segment is not None:
+        apply_kwargs["segment"] = int(round(segment * sr))
+    click.echo(f"Separating stems (this may take a while) with "
+               f"shifts={apply_kwargs.get('shifts')}, overlap={overlap}, "
+               f"segment={apply_kwargs.get('segment')}...")
     if model_name == "htdemucs_ft":
-        # The ensemble OOM-kills the full 198 s track (its ``sources_p``
-        # accumulator is sized to the full input -- per-chunk bounding does not
-        # bound that). Separate in overlapping 45 s strips (each strip is itself
-        # 10 s COLA-chunked internally) and equal-power-merge the strip stems,
-        # so peak memory is ~45 s of output instead of 198 s. Strips are freed
-        # eagerly (del + gc) as they are merged.
+        # The full ``htdemucs_ft`` ensemble (NOT a single sub-model) is used -- it
+        # halves bass<->other cross-bleed vs any one sub-model (verified on the
+        # Open Road Song 60s clip). The ensemble's per-output ``sources_p``
+        # accumulator is sized to the full input, so it OOM-kills the 198 s track
+        # in one pass; strip it (45 s) to bound memory. Each strip is itself 10 s
+        # COLA-chunked internally, then strip stems are linear-crossfaded (no seams).
         try:
             sources = _separate_strips(model, wav, sr, device,
-                                       strip_seconds=45.0, overlap_seconds=10.0,
-                                       chunk_seconds=10.0,
+                                       strip_seconds=strip_seconds, overlap_seconds=10.0,
+                                       chunk_seconds=10.0, apply_kwargs=apply_kwargs,
                                        progress=lambda k, m: click.echo(
                                            f"  separating strip {k}/{m} (htdemucs_ft)...",
                                            err=True))
         except (RuntimeError, torch.cuda.OutOfMemoryError):
-            click.echo("45 s strips OOM'd; retrying with 20 s strips...")
+            click.echo(f"{strip_seconds}s strips OOM'd; retrying with 20 s strips...")
             try:
                 sources = _separate_strips(model, wav, sr, device,
                                            strip_seconds=20.0, overlap_seconds=10.0,
-                                           chunk_seconds=10.0,
+                                           chunk_seconds=10.0, apply_kwargs=apply_kwargs,
                                            progress=lambda k, m: click.echo(
-                                               f"  separating strip {k}/{m} (htdemucs_ft, 20 s)...",
+                                               f"  separating strip {k}/{m} (htdemucs_ft, 20s)...",
                                                err=True))
             except (RuntimeError, torch.cuda.OutOfMemoryError):
                 click.echo("htdemucs_ft still OOMs on this device; falling back to stock 'htdemucs'.")
@@ -79,8 +85,10 @@ def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu",
                 sources = sources * ref.std() + ref.mean()
     else:
         # htdemucs (single model): the 198 s track fits in CPU RAM in one call.
-        sources = _separate_audio(model, wav, sr, device, chunked=False, progress=lambda k, m: click.echo(
-            f"  separating chunk {k}/{m} (htdemucs)...", err=True))
+        sources = _separate_audio(model, wav, sr, device, chunked=False,
+                                  apply_kwargs=apply_kwargs,
+                                  progress=lambda k, m: click.echo(
+                                      f"  separating chunk {k}/{m} (htdemucs)...", err=True))
 
     stem_names = model.sources  # ['drums', 'bass', 'other', 'vocals']
     stems_paths = {}
@@ -127,25 +135,20 @@ def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu",
 
 
 def _separate_audio(model, wav, sr, device, chunked=False, chunk_seconds=20.0,
-                    progress=None):
+                    progress=None, apply_kwargs=None):
     """Run Demucs separation, optionally chunked to bound memory.
 
-    ``htdemucs`` separates the full track in one call (~198 s fits in CPU RAM).
-    The fine-tuned ``htdemucs_ft`` model is a *BagOfModels* ensemble (heavier per
-    frame) and the 198 s Eve6 track OOMs on CPU in one pass
-    (``RuntimeError``/kill, no traceback). When ``chunked`` is set we split into
-    50%-overlapping sine-windowed frames of ``chunk_seconds`` and overlap-add the
-    denormalized outputs (constant-overlap reconstruction, no seams), so peak
-    memory is bounded by the chunk. Each chunk is mean/std-normalized by the
-    global per-track ref (matching the non-chunked path). ``progress`` is an
-    optional callable(i, nchunks) for status.
+    ``apply_kwargs`` is forwarded to ``demucs.apply.apply_model`` (e.g.
+    ``shifts``, ``overlap``, ``segment``) so callers can trade quality for speed
+    / memory on CPU. See :func:`separate_stems` for the public entry point.
     """
+    apply_kwargs = apply_kwargs or {}
     ref = wav.mean(0)
     wav_n = (wav - ref.mean()) / (ref.std() + 1e-8)
 
     if not chunked:
         with torch.no_grad():
-            sources = apply_model(model, wav_n, device=device)[0]
+            sources = apply_model(model, wav_n, device=device, **apply_kwargs)[0]
         return sources * ref.std() + ref.mean()
 
     n = wav.shape[2]
@@ -176,7 +179,7 @@ def _separate_audio(model, wav, sr, device, chunked=False, chunk_seconds=20.0,
             progress(k, n_chunks)
         seg = wav_p[:, :, s:s + chunk]
         with torch.no_grad():
-            src = apply_model(model, seg, device=device)[0]
+            src = apply_model(model, seg, device=device, **apply_kwargs)[0]
         assert src.shape[2] == chunk, (src.shape, chunk)
         src = src * ref.std() + ref.mean()  # ref is the global per-track ref
         sources_p[:, :, s:s + chunk] += src * base_win
@@ -194,19 +197,21 @@ def _separate_audio(model, wav, sr, device, chunked=False, chunk_seconds=20.0,
 
 def _separate_strips(model, wav, sr, device,
                      strip_seconds=45.0, overlap_seconds=10.0,
-                     chunk_seconds=10.0, progress=None):
+                     chunk_seconds=10.0, progress=None, apply_kwargs=None):
     """Memory-bounded full-track separation for heavy models (e.g. ``htdemucs_ft``).
 
     The full-length chunked path (:func:`_separate_audio` with ``chunked=True``)
     still allocates its ``sources_p`` accumulator over the *entire* input, so on an
-    8 GB host the 198 s Eve6 ``htdemucs_ft`` ensemble OOM-kills mid-run (verified:
-    dies ~chunk 4 with no traceback). This splits the track into ``strip_seconds``-
-    long strips (``overlap_seconds`` overlap, 50 % step) and separates each strip
-    via :func:`_separate_audio` (which 10 s COLA-chunks it internally), then merges
-    the strip-level stems with a level-constant linear crossfade over the overlap.
+    8 GB host the 198 s Eve6 ``htdemucs_ft`` ensemble OOM-kills mid-run (dies ~chunk
+    4 with no traceback). This splits the track into ``strip_seconds``-long strips
+    (``overlap_seconds`` overlap, 50 % step) and separates each strip via
+    :func:`_separate_audio` (which 10 s COLA-chunks it internally, forwarding
+    ``apply_kwargs``), then merges the strip-level stems with a level-constant
+    linear crossfade over the overlap.
 
     Peak memory is bounded by one strip (~45 s x 4 stems x 2 ch) instead of the
     full track, so the entire song completes. Strips are freed as they are merged.
+    ``apply_kwargs`` is forwarded to :func:`_separate_audio` -> ``apply_model``.
     Memory fallback chain (caller): 45 s -> 20 s -> stock ``htdemucs``.
     """
     n = wav.shape[2]
@@ -243,7 +248,8 @@ def _separate_strips(model, wav, sr, device,
         e = min(s + strip_len, n)
         seg = wav[:, :, s:e]
         seg_sources = _separate_audio(model, seg, sr, device,
-                                      chunked=True, chunk_seconds=chunk_seconds)
+                                      chunked=True, chunk_seconds=chunk_seconds,
+                                      apply_kwargs=apply_kwargs)
         seg_len = seg_sources.shape[2]
         w = torch.ones(seg_len, device=device)
         if i > 0:                          # fade in the head (overlap prev strip)

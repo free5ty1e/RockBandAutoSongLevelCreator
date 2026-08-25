@@ -34,7 +34,10 @@ def _generate_ps4_pkg_id(artist: str, title: str, custom_id: str | None = None) 
 @click.option('--lyrics', type=click.Path(exists=True), default=None, help='Path to LRC file')
 @click.option('--output-dir', default='./output', type=click.Path(), help='Output directory')
 @click.option('--skip-separation', is_flag=True, help='Skip Demucs separation and use existing stems')
-@click.option('--use-ft-stems', is_flag=True, help='Use the fine-tuned htdemucs_ft Demucs model (cleaner stem separation; separated in 10 s overlapped chunks to bound memory, so it is slower than the default but will not OOM on long tracks)')
+@click.option('--use-ft-stems', is_flag=True, help='Use the fine-tuned htdemucs_ft Demucs model (cleaner stem separation; the FULL ensemble of fine-tuned sub-models is used, separated in 45 s overlapping strips so it completes on an 8 GB CPU). Slower than the default htdemucs; shifts and strip-length are tunable with --ft-shifts / --ft-strip-seconds')
+@click.option('--ft-shifts', type=int, default=1, show_default=True, help='Demucs translation-averaging passes for --use-ft-stems (shifts>1 averages shifted copies for cleaner stems at N x time; verified on Open Road Song that shifts=2 gives no bleed gain over shifts=1, so 1 is the default)')
+@click.option('--ft-strip-seconds', type=float, default=45.0, show_default=True, help='Strip length (seconds) for --use-ft-stems. Lower = less peak RAM (fallback if 45 s OOMs to 20 s) at the cost of more strip-seams (inaudible with the 10 s crossfade). Tune down on memory-constrained CPUs')
+@click.option('--ft-segment', type=float, default=None, help='Demucs internal segment length (seconds) for --use-ft-stems; None (default) = full-context (highest quality). Small values lower memory further but degrade quality')
 @click.option('--skip-tempo-detection', is_flag=True, help='Skip beat tracking and use cached tempo map')
 @click.option('--skip-vocals', is_flag=True, help='Skip vocal alignment and pitch extraction (uses cached data)')
 @click.option('--skip-mogg', is_flag=True, help='Skip MOGG encoding and reuse the existing .mogg in the output dir (which is expected to already contain the count-in lead-in); the chart is still shifted to match it')
@@ -45,7 +48,7 @@ def _generate_ps4_pkg_id(artist: str, title: str, custom_id: str | None = None) 
 @click.option('--freestyle-drums', is_flag=True, help='Create drum freestyle mode: drum track gets only one placeholder note at the start, allowing free drum play throughout the song')
 @click.option('--package-con-dir', type=click.Path(exists=True, file_okay=False, dir_okay=True), default=None, help='Package all .con files in this directory into a single PS4 PKG installer (batch packaging mode)')
 @click.option('--ps4-pkg-id', type=str, default=None, help='Optional 16-char PS4 Content ID for the PKG (auto-generated from artist+title if omitted)')
-def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, use_ft_stems, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, build_clone_hero, generate_freestyle_vocals, freestyle_drums, package_con_dir, ps4_pkg_id):
+def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, use_ft_stems, ft_shifts, ft_strip_seconds, ft_segment, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, build_clone_hero, generate_freestyle_vocals, freestyle_drums, package_con_dir, ps4_pkg_id):
     # Batch packaging mode: package all .con files in a directory into a single PS4 PKG
     if package_con_dir:
         click.echo(f"Batch packaging mode: packaging all .con files in {package_con_dir}")
@@ -98,7 +101,9 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         model_name = "htdemucs_ft" if use_ft_stems else "htdemucs"
         click.echo(f"Using Demucs model: {model_name}" +
                    (" (ft, chunked to bound memory)" if use_ft_stems else ""))
-        stems = separate_stems(audio_file, out_path, device=device, model_name=model_name)
+        stems = separate_stems(audio_file, out_path, device=device,
+                               model_name=model_name, shifts=ft_shifts,
+                               strip_seconds=ft_strip_seconds, segment=ft_segment)
 
     click.echo(f"Stems ready: {stems}")
 
