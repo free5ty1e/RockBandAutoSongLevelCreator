@@ -44,3 +44,4 @@ tools/libforge/**/obj/
 # at build/release time; also bundled into the wheel/sdist by pyproject.toml)
 RELEASE_NOTES.txt
 output_ab/
+.claude_persist

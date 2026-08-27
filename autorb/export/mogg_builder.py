@@ -240,20 +240,55 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
         if p.exists():
             input_files.append(p)
 
+    # Optional dedicated stems (master stems, or a --separator htdemucs_6s run).
+    # The 10-channel layout has no per-instrument channel beyond the 311
+    # reference's drum/bass/guitar/vocals groups, so guitar/piano are MIXED
+    # into the ch5-6 backing (guitar) bus — otherwise their audio would be
+    # absent from gameplay entirely. Charting still reads them as dedicated
+    # charts; only the MOGG mixing changes.
+    extra_stems = []
+    for name in ("guitar", "piano"):
+        p = stems_path / f"{name}.wav"
+        if p.exists():
+            extra_stems.append(p)
+    # Capture BEFORE extending: the 10-channel branch below keys off this,
+    # not the post-extend length.
+    standard_layout = len(input_files) == 4
+    if extra_stems and standard_layout:
+        logger.info(f"Mixing optional stems {[f.name for f in extra_stems]} "
+                    "into the MOGG backing channels (ch5-6).")
+        input_files.extend(extra_stems)
+
     if not input_files:
         input_files = sorted(list(stems_path.glob("*.wav")))
 
-    if len(input_files) == 4:
+    if standard_layout:
         logger.info("Combining 4 stems into 10-channel MOGG container via ffmpeg (311 - Down layout).")
         ogg_tmp = output_dir / f"{song_id}.tmp.ogg"
         cmd = ["ffmpeg", "-y"]
         for f in input_files:
             cmd.extend(["-i", str(f)])
 
-        # [0] drums, [1] bass, [2] other (guitar/backing), [3] vocals.
+        # [0] drums, [1] bass, [2] other (guitar/backing), [3] vocals,
+        # [4] optional guitar stem, [5] optional piano stem.
         # Every branch is normalized to stereo first, then panned to a mono
         # channel so amerge yields exactly 10 channels in order.
-        filter_parts = [
+        #
+        # When extra stems exist they are pre-mixed with the 'other' stem into
+        # one backing bus [gbus]; ch5-6 and the quiet ch9 are derived from that
+        # bus so every instrument remains audible in-game.
+        if extra_stems:
+            mix_labels = ["[2:a]"] + [f"[{4 + i}:a]" for i in range(len(extra_stems))]
+            filter_parts = [
+                "".join(mix_labels)
+                + f"amix=inputs={len(mix_labels)}:duration=longest:normalize=0"
+                  + ",aformat=channel_layouts=stereo[gbus]",
+            ]
+            backing_src = "[gbus]"
+        else:
+            filter_parts = []
+            backing_src = "[2:a]"
+        filter_parts += [
             # ch0/ch1: full drum kit split stereo. 311 Down's kick/snare
             # (ch0/1) are its LOUDEST channels (~3500 RMS); keeping the first
             # stereo pair hot mirrors that and guarantees any preview
@@ -265,15 +300,15 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
             "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FR[s3]",
             # ch4: mono bass.
             "[1:a]aformat=channel_layouts=stereo,pan=mono|c0=0.5*FL+0.5*FR[s4]",
-            # ch5-6: stereo guitar/backing (the 'other' stem).
-            "[2:a]aformat=channel_layouts=stereo,pan=mono|c0=FL[s5]",
-            "[2:a]aformat=channel_layouts=stereo,pan=mono|c0=FR[s6]",
+            # ch5-6: stereo guitar/backing bus ('other' + guitar/piano stems).
+            f"{backing_src}aformat=channel_layouts=stereo,pan=mono|c0=FL[s5]",
+            f"{backing_src}aformat=channel_layouts=stereo,pan=mono|c0=FR[s6]",
             # ch7-8: stereo vocals.
             "[3:a]aformat=channel_layouts=stereo,pan=mono|c0=FL[s7]",
             "[3:a]aformat=channel_layouts=stereo,pan=mono|c0=FR[s8]",
             # ch9: fake/crowd ambience at low level (near-silent like 311's
             # ch9, which carries ~50 RMS vs ~3500 on its kick channel).
-            "[2:a]aformat=channel_layouts=stereo,pan=mono|c0=0.5*FL+0.5*FR,volume=0.1[s9]",
+            f"{backing_src}aformat=channel_layouts=stereo,pan=mono|c0=0.5*FL+0.5*FR,volume=0.1[s9]",
             "[s0][s1][s2][s3][s4][s5][s6][s7][s8][s9]amerge=inputs=10[aout]",
         ]
         if count_in_ms > 0:

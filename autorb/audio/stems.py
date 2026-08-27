@@ -10,13 +10,35 @@ import click
 from demucs.apply import apply_model
 from demucs.pretrained import get_model
 
+def _clear_stems_dir(stems_dir: Path) -> None:
+    """Remove stale stem WAVs before a new separation run.
+
+    Different separators emit different stem sets (e.g. ``htdemucs_6s`` adds
+    guitar/piano), and a leftover ``guitar.wav`` from a previous 6-stem run
+    would otherwise be silently picked up by charting/MOGG mixing on a
+    subsequent 4-stem run. Only files directly inside ``stems_dir`` are
+    removed — never recurse.
+    """
+    removed = []
+    for f in sorted(stems_dir.glob("*.wav")):
+        try:
+            f.unlink()
+            removed.append(f.name)
+        except OSError as e:
+            click.echo(f"Warning: could not remove stale stem {f}: {e}", err=True)
+    if removed:
+        click.echo(f"Cleared {len(removed)} stale stem file(s) from {stems_dir}: "
+                   f"{', '.join(removed)}")
+
+
 def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu",
-                   model_name: str = "htdemucs", shifts: int = 1,
+                   model_name: str = "htdemucs_ft", shifts: int = 1,
                    overlap: float = 0.25, segment: float = None,
                    strip_seconds: float = 45.0) -> dict:
     out_dir = Path(out_dir)
     stems_dir = out_dir / "stems"
     stems_dir.mkdir(parents=True, exist_ok=True)
+    _clear_stems_dir(stems_dir)
 
     click.echo(f"Loading Demucs model '{model_name}' on {device}...")
     model = get_model(model_name)
@@ -84,11 +106,17 @@ def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu",
                     sources = apply_model(model, wav_n, device=device)[0]
                 sources = sources * ref.std() + ref.mean()
     else:
-        # htdemucs (single model): the 198 s track fits in CPU RAM in one call.
-        sources = _separate_audio(model, wav, sr, device, chunked=False,
-                                  apply_kwargs=apply_kwargs,
+        # htdemucs or htdemucs_6s (single model, not ensemble): chunk if the
+        # track is long enough to warrant it (bounded memory via the 10 s COLA
+        # chunker). htdemucs_6s produces 6 stems (adds guitar + piano) instead of 4.
+        chunked = n > int(120 * sr)  # chunk for tracks > 2 min
+        sources = _separate_audio(model, wav, sr, device,
+                                  chunked=chunked,
                                   progress=lambda k, m: click.echo(
-                                      f"  separating chunk {k}/{m} (htdemucs)...", err=True))
+                                      f"  separating chunk {k}/{m} ({model_name}"
+                                      + (" chunked" if chunked else " full-track") + ")...",
+                                      err=True),
+                                  apply_kwargs=apply_kwargs)
 
     stem_names = model.sources  # ['drums', 'bass', 'other', 'vocals']
     stems_paths = {}
@@ -265,4 +293,81 @@ def _separate_strips(model, wav, sr, device,
 
     wsum = torch.clamp(wsum, min=1e-8)
     return full_sources / wsum
+
+
+def separate_stems_spleeter(audio_path: Path, out_dir: Path,
+                            model_name: str = "spleeter:5stems") -> dict:
+    """Separate stems using Spleeter (TensorFlow-based, alternative to Demucs).
+
+    Spleeter provides a piano/vocals separation that Demucs does not (Demucs
+    collapses piano into the 'other' stem). This function wraps Spleeter's API
+    to produce stems in the same output format as :func:`separate_stems`.
+
+    Supported models:
+      - ``spleeter:2stems``  → vocals, accompaniment
+      - ``spleeter:4stems``  → vocals, drums, bass, other
+      - ``spleeter:5stems``  → vocals, piano, drums, bass, other (DEFAULT)
+
+    See ``llm-wiki-kb/piano_keyboard_separation.md`` for a comparison of
+    separation backends.
+    """
+    out_dir = Path(out_dir)
+    stems_dir = out_dir / "stems"
+    stems_dir.mkdir(parents=True, exist_ok=True)
+    _clear_stems_dir(stems_dir)
+
+    click.echo(f"Loading Spleeter model '{model_name}'...")
+    from spleeter.separator import Separator
+    separator = Separator(model_name)
+
+    click.echo(f"Separating stems with Spleeter '{model_name}'...")
+    prediction = separator.separate_to_file(
+        str(audio_path), str(stems_dir), codec='wav', bitrate='256k')
+
+    # Spleeter writes individual stem files named <basename>_<stem>.wav
+    # Rename them to the standard names (drums.wav, bass.wav, etc.)
+    import os
+    basename = Path(audio_path).stem
+    instrument_list = separator._params["instrument_list"]
+    stems_paths = {}
+
+    for instrument in instrument_list:
+        spleeter_name = instrument
+        if instrument == "other":
+            spleeter_name = "other"
+        elif instrument == "accompaniment":
+            spleeter_name = "accompaniment"
+
+        spleeter_file = stems_dir / f"{basename}_{spleeter_name}.wav"
+        if spleeter_file.exists():
+            target_file = stems_dir / f"{instrument}.wav"
+            os.rename(str(spleeter_file), str(target_file))
+            stems_paths[instrument] = target_file
+            click.echo(f"Saved {instrument} stem to {target_file}...")
+
+    # Generate preview mix by summing stems
+    click.echo("Generating preview mix...")
+    from pydub import AudioSegment
+    import io
+
+    # Load and sum all stems (except accompaniment which is a mix)
+    mix = None
+    sr = None
+    for name, path in stems_paths.items():
+        if name == "accompaniment":
+            continue
+        audio = AudioSegment.from_wav(str(path))
+        if sr is None:
+            sr = audio.frame_rate
+            mix = audio
+        else:
+            mix = mix.overlay(audio)
+
+    if mix is not None:
+        preview_file = out_dir / "preview_mix.mp3"
+        mix.export(str(preview_file), format="mp3", bitrate="192k")
+        click.echo(f"Preview mix saved to {preview_file}")
+        stems_paths["preview_mix"] = preview_file
+
+    return stems_paths
 

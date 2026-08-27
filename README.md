@@ -359,11 +359,16 @@ python3 -m autorb.cli \
 | `-g, --genre` | String | Genre string (Default: `"Rock"`). |
 | `-o, --output-dir` | Path | Destination folder for the compiled CON file (Default: `./output`). |
 | `--album-art` | Path | Optional. Custom album art image (PNG/JPG) for the CON's `_keep.png_xbox` texture. Defaults to a generated "Chris Prime Custom" cover (stacked CHRIS/PRIME text with an orange "BOT" badge in the top-right and a "CP" monogram in the top-left: a thick orange C forming the outer circle with a white P inscribed inside). The art's font is bundled with the package, so it renders legibly on any OS (no system font paths required). |
-| `--skip-separation` | Flag | Skip AI stem separation; requires `drums.wav`, `bass.wav`, `vocals.wav`, `other.wav` in `[output-dir]/stems`. |
-| `--use-ft-stems` | Flag | Use the fine-tuned `htdemucs_ft` Demucs model for cleaner stem separation (less bleed). It is a `BagOfModels` **ensemble of fine-tuned sub-models** (all of them — do NOT unwrap to one; a single sub-model bleeds bass↔other 5× worse). Memory-bounded by **45 s overlapping strips** (10 s overlap, level-constant crossfade merge), so a full-length track **completes on an 8 GB CPU** (peak RSS ≈ 2.3 GB on the 198 s Eve6 track; 60 s clip ≈ 2 GB) — never a silent kill. Slower than the default on CPU (~16 min / 3 min of audio here on 4 torch threads; use a GPU, or `--skip-separation` with master stems). Tunable with `--ft-shifts`, `--ft-strip-seconds`, `--ft-segment`. Improves stem *cleanliness* but does **not** reduce the guitar bridge's ~23 re-strum attacks (the re-articulation is in the audio, not the bleed — see Known Limitations). |
-| `--ft-shifts` | Integer | Demucs translation-averaging passes for `--use-ft-stems` (default `1`). `shifts>1` averages shifted copies for marginally cleaner stems at N× time; measured on the 60 s clip that `shifts=2` gives no bleed/gain improvement over `shifts=1`, so `1` is the default. Only applies with `--use-ft-stems`. |
-| `--ft-strip-seconds` | Float | Strip length (seconds) for `--use-ft-stems` (default `45`). Lower = less peak RAM (auto-falls back to 20 s strips if 45 s OOMs) at the cost of more inaudible strip-seams. Tune down only on memory-constrained CPUs. Only applies with `--use-ft-stems`. |
-| `--ft-segment` | Float | Demucs internal segment length (seconds) for `--use-ft-stems` (default `None` = full-song context, highest quality). Small values lower memory further but degrade quality. Only applies with `--use-ft-stems`. 
+| `--skip-separation` | Flag | Skip AI stem separation; requires `drums.wav`, `bass.wav`, `vocals.wav`, `other.wav` in `[output-dir]/stems`. Optional `guitar.wav` / `piano.wav` are picked up when present and drive the guitar / keys charts directly (master-stems workflow). Nothing is ever cleared in this mode. |
+| `--separator` | Choice | Stem separation model (default: `htdemucs_ft`). Options: `htdemucs_ft` — **DEFAULT**, full Demucs `BagOfModels` ensemble, 4 stems (drums/bass/other/vocals), best quality, ~16 min on 8 GB CPU; `htdemucs` — stock single model, 4 stems, fast (~1 min), lower quality; `htdemucs_6s` — single Demucs model, **6 stems** (drums/bass/other/vocals/**guitar**/piano); with it, `guitar.wav` drives the guitar chart and `piano.wav` the keys chart (both also mixed into in-game backing audio); piano stem quality is reportedly poor. `spleeter:5stems` — Spleeter TensorFlow model, 5 stems incl. piano (**⚠️ spleeter must never be pip-installed into this venv — dependency conflict; isolated venv only**). Every new separation run first clears stale `*.wav` from `[output-dir]/stems`, so switching separators never mixes stems between runs. `--use-ft-stems`/`--no-use-ft-stems` are deprecated aliases (on/off for `htdemucs_ft`/`htdemucs`; `--separator` takes priority if both given). Quality comparison (60 s Eve6 clip): `htdemucs_ft` bass↔other NCC 0.034 vs `htdemucs` 0.046; rhythm-guitar separation in `other` ~2× cleaner; vocals clearer; ~16 min vs ~1 min on 8 GB CPU. The `--ft-*` knobs (`--ft-shifts`, `--ft-strip-seconds`, `--ft-segment`, `--ft-overlap`) only apply to `htdemucs_ft` and `htdemucs_6s`. See `llm-wiki-kb/piano_keyboard_separation.md` for the full separator comparison. |
+| `--ft-shifts` | Integer | Demucs translation-averaging passes for `--use-ft-stems` (default `1`). `shifts>1` averages shifted copies for marginally cleaner stems at N× time; measured on the 60 s clip that `shifts=2` gives **no** bleed/gain improvement over `shifts=1` (bass↔other 0.034 vs 0.034; drums↔other 0.084 vs 0.086), so `1` is the default (2× slower for nothing). Only applies with `htdemucs_ft` or `htdemucs_6s`. |
+| `--ft-strip-seconds` | Float | Strip length (seconds) for `htdemucs_ft` (default `45`). Lower = less peak RAM (auto-falls back to 20 s strips if 45 s OOMs) at the cost of more inaudible strip-seams (10 s crossfade). Tune down only on memory-constrained CPUs. Only applies with `htdemucs_ft`. |
+| `--ft-segment` | Float | Demucs internal segment length (seconds) for `htdemucs_ft` (default `None` = full-song context, highest quality). Small values (e.g. 10 s, 20 s) lower memory further but may degrade quality and slightly reduce drums↔other spectral bleed. Only applies with `htdemucs_ft`. |
+| `--ft-overlap` | Float | Demucs STFT overlap ratio for `htdemucs_ft`/`htdemucs_6s` (default `0.25`). Higher values (e.g. `0.5`) give cleaner transients / slightly better bleed reduction at ~2× time and memory cost. Only applies with `htdemucs_ft` or `htdemucs_6s`. |
+| `--ft-shifts` | Integer | Demucs translation-averaging passes for `--use-ft-stems` (default `1`). `shifts>1` averages shifted copies for marginally cleaner stems at N× time; measured on the 60 s clip that `shifts=2` gives **no** bleed/gain improvement over `shifts=1` (bass↔other 0.034 vs 0.034; drums↔other 0.084 vs 0.086), so `1` is the default (2× slower for nothing). Only applies with `--use-ft-stems`. |
+| `--ft-strip-seconds` | Float | Strip length (seconds) for `--use-ft-stems` (default `45`). Lower = less peak RAM (auto-falls back to 20 s strips if 45 s OOMs) at the cost of more inaudible strip-seams (10 s crossfade). Tune down only on memory-constrained CPUs. Only applies with `--use-ft-stems`. |
+| `--ft-segment` | Float | Demucs internal segment length (seconds) for `--use-ft-stems` (default `None` = full-song context, highest quality). Small values (e.g. 10 s, 20 s) lower memory further but may degrade quality and slightly reduce drums↔other spectral bleed. Only applies with `--use-ft-stems`. |
+| `--ft-overlap` | Float | Demucs STFT overlap ratio for `--use-ft-stems` (default `0.25`). Higher values (e.g. `0.5`) give cleaner transients / slightly better bleed reduction at ~2× time and memory cost. Only applies with `--use-ft-stems`. |
 | `--skip-tempo-detection` | Flag | Skip beat tracking; loads `tempo_map.json` from the output directory. |
 | `--skip-vocals` | Flag | Skip WhisperX alignment and basic-pitch; loads `vocals_cache.json`. |
 | `--skip-mogg` | Flag | Skip MOGG encoding; reuses the existing `.mogg` file (which is expected to already contain the count-in lead-in). The chart is still shifted past the count-in to match the reused audio. |
@@ -438,8 +443,11 @@ If you have access to the original studio multitracks (stems) for a song, you ca
    - `drums.wav`
    - `bass.wav`
    - `vocals.wav`
-   - `other.wav` (Guitars, synths, backing tracks, etc.)
-3. Run the CLI tool with the `--skip-separation` flag:
+   - `other.wav` (Synths, backing tracks, anything not drums/bass/vocals)
+3. **Optionally** add dedicated stems for better charts and in-game audio:
+   - `guitar.wav` — when present, drives the **guitar chart** directly (instead of being re-detected from `other.wav`) and is mixed into the in-game backing audio
+   - `piano.wav` / keys stem — when present, drives the **keys chart**
+4. Run the CLI tool with the `--skip-separation` flag:
 
 ```bash
 python3 -m autorb.cli \
@@ -489,7 +497,14 @@ audio_file: (Required) Path to the input audio file.
 
 --skip-separation: Skips the AI stem separation. Requires drums.wav, bass.wav, vocals.wav, and other.wav in the [output-dir]/stems folder.
 
---use-ft-stems: Uses the fine-tuned htdemucs_ft Demucs model for cleaner stem separation (less bleed). The model is a BagOfModels ensemble of fine-tuned sub-models (all of them are used — a single sub-model bleeds bass↔other 5x worse), separated in 45 s overlapping strips (10 s overlap) so a full-length track completes on an 8 GB CPU (peak RSS ~= 2.3 GB on the 198 s Eve6 track) — never a silent kill. Slower than the default on CPU (~16 min / 3 min on 4 torch threads); use a GPU or --skip-separation with master stems. Tunable with --ft-shifts (default 1; shifts=2 verified to give no bleed improvement), --ft-strip-seconds (default 45; lower = less RAM), --ft-segment (default None = full context, best quality). Improves stem cleanliness but does NOT reduce the guitar bridge's ~23 re-strum attacks (the re-articulation is in the audio, not the bleed — see Known Limitations).
+--separator: **DEFAULT: htdemucs_ft.** Stem separation model. Options:
+  - htdemucs_ft (default): Full Demucs ensemble, 4 stems (drums/bass/other/vocals), best quality. ~16 min on 8 GB CPU.
+  - htdemucs: Stock single model, 4 stems, fast (~1 min), lower quality.
+  - htdemucs_6s: Single model, 6 stems (adds guitar + piano). Splits guitar out of "other".
+  - spleeter:5stems: TensorFlow Spleeter, 5 stems (adds separate piano).
+Use --no-use-ft-stems (deprecated) as a shortcut for --separator htdemucs.
+
+--ft-shifts / --ft-strip-seconds / --ft-segment / --ft-overlap: Tunables for htdemucs_ft and htdemucs_6s. --ft-shifts (default 1; shifts=2 gives no bleed improvement). --ft-strip-seconds (default 45; lower = less RAM). --ft-segment (default None = full context, best quality). --ft-overlap (default 0.25; 0.5 = cleaner transients at 2x time/RAM). Improves stem cleanliness but does NOT reduce the guitar bridge's ~23 re-strum attacks (the re-articulation is in the audio, not the bleed — see Known Limitations).
 
 --skip-tempo-detection: Skips librosa beat tracking and loads tempo_map.json from the output directory.
 

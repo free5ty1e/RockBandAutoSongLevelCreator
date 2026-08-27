@@ -34,10 +34,12 @@ def _generate_ps4_pkg_id(artist: str, title: str, custom_id: str | None = None) 
 @click.option('--lyrics', type=click.Path(exists=True), default=None, help='Path to LRC file')
 @click.option('--output-dir', default='./output', type=click.Path(), help='Output directory')
 @click.option('--skip-separation', is_flag=True, help='Skip Demucs separation and use existing stems')
-@click.option('--use-ft-stems', is_flag=True, help='Use the fine-tuned htdemucs_ft Demucs model (cleaner stem separation; the FULL ensemble of fine-tuned sub-models is used, separated in 45 s overlapping strips so it completes on an 8 GB CPU). Slower than the default htdemucs; shifts and strip-length are tunable with --ft-shifts / --ft-strip-seconds')
-@click.option('--ft-shifts', type=int, default=1, show_default=True, help='Demucs translation-averaging passes for --use-ft-stems (shifts>1 averages shifted copies for cleaner stems at N x time; verified on Open Road Song that shifts=2 gives no bleed gain over shifts=1, so 1 is the default)')
+@click.option('--separator', type=click.Choice(['htdemucs_ft', 'htdemucs', 'htdemucs_6s', 'spleeter:5stems'], case_sensitive=False), default='htdemucs_ft', show_default=True, help='Stem separator model. htdemucs_ft (DEFAULT): full Demucs ensemble, 4 stems (drums/bass/other/vocals), best quality, ~16 min on 8 GB CPU. htdemucs: stock single model, 4 stems, fast (~1 min), lower quality. htdemucs_6s: single model, 6 stems (drums/bass/other/vocals/guitar/piano) — splits guitar out of "other" and adds a piano stem (piano quality reportedly poor; see llm-wiki-kb/piano_keyboard_separation.md). spleeter:5stems: Spleeter model, 5 stems (vocals/piano/drums/bass/other), separate piano stem. Note: only htdemucs_ft supports --ft-shifts/--ft-strip-seconds/--ft-segment/--ft-overlap.')
+@click.option('--use-ft-stems/--no-use-ft-stems', 'use_ft_stems', default=True, help='DEPRECATED: use --separator instead. --no-use-ft-stems forces htdemucs (equivalent to --separator htdemucs). --use-ft-stems forces htdemucs_ft (equivalent to --separator htdemucs_ft, the default). If both --separator and --use-ft-stems are given, --separator takes priority.')
+@click.option('--ft-shifts', type=int, default=1, show_default=True, help='Demucs translation-averaging passes for --use-ft-stems (shifts>1 averages shifted copies for cleaner stems at N x time; verified no bleed/gain improvement vs shifts=1, so 1 is the default)')
 @click.option('--ft-strip-seconds', type=float, default=45.0, show_default=True, help='Strip length (seconds) for --use-ft-stems. Lower = less peak RAM (fallback if 45 s OOMs to 20 s) at the cost of more strip-seams (inaudible with the 10 s crossfade). Tune down on memory-constrained CPUs')
 @click.option('--ft-segment', type=float, default=None, help='Demucs internal segment length (seconds) for --use-ft-stems; None (default) = full-context (highest quality). Small values lower memory further but degrade quality')
+@click.option('--ft-overlap', type=float, default=0.25, show_default=True, help='Demucs STFT overlap ratio for --use-ft-stems (0.25 = default; 0.5 = cleaner transients / slightly more bleed reduction at 2x time and memory).')
 @click.option('--skip-tempo-detection', is_flag=True, help='Skip beat tracking and use cached tempo map')
 @click.option('--skip-vocals', is_flag=True, help='Skip vocal alignment and pitch extraction (uses cached data)')
 @click.option('--skip-mogg', is_flag=True, help='Skip MOGG encoding and reuse the existing .mogg in the output dir (which is expected to already contain the count-in lead-in); the chart is still shifted to match it')
@@ -48,7 +50,7 @@ def _generate_ps4_pkg_id(artist: str, title: str, custom_id: str | None = None) 
 @click.option('--freestyle-drums', is_flag=True, help='Create drum freestyle mode: drum track gets only one placeholder note at the start, allowing free drum play throughout the song')
 @click.option('--package-con-dir', type=click.Path(exists=True, file_okay=False, dir_okay=True), default=None, help='Package all .con files in this directory into a single PS4 PKG installer (batch packaging mode)')
 @click.option('--ps4-pkg-id', type=str, default=None, help='Optional 16-char PS4 Content ID for the PKG (auto-generated from artist+title if omitted)')
-def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, use_ft_stems, ft_shifts, ft_strip_seconds, ft_segment, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, build_clone_hero, generate_freestyle_vocals, freestyle_drums, package_con_dir, ps4_pkg_id):
+def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, separator, use_ft_stems, ft_shifts, ft_strip_seconds, ft_segment, ft_overlap, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, build_clone_hero, generate_freestyle_vocals, freestyle_drums, package_con_dir, ps4_pkg_id):
     # Batch packaging mode: package all .con files in a directory into a single PS4 PKG
     if package_con_dir:
         click.echo(f"Batch packaging mode: packaging all .con files in {package_con_dir}")
@@ -94,16 +96,49 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             if not path.exists():
                 click.echo(f"Error: missing required stem: {path}", err=True)
                 return
+        # Optional dedicated stems (master-stems workflow, or a previous
+        # --separator htdemucs_6s run): when present they are preferred for
+        # charting — guitar.wav feeds the guitar chart and piano.wav the keys
+        # chart — and are mixed into the MOGG backing channels.
+        for opt_name, opt_desc in (("guitar", "guitar chart"),
+                                   ("piano", "keys chart")):
+            opt_path = stems_dir / f"{opt_name}.wav"
+            if opt_path.exists():
+                stems[opt_name] = opt_path
+                click.echo(f"Optional {opt_name}.wav found: will drive the {opt_desc}.")
         click.echo("All pre-existing stems found successfully.")
     else:
         click.echo("\n[1/5] Separating stems via Demucs...")
         from autorb.audio.stems import separate_stems
         model_name = "htdemucs_ft" if use_ft_stems else "htdemucs"
-        click.echo(f"Using Demucs model: {model_name}" +
-                   (" (ft, chunked to bound memory)" if use_ft_stems else ""))
-        stems = separate_stems(audio_file, out_path, device=device,
-                               model_name=model_name, shifts=ft_shifts,
-                               strip_seconds=ft_strip_seconds, segment=ft_segment)
+        quality_note = (" (full ensemble, 45 s strips — cleaner stems, ~30 min)" if use_ft_stems
+                        else " (stock htdemucs — fast, lower quality)")
+        # Resolve model: --separator takes priority; --use-ft-stems is legacy fallback
+        if separator:
+            model_name = separator
+        else:
+            model_name = "htdemucs_ft" if use_ft_stems else "htdemucs"
+
+        quality_notes = {
+            "htdemucs_ft": " (full ensemble, 45 s strips, cleaner stems, ~16 min)",
+            "htdemucs": " (stock, fast, lower quality)",
+            "htdemucs_6s": " (6 stems incl. guitar + piano, single model, faster)",
+            "spleeter:5stems": " (5 stems incl. piano, Spleeter model)",
+        }
+        qnote = quality_notes.get(model_name, f" ({model_name})")
+        click.echo(f"Using stem separator: {model_name}{qnote}")
+
+        if model_name.startswith("spleeter:"):
+            # Spleeter path (separate code from Demucs)
+            from autorb.audio.stems import separate_stems_spleeter
+            stems = separate_stems_spleeter(audio_file, out_path, model_name=model_name)
+        else:
+            # Demucs path (htdemucs, htdemucs_ft, htdemucs_6s)
+            from autorb.audio.stems import separate_stems
+            stems = separate_stems(audio_file, out_path, device=device,
+                                   model_name=model_name, shifts=ft_shifts,
+                                   overlap=ft_overlap,
+                                   strip_seconds=ft_strip_seconds, segment=ft_segment)
 
     click.echo(f"Stems ready: {stems}")
 
@@ -202,9 +237,18 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
     else:
         song_end = 300.0
     
-    click.echo("  Transcribing guitar (from 'other' stem)...")
+    # Prefer dedicated stems when available (master stems, or --separator
+    # htdemucs_6s): the guitar chart reads guitar.wav and the keys chart reads
+    # piano.wav; both fall back to the 'other' stem, which with the default
+    # separators contains guitar + keys + everything else.
+    guitar_stem = stems.get("guitar") or stems["other"]
+    keys_stem = stems.get("piano") or stems["other"]
+    if "guitar" in stems:
+        click.echo("  Transcribing guitar (from 'guitar' stem)...")
+    else:
+        click.echo("  Transcribing guitar (from 'other' stem)...")
     try:
-        guitar_expert = transcribe_guitar(stems["other"], list(zip(beat_times, dynamic_bpms)), song_end)
+        guitar_expert = transcribe_guitar(guitar_stem, list(zip(beat_times, dynamic_bpms)), song_end)
         guitar_charts = create_all_difficulties(guitar_expert, "guitar")
         click.echo("  Guitar transcription complete.")
     except Exception as e:
@@ -236,9 +280,12 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         click.echo(f"  Warning: drum transcription failed: {e}", err=True)
         drum_charts = None
 
-    click.echo("  Transcribing keys (from 'other' stem)...")
+    if "piano" in stems:
+        click.echo("  Transcribing keys (from 'piano' stem)...")
+    else:
+        click.echo("  Transcribing keys (from 'other' stem)...")
     try:
-        keys_expert = transcribe_keys(stems["other"], list(zip(beat_times, dynamic_bpms)), song_end)
+        keys_expert = transcribe_keys(keys_stem, list(zip(beat_times, dynamic_bpms)), song_end)
         keys_charts = create_all_difficulties(keys_expert, "keys")
         click.echo("  Keys transcription complete.")
     except Exception as e:

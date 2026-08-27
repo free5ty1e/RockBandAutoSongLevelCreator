@@ -6,6 +6,47 @@ date: 2026-08-07
 
 Append-only ledger of changes to this knowledge base. Newest first. Each entry records: timestamp, what was added, and why (the reasoning that future agents should not have to re-derive).
 
+## 2026-08-25 — v0.1.15: dedicated guitar/piano stems drive charting + MOGG; stems dir auto-clear
+
+**What:** (1) When `guitar.wav` / `piano.wav` exist in `[output-dir]/stems/` — via the master-stems `--skip-separation` workflow or a `--separator htdemucs_6s` run — the CLI now transcribes the guitar chart from `guitar.wav` and the keys chart from `piano.wav` instead of re-detecting both from the shared `other` stem (`autorb/cli.py`: optional-stem pickup in the skip-separation branch; `guitar_stem = stems.get("guitar") or stems["other"]`, same pattern for keys/piano). (2) `build_mogg_from_stems` mixes those extra stems into a backing bus that feeds ch5-6 (+ quiet ch9), so their audio is audible in-game — the fixed 10-channel 311-Down layout has no dedicated channel for them, and leaving them out meant silent guitar during gameplay with 6-stem output. Charting preference and MOGG mixing are independent: each activates only when the file exists. (3) Both separation entry points clear stale `*.wav` from the stems folder before running, because a leftover `guitar.wav` from an earlier 6-stem run would otherwise be silently adopted by a later 4-stem run's charting/MOGG.
+
+**Why:** The user asked for master-stems ingestion ("a band that has their master tracks") and flagged it as required for the 6-stem separator; the auto-clear closes the stale-file hazard they identified when switching separators between runs. The MOGG mixing was found while tracing stem consumption — without it, `--separator htdemucs_6s` produced charts but in-game audio had no guitar on any channel.
+
+## 2026-08-25 — v0.1.14: --separator option (htdemucs_ft / htdemucs / htdemucs_6s / spleeter:5stems) + piano keys separation
+
+**What:** Added `--separator` CLI option (default `htdemucs_ft`) replacing the legacy `--use-ft-stems` flag. `--separator` accepts `htdemucs_ft` (default, full ensemble, 4 stems, ~16 min on 8 GB CPU), `htdemucs` (stock, fast ~1 min), `htdemucs_6s` (single Demucs model, **6 stems** including separate guitar + piano), and `spleeter:5stems` (Spleeter TensorFlow model, 5 stems including separate piano). Added `separate_stems_spleeter()` to `autorb/audio/stems.py` for the spleeter code path. Verified `htdemucs_6s` works through the existing `separate_stems()` function (single-model branch, auto-chunked for tracks > 2 min) with an end-to-end smoke test producing all 6 stems. `--use-ft-stems`/`--no-use-ft-stems` retained as deprecated aliases. Full documentation of piano/keyboard separation options in `llm-wiki-kb/piano_keyboard_separation.md`.
+
+**⚠️ Dependency-conflict incident (do not repeat):** researching Spleeter involved `pip install spleeter` into this venv, which silently **downgraded click → 7.1.2 (repo requires ≥8.1.7), typing_extensions → 4.5.0 (broke `import torch` — needs `TypeIs` from ≥4.9; every CLI invocation and 2 tests failed), and numpy → 1.24.3 (broke matplotlib spectrogram rendering**; alignment-report test rendered 0 PNGs). Repair: `pip install -U 'click>=8.1.7' 'typing_extensions>=4.9,<6' 'numpy==1.26.4'`; full suite back to green 159 passed afterwards. Spleeter 2.4.2 pins tensorflow 2.12-era deps incompatible with this repo's torch/click stack → the spleeter path stays **code-only opt-in** (`from spleeter.separator import Separator` is inside the function; never add spleeter to requirements.txt); evaluate its piano stem in an isolated venv only.
+
+**Why:** The user confirmed ft-ensemble stems are dramatically better and wants piano/keyboard separation for Rock Band keys charting. Demucs's default models collapse piano into "other"; `htdemucs_6s` provides dedicated guitar+piano stems with zero new dependencies, so it's the recommended keys-separation backend.
+
+**Why:** The user confirmed the ft ensemble produces MUCH BETTER stems than stock across all instruments (drums, bass, other/rhythm-guitar, vocals) and wants it as the default. The user also needs piano/keyboard stem separation for Rock Band keys charting — Demucs's `htdemucs` and `htdemucs_ft` collapse piano into the "other" stem, so the 6-source model (`htdemucs_6s`) and Spleeter's 5-stems model are the two viable paths. `--separator` gives users the choice with clear quality/speed trade-offs documented in the help text.
+
+## 2026-08-25 — v0.1.13: htdemucs_ft full-ensemble is DEFAULT + --ft-overlap knob
+
+**What:** `--use-ft-stems` changed from an opt-in flag to a **default-on toggle** (`--use-ft-stems`/`--no-use-ft-stems`, default=True). `separate_stems()` default `model_name` changed from `"htdemucs"` to `"htdemucs_ft"`. New `--ft-overlap` CLI option (default 0.25; 0.5 gives cleaner transients at ~2× time/RAM) — exposes the overlap parameter that was already threaded through `apply_kwargs` but not exposed on the CLI.
+
+**Why:** User listening tests confirmed the ft ensemble beats stock `htdemucs` across all stems — drums, bass, other (rhythm guitar), vocals all improved; the preview mix "sounds just like the original song." The ft ensemble is now the standard separator, with `--no-use-ft-stems` available for users who need speed over quality (~1 min vs ~16 min on 8 GB CPU). `--ft-overlap` was added to give users a knob to further reduce drums↔other spectral bleed (NCC ~0.084, not fixable by ensemble/shifts but slightly reduced by higher overlap).
+
+## 2026-08-25 — v0.1.12: Full `htdemucs_ft` ensemble (single-submodel unwrap removed) + quality knobs
+
+**What:** `separate_stems(model_name='htdemucs_ft')` no longer unwraps the `BagOfModels` ensemble to `model.models[0]`. The old unwrap (originally for RAM savings) was the **bleed bug**: the single sub-model bleeds bass↔other **5× worse** (NCC 0.172 vs 0.034 on the 60 s Eve6 clip) and weakens the bass stem (RMS 0.031 vs 0.052 for the ensemble). The full `BagOfModels` ensemble is now forwarded directly to `demucs.apply.apply_model`, bounded in memory by the v0.1.11 45 s strip-sectioning path (~2.3 GB peak RSS on the 198 s Eve6 track on 8 GB). `apply_kwargs` (shifts/overlap/segment) is now threaded through the entire call chain: `_separate_audio` → `_separate_strips` → `separate_stems`. New CLI knobs exposed: `--ft-shifts` (default 1), `--ft-strip-seconds` (default 45), `--ft-segment` (default None = full context), `--ft-overlap` (default 0.25).
+
+**A/B experiment results (60 s Eve6 clip, NCC off-diagonal = bleed; lower = cleaner):**
+| config | model | shifts | bass↔other NCC | drums↔other NCC | bass RMS |
+|---|---|---|---|---|---|
+| stock1 | htdemucs | 1 | 0.046 | 0.085 | 0.052 |
+| ft_single1 | ft, 1 sub-model | 1 | **0.172** ❌ | 0.076 | 0.031 |
+| ft_single2 | ft, 1 sub-model | 2 | 0.174 ❌ | 0.078 | 0.031 |
+| ft_ens1 | ft, full ensemble | 1 | **0.034** ✅ | 0.084 | 0.052 |
+| ft_ens2 | ft, full ensemble | 2 | 0.034 ✅ | 0.086 | 0.052 |
+
+Conclusions: (a) Full ensemble vs single sub-model → 5× less bass↔other bleed (the unwrap was the bug). **Ensemble is the shipping default.** (b) `shifts=2` vs `shifts=1` (ensemble) → **identical** bleed (bass↔other 0.034 both; drums↔other 0.084 vs 0.086), **1.7× slower** — `shifts=1` is the default. (c) `drums↔other` (0.084 ensemble) is ~unchanged from single (0.076) — this is **spectral** bleed (drums/guitar share midrange), low temporal NCC, not improved by ensemble or shifts.
+
+**User listening test (v0.1.13):** The ft ensemble stems (`output_ab/full/ft/stems/`) were rated MUCH BETTER than stock across all instruments — drums, bass, other (rhythm guitar), and vocals all improved. The preview mix sounds just like the original song. The ft ensemble is now the **default** separator (`--use-ft-stems` defaults to on; use `--no-use-ft-stems` for fast stock htdemucs).
+
+**Artifacts:** `output_ab/cfg/{stock1,ft_single1,ft_single2,ft_ens1,ft_ens2}/` (60 s clips) and `output_ab/full/{stock,ft}/` (198 s full song) — gitignored. A/B probe harness at `.tmp/ab_probe.py`.
+
 ## 2026-08-25 — v0.1.11: Sectioned `htdemucs_ft` separation (full 198 s completes on 8 GB)
 
 **What:** `separate_stems(model_name='htdemucs_ft')` now separates in **45 s overlapping strips** (10 s overlap) instead of one full-length chunked run (`autorb/audio/stems.py::_separate_strips`). Each strip is processed by the existing 10 s sine-window COLA chunker (with the v0.1.10 reflection-pad boundary fix), then strip-level stems are merged with a level-constant linear crossfade. The reason this was needed: `_separate_audio` allocates its `sources_p` accumulator over the *full* input, so even memory-bounded 10 s chunking still OOM-kills (SIGKILL, uncatchable) the 198 s Eve6 `htdemucs_ft` ensemble on this 8 GB host (~chunk 4). Sectioning bounds peak memory to one strip.
