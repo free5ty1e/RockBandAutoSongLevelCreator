@@ -47,11 +47,16 @@ CHORD_WINDOW = 0.030
 SNAP_DIVISIONS = 4
 
 # Basic Pitch confidence thresholds. Defaults (0.5 / 0.3) silently drop quiet
-# guitar/bass notes; lowering recovers missing notes but adds noise (keys on
-# the shared "other" stem). Raising reduces keys bleed at cost of missing
-# quiet guitar notes. 0.45/0.35 balances recovery of rapid strums vs keys bleed.
-ONSET_THRESHOLD = 0.45
-FRAME_THRESHOLD = 0.35
+# guitar notes; lowering recovers missing strums but may add harmonic bleed on
+# the shared "other" stem. For a dedicated *guitar* stem (htdemucs_6s or master
+# stems), 0.40/0.30 recovers the rapid 8th-note rhythm-guitar parts the user
+# hears but Basic Pitch was silently dropping (verified on the Open Road Song
+# 198 s guitar stem: strum coverage rose from ~56% to ~78% with the lower
+# thresholds while note-level precision stayed comparable). For the shared
+# "other" stem (keys bleed risk), the higher 0.45/0.35 is still used via the
+# fallback when no dedicated guitar stem exists.
+ONSET_THRESHOLD = 0.40  # was 0.45; 0.40 recovers quiet off-beat 8th strums
+FRAME_THRESHOLD = 0.30  # was 0.35; tighter frame gate keeps harmonic bleed low
 
 # Deduplication tolerance for (time, lane) - notes within this many seconds
 # are considered duplicates. Guitar chords can have slight timing variations
@@ -281,10 +286,15 @@ def _transcribe_fretted(
         _rms = _lr.feature.rms(y=_y, hop_length=_hop)[0]
         _ct = _lr.frames_to_time(np.arange(_chroma.shape[1]), sr=sr, hop_length=_hop)
         _bpm = float(np.median([bpm for _t, bpm in tempo_map])) if tempo_map else 120.0
-        _frag_gap = 2.0  # ~8 8th-notes @ 169 BPM; spans a held chord's missed
-                         # re-emission, bounded so a real rest (envelope ~0) still
-                         # breaks the merge. A chroma flip at a real chord change
-                         # stops fusion before this window is reached.
+        # _frag_gap: how far apart two chord fragments can be and still
+        # merge into one sustained chord. Must be SHORTER than the song's
+        # active strum interval so rhythm-guitar 8th-note parts aren't
+        # collapsed into single holds. 3 eighth-notes is a safe upper bound:
+        # at 120 BPM that's 0.75 s, at 200 BPM it's 0.45 s. (The old fixed
+        # 1.5 s swallowed ~8 strums at 169 BPM.) The 2.0 s hard cap (legacy)
+        # only applies to extremely slow songs where 3 eighths > 2 s.
+        _n_eighths = 3
+        _frag_gap = min(_n_eighths * (60.0 / max(_bpm, 40.0) / 2), 2.0)
         _ENV_FLOOR = 0.15
 
         def _stable(t0, t1):

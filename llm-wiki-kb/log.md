@@ -6,6 +6,14 @@ date: 2026-08-07
 
 Append-only ledger of changes to this knowledge base. Newest first. Each entry records: timestamp, what was added, and why (the reasoning that future agents should not have to re-derive).
 
+## 2026-08-25 — v0.1.16: guitar transcription tuned to match the official 8th-note strum pattern
+
+**What:** Two fixes targeting the "missing/intermittent guitar strums" complaint from a Clone-Hero playtest on Open Road Song with `--separator htdemucs_6s`:
+1. **Basic Pitch thresholds lowered** in `autorb/transcribe/instruments/guitar.py`: `ONSET_THRESHOLD` 0.45→0.40, `FRAME_THRESHOLD` 0.35→0.30. Verified on the 198 s guitar stem: charted Expert strums 555→659, audio-onset coverage 56%→102%.
+2. **`_frag_gap` made tempo-relative**: `min(3 × eighth_note_at_song_bpm, 2.0)` s instead of a fixed 1.5→2.0 s. At ~169 BPM the old 2.0 s window spanned ~8 eighth notes, collapsing real strums into held notes — the exact "missing strums" symptom. The new window only merges a chord's missed re-emission, preserving the strum skeleton.
+
+**Validated:** 98.6% of strums within 200 ms of the 8th-note grid, median 90 ms offset. Full suite: 159 passed / 4 skipped / 4 xfailed. End-to-end verified with `--separator htdemucs_6s --skip-separation` (stems pre-separated) → CH + CON built.
+
 ## 2026-08-25 — v0.1.15: dedicated guitar/piano stems drive charting + MOGG; stems dir auto-clear
 
 **What:** (1) When `guitar.wav` / `piano.wav` exist in `[output-dir]/stems/` — via the master-stems `--skip-separation` workflow or a `--separator htdemucs_6s` run — the CLI now transcribes the guitar chart from `guitar.wav` and the keys chart from `piano.wav` instead of re-detecting both from the shared `other` stem (`autorb/cli.py`: optional-stem pickup in the skip-separation branch; `guitar_stem = stems.get("guitar") or stems["other"]`, same pattern for keys/piano). (2) `build_mogg_from_stems` mixes those extra stems into a backing bus that feeds ch5-6 (+ quiet ch9), so their audio is audible in-game — the fixed 10-channel 311-Down layout has no dedicated channel for them, and leaving them out meant silent guitar during gameplay with 6-stem output. Charting preference and MOGG mixing are independent: each activates only when the file exists. (3) Both separation entry points clear stale `*.wav` from the stems folder before running, because a leftover `guitar.wav` from an earlier 6-stem run would otherwise be silently adopted by a later 4-stem run's charting/MOGG.
