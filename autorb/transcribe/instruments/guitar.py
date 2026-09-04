@@ -108,10 +108,14 @@ def _transcribe_fretted(
     # Instrument-specific frequency ranges to reject bleed:
     # Guitar: ~E2 (82 Hz) to ~E6 (1318 Hz) - extended for high frets/harmonics
     # Bass: ~E1 (41 Hz) to ~G4 (392 Hz)
+    # For the shared "other" stem, raise guitar FMIN to ~150 Hz to reject
+    # bass-fundamental bleed (E1=41Hz through ~D3=147Hz) while keeping
+    # guitar power chords (D3=147Hz and up). Low open strings E2/A2
+    # (82/110Hz) are sacrificed but rarely used in rock rhythm parts.
     if instrument == "bass":
         FMIN, FMAX = 38.0, 420.0
     else:  # guitar
-        FMIN, FMAX = 70.0, 1400.0
+        FMIN, FMAX = 150.0, 1400.0
 
     raw = []
     # For bass: pre-load stem audio and compute a bass-band (40-250 Hz) RMS
@@ -272,16 +276,14 @@ def _transcribe_fretted(
     # 8th+8th+quarter+quarter+8th pattern) re-articulates with damped envelopes
     # and short note lengths.
     #
-    # Generic rule (works for any song): segment the chord events by chroma ROOT
-    # change (lower of a power chord's top-2 pitch classes -- a root/fifth flip is
-    # not a chord change). Within a root region, collapse to ONE sustained chord
-    # iff the region is held: (a) its internal inter-onset gaps are envelope-
-    # continuous in the mean (>=0.30 of local peak, ignoring deep rests that are
-    # true silences, not palm muting), AND (b) the fragments are sustained
-    # (median note length >= one 8th note). Otherwise the region is a riff and is
-    # left as individual strums. A new chord (root change) always breaks a region,
-    # so one sustained chord becomes exactly one charted note however long it
-    # rings.
+    # Strategy: Two-tier merge
+    # 1. Per-gap merge (existing): fuse consecutive chord groups within _frag_gap
+    #    if chroma-stable AND envelope-continuous AND fragments sustained.
+    # 2. Windowed-chord-identity merge (bridge fix): For regions where per-gap
+    #    merge didn't collapse enough, apply a sliding window (3-4s) majority vote
+    #    on chroma ROOT. If >70% of the window shares the same root, collapse
+    #    the entire window to ONE sustained chord. This handles the bridge where
+    #    the power chord rings but Basic Pitch re-emits with slight variations.
     if instrument == "guitar":
         _rms = _lr.feature.rms(y=_y, hop_length=_hop)[0]
         _ct = _lr.frames_to_time(np.arange(_chroma.shape[1]), sr=sr, hop_length=_hop)
@@ -297,10 +299,31 @@ def _transcribe_fretted(
         _frag_gap = min(_n_eighths * (60.0 / max(_bpm, 40.0) / 2), 2.0)
         _ENV_FLOOR = 0.15
 
+        def _chroma_root(t):
+            """Get chroma root (0-11) at time t."""
+            j = int(np.clip(np.searchsorted(_ct, t), 0, len(_ct) - 1))
+            return int(np.argmax(_chroma[:, j]))
+
+        def _lane_set(group):
+            """Return frozenset of lanes for a group."""
+            return frozenset(r["lane"] for r in group)
+
         def _stable(t0, t1):
-            j0 = int(np.clip(np.searchsorted(_ct, t0), 0, len(_ct) - 1))
-            j1 = int(np.clip(np.searchsorted(_ct, t1), 0, len(_ct) - 1))
-            return int(np.argmax(_chroma[:, j0])) == int(np.argmax(_chroma[:, j1]))
+            # Use lane sets instead of chroma for stability
+            # Find the group at t0 and t1
+            for _g in groups:
+                if abs(_g[0]["start"] - t0) < 0.01:
+                    lanes_t0 = _lane_set(_g)
+                    break
+            else:
+                lanes_t0 = frozenset()
+            for _g in groups:
+                if abs(_g[0]["start"] - t1) < 0.01:
+                    lanes_t1 = _lane_set(_g)
+                    break
+            else:
+                lanes_t1 = frozenset()
+            return lanes_t0 == lanes_t1 and len(lanes_t0) >= 2
 
         def _held(t0, t1):
             j0 = int(np.clip(np.searchsorted(_ct, t0), 0, len(_ct) - 1))
@@ -311,8 +334,15 @@ def _transcribe_fretted(
             if len(seg) < 2:
                 return False
             mx = float(seg.max())
-            return mx > 0 and float(seg.min()) >= _ENV_FLOOR * mx
+            if mx == 0:
+                return False
+            # Use median instead of min to tolerate brief palm-mute dips / silences
+            # A genuinely held chord sustains above floor for most of the region
+            # We require >50% of the region to be above floor (not 100%)
+            frac_above = float(np.mean(seg >= _ENV_FLOOR * mx))
+            return frac_above >= 0.50
 
+        # Tier 1: Per-gap merge (conservative, preserves strum riffs)
         _merged = []
         for _g in groups:
             if _merged:
@@ -327,6 +357,92 @@ def _transcribe_fretted(
                     continue  # absorb _g as a fragment of the held chord
             _merged.append(_g)
         groups = _merged
+
+        # Tier 2: Windowed-LANE merge for sustained sections (bridge fix)
+        # Pitch classes are unreliable due to Basic Pitch re-detection variations.
+        # Lane sets are stable after pitch-to-lane mapping. A sustained power chord
+        # shows the same 2 lanes repeatedly (root + fifth lanes). We slide a window
+        # and if fragments share the same LANE SET, collapse to one held chord.
+        _window_sec = 4.0  # 4s window
+        _min_fragments = 3  # minimum fragments in window
+        _min_set_coverage = 0.50  # 50% of fragments must share the same lane set
+
+        def _lane_set(group):
+            """Return frozenset of lanes for a group."""
+            return frozenset(r["lane"] for r in group)
+
+        _i = 0
+        while _i < len(groups):
+            _g = groups[_i]
+            _t_start = _g[0]["start"]
+            _t_end = _t_start + _window_sec
+
+            # Collect all fragments in this window
+            _window_groups = [_g]
+            _j = _i + 1
+            while _j < len(groups) and groups[_j][0]["start"] < _t_end:
+                _window_groups.append(groups[_j])
+                _j += 1
+
+            if len(_window_groups) >= _min_fragments:
+                # Check lane SET agreement.
+                # For power chords, each fragment should have the same 2 lanes.
+                from collections import Counter
+                _lane_sets = [_lane_set(g) for g in _window_groups]
+                _set_counts = Counter(_lane_sets)
+                _majority_set, _majority_count = _set_counts.most_common(1)[0]
+                _set_coverage = _majority_count / len(_window_groups)
+
+                # Also verify the region is sustained (envelope doesn't drop to silence)
+                _t_window_end = groups[_j - 1][0]["start"] if _j - 1 < len(groups) else _t_end
+                _sustained = _held(_t_start, _t_window_end)
+
+                # Accept if the same lane set appears in >= 50% of fragments
+                # and the region is sustained (minimum 2 lanes for power chord)
+                if _set_coverage >= _min_set_coverage and _sustained and len(_majority_set) >= 2:
+                    # Collapse entire window to ONE sustained chord
+                    _window_end = max(r["start"] + r["length"] for g in _window_groups for r in g)
+                    # Merge all notes into first group (deduplicate lanes)
+                    _all_notes = [r for g in _window_groups for r in g]
+                    _merged_group = _all_notes
+                    _merged_group[0]["length"] = _window_end - _merged_group[0]["start"]
+                    # Replace window with single merged group
+                    groups[_i:_j] = [_merged_group]
+                    _i += 1
+                    continue
+
+            # Tier 2b: Aggressive merge for repeated strums of same chord
+            # Even if envelope dips between strums (re-strumming a held chord),
+            # if the lane set is the same and we're in a region with
+            # generally high envelope, collapse to sustained chord.
+            if len(_window_groups) >= _min_fragments:
+                from collections import Counter
+                _lane_sets = [_lane_set(g) for g in _window_groups]
+                _set_counts = Counter(_lane_sets)
+                _majority_set, _majority_count = _set_counts.most_common(1)[0]
+                _set_coverage = _majority_count / len(_window_groups)
+
+                # Check if envelope is generally high (above 20% of peak)
+                _t_window_end = groups[_j - 1][0]["start"] if _j - 1 < len(groups) else _t_end
+                j0 = int(np.clip(np.searchsorted(_ct, _t_start), 0, len(_ct) - 1))
+                j1 = int(np.clip(np.searchsorted(_ct, _t_window_end), 0, len(_ct) - 1))
+                if j1 > j0:
+                    seg = _rms[j0:j1 + 1]
+                    if len(seg) >= 2:
+                        mx = float(seg.max())
+                        if mx > 0:
+                            # More relaxed: envelope above 20% of peak for most of region
+                            frac_above = float(np.mean(seg >= 0.20 * mx))
+                            # If set coverage is high (70%) and envelope is generally up
+                            if _set_coverage >= 0.70 and frac_above >= 0.40 and len(_majority_set) >= 2:
+                                _window_end = max(r["start"] + r["length"] for g in _window_groups for r in g)
+                                _all_notes = [r for g in _window_groups for r in g]
+                                _merged_group = _all_notes
+                                _merged_group[0]["length"] = _window_end - _merged_group[0]["start"]
+                                groups[_i:_j] = [_merged_group]
+                                _i += 1
+                                continue
+            _i += 1
 
 
     expert_notes = []

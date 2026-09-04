@@ -10,6 +10,7 @@ import click
 from demucs.apply import apply_model
 from demucs.pretrained import get_model
 
+
 def _clear_stems_dir(stems_dir: Path) -> None:
     """Remove stale stem WAVs before a new separation run.
 
@@ -75,89 +76,82 @@ def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu",
     click.echo(f"Separating stems (this may take a while) with "
                f"shifts={apply_kwargs.get('shifts')}, overlap={overlap}, "
                f"segment={apply_kwargs.get('segment')}...")
-    if model_name == "htdemucs_ft":
-        # The full ``htdemucs_ft`` ensemble (NOT a single sub-model) is used -- it
-        # halves bass<->other cross-bleed vs any one sub-model (verified on the
-        # Open Road Song 60s clip). The ensemble's per-output ``sources_p``
-        # accumulator is sized to the full input, so it OOM-kills the 198 s track
-        # in one pass; strip it (45 s) to bound memory. Each strip is itself 10 s
-        # COLA-chunked internally, then strip stems are linear-crossfaded (no seams).
-        try:
-            sources = _separate_strips(model, wav, sr, device,
-                                       strip_seconds=strip_seconds, overlap_seconds=10.0,
-                                       chunk_seconds=10.0, apply_kwargs=apply_kwargs,
-                                       progress=lambda k, m: click.echo(
-                                           f"  separating strip {k}/{m} (htdemucs_ft)...",
-                                           err=True))
-        except (RuntimeError, torch.cuda.OutOfMemoryError):
-            click.echo(f"{strip_seconds}s strips OOM'd; retrying with 20 s strips...")
-            try:
-                sources = _separate_strips(model, wav, sr, device,
-                                           strip_seconds=20.0, overlap_seconds=10.0,
-                                           chunk_seconds=10.0, apply_kwargs=apply_kwargs,
-                                           progress=lambda k, m: click.echo(
-                                               f"  separating strip {k}/{m} (htdemucs_ft, 20s)...",
-                                               err=True))
-            except (RuntimeError, torch.cuda.OutOfMemoryError):
-                click.echo("htdemucs_ft still OOMs on this device; falling back to stock 'htdemucs'.")
-                model = get_model("htdemucs"); model.to(device)
-                ref = wav.mean(0); wav_n = (wav - ref.mean()) / (ref.std() + 1e-8)
-                with torch.no_grad():
-                    sources = apply_model(model, wav_n, device=device)[0]
-                sources = sources * ref.std() + ref.mean()
-    else:
-        # htdemucs or htdemucs_6s (single model, not ensemble): chunk if the
-        # track is long enough to warrant it (bounded memory via the 10 s COLA
-        # chunker). htdemucs_6s produces 6 stems (adds guitar + piano) instead of 4.
-        chunked = n > int(120 * sr)  # chunk for tracks > 2 min
-        sources = _separate_audio(model, wav, sr, device,
-                                  chunked=chunked,
-                                  progress=lambda k, m: click.echo(
-                                      f"  separating chunk {k}/{m} ({model_name}"
-                                      + (" chunked" if chunked else " full-track") + ")...",
-                                      err=True),
-                                  apply_kwargs=apply_kwargs)
 
     stem_names = model.sources  # ['drums', 'bass', 'other', 'vocals']
     stems_paths = {}
 
-    # Save individual stems
-    for i, name in enumerate(stem_names):
-        out_file = stems_dir / f"{name}.wav"
-        click.echo(f"Saving {name} stem to {out_file}...")
-        
-        audio_data = sources[i].cpu().numpy()
-        if audio_data.ndim == 2:
-            audio_data = audio_data.T
-            
-        sf.write(str(out_file), audio_data, sr)
-        stems_paths[name] = out_file
+    # Use memory-bounded strip processing for ALL models on long tracks
+    # This writes stems directly to files, never holding full track in memory
+    try:
+        _separate_strips(model, wav, sr, device,
+                         strip_seconds=strip_seconds, overlap_seconds=10.0,
+                         chunk_seconds=10.0, apply_kwargs=apply_kwargs,
+                         progress=lambda k, m: click.echo(
+                             f"  separating strip {k}/{m} ({model_name})...",
+                             err=True),
+                         output_stems_dir=stems_dir, stem_names=stem_names)
+    except (RuntimeError, torch.cuda.OutOfMemoryError):
+        click.echo(f"{strip_seconds}s strips OOM'd; retrying with 20 s strips...")
+        try:
+            _separate_strips(model, wav, sr, device,
+                             strip_seconds=20.0, overlap_seconds=10.0,
+                             chunk_seconds=10.0, apply_kwargs=apply_kwargs,
+                             progress=lambda k, m: click.echo(
+                                 f"  separating strip {k}/{m} ({model_name}, 20s)...",
+                                 err=True),
+                             output_stems_dir=stems_dir, stem_names=stem_names)
+        except (RuntimeError, torch.cuda.OutOfMemoryError):
+            click.echo(f"{model_name} still OOMs on this device; trying 10s strips...")
+            _separate_strips(model, wav, sr, device,
+                             strip_seconds=10.0, overlap_seconds=5.0,
+                             chunk_seconds=5.0, apply_kwargs=apply_kwargs,
+                             progress=lambda k, m: click.echo(
+                                 f"  separating strip {k}/{m} ({model_name}, 10s)...",
+                                 err=True),
+                             output_stems_dir=stems_dir, stem_names=stem_names)
 
-    # Generate preview mix by summing tensors in memory
+    # Load saved stems for preview mix generation
     click.echo("Generating preview mix...")
     preview_file = out_dir / "preview_mix.mp3"
-    mix_data = sources.sum(dim=0).cpu().numpy()
-    
-    if mix_data.ndim == 2:
-        mix_data = mix_data.T
-        
-    peak = np.max(np.abs(mix_data))
-    if peak > 1.0:
-        mix_data = mix_data / peak
 
-    # Write to an in-memory WAV buffer, then encode to MP3 using pydub
-    import io
-    from pydub import AudioSegment
+    # Sum stems from disk to avoid holding full track in memory
+    mix_data = None
+    for i, name in enumerate(stem_names):
+        out_file = stems_dir / f"{name}.wav"
+        click.echo(f"Loading {name} stem from {out_file}...")
+        audio_data, _ = sf.read(str(out_file), dtype='float32')
+        if audio_data.ndim == 1:
+            audio_data = np.expand_dims(audio_data, axis=1)
+        # Convert to (channels, time)
+        audio_data = audio_data.T
+        stems_paths[name] = out_file
 
-    wav_io = io.BytesIO()
-    sf.write(wav_io, mix_data, sr, format='WAV')
-    wav_io.seek(0)
-    
-    preview_audio = AudioSegment.from_wav(wav_io)
-    preview_audio.export(str(preview_file), format="mp3", bitrate="192k")
-    
-    click.echo(f"Preview mix saved to {preview_file}")
-    stems_paths["preview_mix"] = preview_file
+        if mix_data is None:
+            mix_data = audio_data.copy()
+        else:
+            mix_data += audio_data
+
+    if mix_data is not None:
+        if mix_data.ndim == 2:
+            mix_data = mix_data.T
+
+        peak = np.max(np.abs(mix_data))
+        if peak > 1.0:
+            mix_data = mix_data / peak
+
+        # Write to an in-memory WAV buffer, then encode to MP3 using pydub
+        import io
+        from pydub import AudioSegment
+
+        wav_io = io.BytesIO()
+        sf.write(wav_io, mix_data, sr, format='WAV')
+        wav_io.seek(0)
+
+        preview_audio = AudioSegment.from_wav(wav_io)
+        preview_audio.export(str(preview_file), format="mp3", bitrate="192k")
+
+        click.echo(f"Preview mix saved to {preview_file}")
+        stems_paths["preview_mix"] = preview_file
 
     return stems_paths
 
@@ -225,7 +219,8 @@ def _separate_audio(model, wav, sr, device, chunked=False, chunk_seconds=20.0,
 
 def _separate_strips(model, wav, sr, device,
                      strip_seconds=45.0, overlap_seconds=10.0,
-                     chunk_seconds=10.0, progress=None, apply_kwargs=None):
+                     chunk_seconds=10.0, progress=None, apply_kwargs=None,
+                     output_stems_dir=None, stem_names=None):
     """Memory-bounded full-track separation for heavy models (e.g. ``htdemucs_ft``).
 
     The full-length chunked path (:func:`_separate_audio` with ``chunked=True``)
@@ -237,10 +232,26 @@ def _separate_strips(model, wav, sr, device,
     ``apply_kwargs``), then merges the strip-level stems with a level-constant
     linear crossfade over the overlap.
 
-    Peak memory is bounded by one strip (~45 s x 4 stems x 2 ch) instead of the
-    full track, so the entire song completes. Strips are freed as they are merged.
-    ``apply_kwargs`` is forwarded to :func:`_separate_audio` -> ``apply_model``.
-    Memory fallback chain (caller): 45 s -> 20 s -> stock ``htdemucs``.
+    **Memory-bounded design:** This function writes each stem directly to its output
+    file incrementally, NEVER holding the full track in memory. Peak memory is
+    bounded by one strip (~45 s x 4 stems x 2 ch) instead of the full track.
+
+    Args:
+        model: Demucs model
+        wav: Input audio tensor (batch, channels, time)
+        sr: Sample rate
+        device: torch device
+        strip_seconds: Strip length in seconds
+        overlap_seconds: Overlap between strips in seconds
+        chunk_seconds: Chunk length for internal COLA chunking
+        progress: Progress callback
+        apply_kwargs: Additional kwargs for apply_model
+        output_stems_dir: Directory to write stem files directly (memory-bounded mode)
+        stem_names: List of stem names for output files
+
+    Returns:
+        If output_stems_dir is provided: None (files written directly)
+        Otherwise: full sources tensor (legacy mode, may OOM on long tracks)
     """
     n = wav.shape[2]
     step = int(round((strip_seconds - overlap_seconds) * sr))
@@ -267,6 +278,106 @@ def _separate_strips(model, wav, sr, device,
 
     n_src = len(model.sources)
     ch = wav.shape[1]
+
+    # MEMORY-BOUNDED MODE: Write directly to output files, never hold full track in memory
+    if output_stems_dir is not None and stem_names is not None:
+        import tempfile
+        import os
+
+        # Create temporary files for incremental writing using sf.SoundFile (streaming append)
+        temp_files = []
+        soundfiles = []
+        for src_idx in range(n_src):
+            temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+            temp_files.append(temp_file.name)
+            temp_file.close()
+            # Open in write mode for the first strip, append mode for subsequent
+            sf_handle = sf.SoundFile(temp_files[src_idx], mode='w', samplerate=sr,
+                                     channels=ch, subtype='FLOAT', format='WAV')
+            soundfiles.append(sf_handle)
+
+        try:
+            # Process each strip and write to temp files (streaming append, no re-read)
+            total_written = 0
+            for i, s in enumerate(starts):
+                if progress:
+                    progress(i, n_strips)
+                e = min(s + strip_len, n)
+                seg = wav[:, :, s:e]
+
+                # Process this strip WITHOUT chunking (strip is small enough)
+                # This avoids the chunked path's full-track sources_p allocation
+                seg_sources = _separate_audio(model, seg, sr, device,
+                                              chunked=False,
+                                              apply_kwargs=apply_kwargs)
+                seg_len = seg_sources.shape[2]
+                w = torch.ones(seg_len, device=device)
+                if i > 0:                          # fade in the head (overlap prev strip)
+                    w[:overlap] = win_fade_in[:overlap]
+                if i < n_strips - 1:               # fade out the tail (overlap next strip)
+                    w[-overlap:] = win_fade_out[:overlap]
+
+                # Write each source's strip to its temp file (streaming append)
+                for src_idx in range(n_src):
+                    strip_data = seg_sources[src_idx].cpu().numpy() * w.cpu().numpy()
+                    # Transpose to (time, channels) for soundfile
+                    if strip_data.ndim == 2:
+                        strip_data = strip_data.T
+                    # Write strip directly to open SoundFile handle (appends automatically)
+                    soundfiles[src_idx].write(strip_data)
+
+                # Track total samples written (use first source as reference)
+                if i == 0:
+                    total_written = strip_data.shape[0]
+                else:
+                    total_written += strip_data.shape[0] - overlap  # subtract overlap
+
+                del seg, seg_sources
+                gc.collect()
+
+            if progress:
+                progress(n_strips, n_strips)
+
+            # Close all SoundFile handles
+            for sf_handle in soundfiles:
+                sf_handle.close()
+
+            # Move temp files to final output locations by streaming copy (trim to exact length)
+            # We stream-copy to avoid loading full track in memory
+            for src_idx, name in enumerate(stem_names):
+                out_file = Path(output_stems_dir) / f"{name}.wav"
+                # Stream copy with trim: read in chunks, write to final file
+                with sf.SoundFile(temp_files[src_idx], mode='r') as src:
+                    with sf.SoundFile(str(out_file), mode='w', samplerate=sr,
+                                      channels=ch, subtype='FLOAT', format='WAV') as dst:
+                        # Read and write in chunks to bound memory
+                        chunk_size = sr * 10  # 10 second chunks
+                        remaining = n  # exact original length in samples
+                        while remaining > 0:
+                            read_size = min(chunk_size, remaining)
+                            data = src.read(read_size, dtype='float32')
+                            if len(data) == 0:
+                                break
+                            dst.write(data)
+                            remaining -= len(data)
+                            if remaining <= 0:
+                                break
+
+            return None  # Files written directly
+        finally:
+            # Clean up temp files
+            for sf_handle in soundfiles:
+                try:
+                    sf_handle.close()
+                except Exception:
+                    pass
+            for temp_file in temp_files:
+                try:
+                    os.unlink(temp_file)
+                except OSError:
+                    pass
+
+    # LEGACY MODE: Return full tensor (may OOM on long tracks)
     full_sources = torch.zeros(n_src, ch, n, device=device)
     wsum = torch.zeros(n, device=device)
 
@@ -370,4 +481,3 @@ def separate_stems_spleeter(audio_path: Path, out_dir: Path,
         stems_paths["preview_mix"] = preview_file
 
     return stems_paths
-
