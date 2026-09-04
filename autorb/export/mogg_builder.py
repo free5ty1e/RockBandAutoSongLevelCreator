@@ -282,12 +282,16 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
             filter_parts = [
                 "".join(mix_labels)
                 + f"amix=inputs={len(mix_labels)}:duration=longest:normalize=0"
-                  + ",aformat=channel_layouts=stereo[gbus]",
+                  + ",aformat=channel_layouts=stereo,asplit=3[gbus1][gbus2][gbus3]",
             ]
-            backing_src = "[gbus]"
+            backing_src1 = "[gbus1]"
+            backing_src2 = "[gbus2]"
+            backing_src3 = "[gbus3]"
         else:
             filter_parts = []
-            backing_src = "[2:a]"
+            backing_src1 = "[2:a]"
+            backing_src2 = "[2:a]"
+            backing_src3 = "[2:a]"
         filter_parts += [
             # ch0/ch1: full drum kit split stereo. 311 Down's kick/snare
             # (ch0/1) are its LOUDEST channels (~3500 RMS); keeping the first
@@ -301,14 +305,14 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
             # ch4: mono bass.
             "[1:a]aformat=channel_layouts=stereo,pan=mono|c0=0.5*FL+0.5*FR[s4]",
             # ch5-6: stereo guitar/backing bus ('other' + guitar/piano stems).
-            f"{backing_src}aformat=channel_layouts=stereo,pan=mono|c0=FL[s5]",
-            f"{backing_src}aformat=channel_layouts=stereo,pan=mono|c0=FR[s6]",
+            f"{backing_src1}aformat=channel_layouts=stereo,pan=mono|c0=FL[s5]",
+            f"{backing_src2}aformat=channel_layouts=stereo,pan=mono|c0=FR[s6]",
             # ch7-8: stereo vocals.
             "[3:a]aformat=channel_layouts=stereo,pan=mono|c0=FL[s7]",
             "[3:a]aformat=channel_layouts=stereo,pan=mono|c0=FR[s8]",
             # ch9: fake/crowd ambience at low level (near-silent like 311's
             # ch9, which carries ~50 RMS vs ~3500 on its kick channel).
-            f"{backing_src}aformat=channel_layouts=stereo,pan=mono|c0=0.5*FL+0.5*FR,volume=0.1[s9]",
+            f"{backing_src3}aformat=channel_layouts=stereo,pan=mono|c0=0.5*FL+0.5*FR,volume=0.1[s9]",
             "[s0][s1][s2][s3][s4][s5][s6][s7][s8][s9]amerge=inputs=10[aout]",
         ]
         if count_in_ms > 0:

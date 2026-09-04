@@ -430,16 +430,13 @@ def build_clone_hero_song(
     folder = ch_root / sanitize_folder_name(f"{artist} - {title}")
     folder.mkdir(parents=True, exist_ok=True)
 
-    # 1. Stereo mix of the 4 stems -> WAV -> Ogg Vorbis (no count-in silence).
-    #    Re-runs keep an existing mix/ogg (mix is expensive; stems rarely change).
+    # 1. Stereo mix of all available stems -> WAV -> Ogg Vorbis (no count-in silence).
+    #    Always regenerate to pick up any new stems (guitar, piano from 6-stem separators).
     mix_wav = folder / "song.wav"
     song_ogg = folder / "song.ogg"
-    if song_ogg.exists() and song_ogg.stat().st_size > 0:
-        pass  # keep the already-encoded mix
-    else:
-        if not mix_wav.exists():
-            mix_stems(stems_dir, mix_wav)
-        song_ogg = encode_wav_to_ogg(mix_wav, song_ogg)
+    # Always regenerate the mix to ensure dedicated stems (guitar/piano) are included
+    mix_stems(stems_dir, mix_wav)
+    song_ogg = encode_wav_to_ogg(mix_wav, song_ogg)
 
     # 2. Chart: re-generate the MIDI with the count-in disabled so note ticks
     #    are on the exact audio timeline (CH has no Rock Band lead-in), then
