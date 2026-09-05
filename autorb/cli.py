@@ -26,14 +26,20 @@ def _generate_ps4_pkg_id(artist: str, title: str, custom_id: str | None = None) 
 
 
 @click.command()
-@click.argument('audio_file', type=click.Path(exists=True))
-@click.option('--artist', required=True, help='Artist name')
-@click.option('--title', required=True, help='Song title')
-@click.option('--year', type=int, required=True, help='Release year')
-@click.option('--genre', required=True, help='Song genre')
-@click.option('--lyrics', type=click.Path(exists=True), required=True, help='Path to LRC file')
+@click.argument('audio_file', type=click.Path(exists=True), required=False)
+@click.option('--artist', default=None, help='Artist name')
+@click.option('--title', default=None, help='Song title')
+@click.option('--year', type=int, default=None, help='Release year')
+@click.option('--genre', default=None, help='Song genre')
+@click.option('--lyrics', type=click.Path(exists=True), default=None, help='Path to LRC file')
 @click.option('--output-dir', default='./output', type=click.Path(), help='Output directory')
 @click.option('--skip-separation', is_flag=True, help='Skip Demucs separation and use existing stems')
+@click.option('--separator', type=click.Choice(['htdemucs_ft', 'htdemucs', 'htdemucs_6s', 'spleeter:5stems'], case_sensitive=False), default='htdemucs_ft', show_default=True, help='Stem separator model. htdemucs_ft (DEFAULT): full Demucs ensemble, 4 stems (drums/bass/other/vocals), best quality, ~16 min on 8 GB CPU. htdemucs: stock single model, 4 stems, fast (~1 min), lower quality. htdemucs_6s: single model, 6 stems (drums/bass/other/vocals/guitar/piano) — splits guitar out of "other" and adds a piano stem (piano quality reportedly poor; see llm-wiki-kb/piano_keyboard_separation.md). spleeter:5stems: Spleeter model, 5 stems (vocals/piano/drums/bass/other), separate piano stem. Note: only htdemucs_ft supports --ft-shifts/--ft-strip-seconds/--ft-segment/--ft-overlap.')
+@click.option('--use-ft-stems/--no-use-ft-stems', 'use_ft_stems', default=True, help='DEPRECATED: use --separator instead. --no-use-ft-stems forces htdemucs (equivalent to --separator htdemucs). --use-ft-stems forces htdemucs_ft (equivalent to --separator htdemucs_ft, the default). If both --separator and --use-ft-stems are given, --separator takes priority.')
+@click.option('--ft-shifts', type=int, default=1, show_default=True, help='Demucs translation-averaging passes for --use-ft-stems (shifts>1 averages shifted copies for cleaner stems at N x time; verified no bleed/gain improvement vs shifts=1, so 1 is the default)')
+@click.option('--ft-strip-seconds', type=float, default=45.0, show_default=True, help='Strip length (seconds) for --use-ft-stems. Lower = less peak RAM (fallback if 45 s OOMs to 20 s) at the cost of more strip-seams (inaudible with the 10 s crossfade). Tune down on memory-constrained CPUs')
+@click.option('--ft-segment', type=float, default=None, help='Demucs internal segment length (seconds) for --use-ft-stems; None (default) = full-context (highest quality). Small values lower memory further but degrade quality')
+@click.option('--ft-overlap', type=float, default=0.25, show_default=True, help='Demucs STFT overlap ratio for --use-ft-stems (0.25 = default; 0.5 = cleaner transients / slightly more bleed reduction at 2x time and memory).')
 @click.option('--skip-tempo-detection', is_flag=True, help='Skip beat tracking and use cached tempo map')
 @click.option('--skip-vocals', is_flag=True, help='Skip vocal alignment and pitch extraction (uses cached data)')
 @click.option('--skip-mogg', is_flag=True, help='Skip MOGG encoding and reuse the existing .mogg in the output dir (which is expected to already contain the count-in lead-in); the chart is still shifted to match it')
@@ -41,8 +47,28 @@ def _generate_ps4_pkg_id(artist: str, title: str, custom_id: str | None = None) 
 @click.option('--build-pkg', is_flag=True, help='Build PS4 PKG installer from the generated CON')
 @click.option('--build-clone-hero', is_flag=True, help='Also export a Clone Hero-format song folder (song.ini + notes.mid + song.ogg + album.png) under <output-dir>/clone_hero/ for computer-based playtest/preview without a PS4')
 @click.option('--generate-freestyle-vocals', is_flag=True, help='Enable Rock Band 4 freestyle-vocals guide lines (Hard/Expert) by setting HasFreestyleVocals in the PS4 songdta')
+@click.option('--freestyle-drums', is_flag=True, help='Create drum freestyle mode: drum track gets only one placeholder note at the start, allowing free drum play throughout the song')
+@click.option('--package-con-dir', type=click.Path(exists=True, file_okay=False, dir_okay=True), default=None, help='Package all .con files in this directory into a single PS4 PKG installer (batch packaging mode)')
 @click.option('--ps4-pkg-id', type=str, default=None, help='Optional 16-char PS4 Content ID for the PKG (auto-generated from artist+title if omitted)')
-def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, build_clone_hero, generate_freestyle_vocals, ps4_pkg_id):
+def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, separator, use_ft_stems, ft_shifts, ft_strip_seconds, ft_segment, ft_overlap, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, build_clone_hero, generate_freestyle_vocals, freestyle_drums, package_con_dir, ps4_pkg_id):
+    # Batch packaging mode: package all .con files in a directory into a single PS4 PKG
+    if package_con_dir:
+        click.echo(f"Batch packaging mode: packaging all .con files in {package_con_dir}")
+        from autorb.export.con_packer import build_ps4_pkg_from_con_dir
+        pkg_path = build_ps4_pkg_from_con_dir(package_con_dir, ps4_pkg_id)
+        click.echo(f"PS4 PKG installer successfully built: {pkg_path}")
+        return
+
+    # Pipeline mode requires the core inputs
+    missing = [name for name, val in (
+        ("AUDIO_FILE", audio_file), ("--artist", artist), ("--title", title),
+        ("--year", year), ("--genre", genre), ("--lyrics", lyrics),
+    ) if val is None]
+    if missing:
+        click.echo(f"Error: missing required argument(s) for pipeline mode: {', '.join(missing)}", err=True)
+        click.echo("Either supply the audio/metadata arguments, or use --package-con-dir for batch PS4 packaging.", err=True)
+        return
+
     click.echo(f"Starting AutoRB Pipeline for: {artist} - {title}")
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -70,11 +96,49 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             if not path.exists():
                 click.echo(f"Error: missing required stem: {path}", err=True)
                 return
+        # Optional dedicated stems (master-stems workflow, or a previous
+        # --separator htdemucs_6s run): when present they are preferred for
+        # charting — guitar.wav feeds the guitar chart and piano.wav the keys
+        # chart — and are mixed into the MOGG backing channels.
+        for opt_name, opt_desc in (("guitar", "guitar chart"),
+                                   ("piano", "keys chart")):
+            opt_path = stems_dir / f"{opt_name}.wav"
+            if opt_path.exists():
+                stems[opt_name] = opt_path
+                click.echo(f"Optional {opt_name}.wav found: will drive the {opt_desc}.")
         click.echo("All pre-existing stems found successfully.")
     else:
         click.echo("\n[1/5] Separating stems via Demucs...")
         from autorb.audio.stems import separate_stems
-        stems = separate_stems(audio_file, out_path, device=device)
+        model_name = "htdemucs_ft" if use_ft_stems else "htdemucs"
+        quality_note = (" (full ensemble, 45 s strips — cleaner stems, ~30 min)" if use_ft_stems
+                        else " (stock htdemucs — fast, lower quality)")
+        # Resolve model: --separator takes priority; --use-ft-stems is legacy fallback
+        if separator:
+            model_name = separator
+        else:
+            model_name = "htdemucs_ft" if use_ft_stems else "htdemucs"
+
+        quality_notes = {
+            "htdemucs_ft": " (full ensemble, 45 s strips, cleaner stems, ~16 min)",
+            "htdemucs": " (stock, fast, lower quality)",
+            "htdemucs_6s": " (6 stems incl. guitar + piano, single model, faster)",
+            "spleeter:5stems": " (5 stems incl. piano, Spleeter model)",
+        }
+        qnote = quality_notes.get(model_name, f" ({model_name})")
+        click.echo(f"Using stem separator: {model_name}{qnote}")
+
+        if model_name.startswith("spleeter:"):
+            # Spleeter path (separate code from Demucs)
+            from autorb.audio.stems import separate_stems_spleeter
+            stems = separate_stems_spleeter(audio_file, out_path, model_name=model_name)
+        else:
+            # Demucs path (htdemucs, htdemucs_ft, htdemucs_6s)
+            from autorb.audio.stems import separate_stems
+            stems = separate_stems(audio_file, out_path, device=device,
+                                   model_name=model_name, shifts=ft_shifts,
+                                   overlap=ft_overlap,
+                                   strip_seconds=ft_strip_seconds, segment=ft_segment)
 
     click.echo(f"Stems ready: {stems}")
 
@@ -149,6 +213,85 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         click.echo(f"Error during step 4 synchronization: {e}", err=True)
         return
 
+    # Transcribe instruments (guitar, bass, drums) for full-band charts
+    click.echo("\n[4b/5] Transcribing instrument tracks (guitar, bass, drums)...")
+    from autorb.transcribe.instruments import (
+        transcribe_guitar,
+        transcribe_bass,
+        transcribe_drums,
+        transcribe_keys,
+    )
+    from autorb.transcribe.instruments.difficulty import create_all_difficulties
+
+    # tempo.py returns numpy arrays; coerce to plain lists so the transcription
+    # helpers (and the song_end check above) don't hit ambiguous numpy truthiness.
+    beat_times = list(beat_times) if beat_times is not None else []
+    dynamic_bpms = list(dynamic_bpms) if dynamic_bpms is not None else []
+
+    # Song end time for BRE/solo detection. beat_times is a numpy array
+    # (tempo.py returns np.array), so test length, not truthiness.
+    if 'song_length_ms' in locals() and song_length_ms:
+        song_end = song_length_ms / 1000.0
+    elif beat_times is not None and len(beat_times) > 0:
+        song_end = float(beat_times[-1])
+    else:
+        song_end = 300.0
+    
+    # Prefer dedicated stems when available (master stems, or --separator
+    # htdemucs_6s): the guitar chart reads guitar.wav and the keys chart reads
+    # piano.wav; both fall back to the 'other' stem, which with the default
+    # separators contains guitar + keys + everything else.
+    guitar_stem = stems.get("guitar") or stems["other"]
+    keys_stem = stems.get("piano") or stems["other"]
+    if "guitar" in stems:
+        click.echo("  Transcribing guitar (from 'guitar' stem)...")
+    else:
+        click.echo("  Transcribing guitar (from 'other' stem)...")
+    try:
+        guitar_expert = transcribe_guitar(guitar_stem, list(zip(beat_times, dynamic_bpms)), song_end)
+        guitar_charts = create_all_difficulties(guitar_expert, "guitar")
+        click.echo("  Guitar transcription complete.")
+    except Exception as e:
+        click.echo(f"  Warning: guitar transcription failed: {e}", err=True)
+        guitar_charts = None
+    
+    click.echo("  Transcribing bass...")
+    try:
+        bass_expert = transcribe_bass(stems["bass"], list(zip(beat_times, dynamic_bpms)), song_end)
+        bass_charts = create_all_difficulties(bass_expert, "bass")
+        click.echo("  Bass transcription complete.")
+    except Exception as e:
+        click.echo(f"  Warning: bass transcription failed: {e}", err=True)
+        bass_charts = None
+    
+    click.echo("  Transcribing drums...")
+    try:
+        # Use original mixed audio for drum detection (Demucs drum stem fails in quiet intros)
+        drum_expert = transcribe_drums(
+            stems["drums"], 
+            list(zip(beat_times, dynamic_bpms)), 
+            song_end, 
+            other_stem_path=stems.get("other"),
+            mixed_audio_path=Path(audio_file)
+        )
+        drum_charts = create_all_difficulties(drum_expert, "drums")
+        click.echo("  Drum transcription complete.")
+    except Exception as e:
+        click.echo(f"  Warning: drum transcription failed: {e}", err=True)
+        drum_charts = None
+
+    if "piano" in stems:
+        click.echo("  Transcribing keys (from 'piano' stem)...")
+    else:
+        click.echo("  Transcribing keys (from 'other' stem)...")
+    try:
+        keys_expert = transcribe_keys(keys_stem, list(zip(beat_times, dynamic_bpms)), song_end)
+        keys_charts = create_all_difficulties(keys_expert, "keys")
+        click.echo("  Keys transcription complete.")
+    except Exception as e:
+        click.echo(f"  Warning: keys transcription failed: {e}", err=True)
+        keys_charts = None
+
     click.echo("\n[5/5] Building assets and packaging Xbox 360 CON file...")
     from autorb.export.midi_generator import generate_vocal_midi
     from autorb.export.dta_writer import generate_songs_dta
@@ -188,6 +331,11 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             dynamic_bpms=list(dynamic_bpms),
             count_in_ticks=count_in_ticks,
             count_in_ms=count_in_ms,
+            guitar_charts=guitar_charts,
+            bass_charts=bass_charts,
+            drum_charts=drum_charts,
+            keys_charts=keys_charts,
+            freestyle_drums=freestyle_drums,
         )
 
         # 3. Generate songs.dta configuration metadata
@@ -248,6 +396,11 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             dynamic_bpms=list(dynamic_bpms),
             count_in_ticks=0,
             count_in_ms=0,
+            guitar_charts=guitar_charts,
+            bass_charts=bass_charts,
+            drum_charts=drum_charts,
+            keys_charts=keys_charts,
+            freestyle_drums=freestyle_drums,
         )
         from autorb.export.alignment_report import build_lyrics_srt, build_alignment_report
         build_lyrics_srt(synced_output_json, out_path / "lyrics_preview.srt")
@@ -278,6 +431,11 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
                 avg_bpm=avg_bpm,
                 preview_start_ms=50000,
                 album_art=out_path / "album_art_preview.png" if album_art is None else album_art,
+                guitar_charts=guitar_charts,
+                bass_charts=bass_charts,
+                drum_charts=drum_charts,
+                keys_charts=keys_charts,
+                freestyle_drums=freestyle_drums,
             )
             click.echo(f"Clone Hero song exported: {ch_folder}")
             click.echo("Load it in Clone Hero (Songs folder -> Scan Songs) to playtest "

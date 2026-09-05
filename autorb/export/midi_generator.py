@@ -219,15 +219,242 @@ def build_placeholder_track(name: str, pitches: tuple = PLACEHOLDER_DIFFICULTY_P
         events.extend(b"\x80" + bytes([pitch, 0]))
     return build_track(name, bytes(events))
 
+
+def build_instrument_track(
+    charts: dict,  # {difficulty: InstrumentChart}
+    instrument: str,
+    count_in_ticks: int,
+    time_to_tick,
+) -> bytes:
+    """
+    Build a Rock Band instrument track (GUITAR, BASS, DRUMS, KEYS) containing all 4 difficulties.
+    
+    Rock Band (ForgeTool) stores all difficulties in a single track, distinguished by
+    pitch ranges (a packed MIDI where every instrument uses the same scheme):
+    - Expert: base 96
+    - Hard: base 84
+    - Medium: base 72
+    - Easy: base 60
+    Each note's pitch is ``base + lane`` (lane 0-4); the raw 35-59 drum sound pitches and
+    the true key pitches are NOT valid here (they crash ForgeTool's MIDI converter).
+    
+    Args:
+        charts: Dict mapping difficulty -> InstrumentChart
+        instrument: 'guitar', 'bass', 'drums', 'keys'
+        count_in_ticks: Count-in offset
+        time_to_tick: Function to convert seconds to MIDI ticks
+    
+    Returns:
+        MTrk bytes for the instrument track (contains all 4 difficulties)
+    """
+    # If no real chart data, use the simple placeholder that ForgeTool expects
+    if not charts or all(v is None for v in charts.values()):
+        return build_placeholder_track(f"PART {instrument.upper()}", start_tick=count_in_ticks)
+    
+    # Lane base pitches per difficulty (Rock Band / ForgeTool packed-MIDI convention:
+    # Easy 60-64 / Medium 72-76 / Hard 84-88 / Expert 96-100, lane = pitch - base).
+    LANE_BASE = {
+        'expert': 96,
+        'hard': 84,
+        'medium': 72,
+        'easy': 60,
+    }
+
+    # Drum pitches (same across difficulties)
+    DRUM_PITCHES = {
+        'kick': 36,
+        'snare': 38,
+        'hihat': 42,
+        'hihat_open': 46,
+        'ride': 51,
+        'crash': 49,
+        'tom1': 48,
+        'tom2': 45,
+        'tom3': 43,
+    }
+    
+    difficulties = ['expert', 'hard', 'medium', 'easy']
+
+    # Collect all notes from all difficulties with their target pitches
+    all_notes = []  # (tick, pitch, velocity, duration, difficulty)
+
+    for diff in ['expert', 'hard', 'medium', 'easy']:
+        # charts may be keyed by the Difficulty enum (from create_all_difficulties)
+        # or by plain strings; resolve either way.
+        chart = None
+        if charts:
+            for key in (diff, diff.upper(), diff.capitalize()):
+                chart = charts.get(key)
+                if chart is not None:
+                    break
+            if chart is None:
+                from autorb.transcribe.instruments.difficulty import Difficulty
+                chart = charts.get(Difficulty(diff))
+        base = LANE_BASE[diff]
+        
+        if chart is None:
+            # Safety fallback: always use the difficulty-offset base pitch (base + lane 0)
+            # so ForgeTool's AddGem() places the note in the correct difficulty slot.
+            # Raw drum pitches (35-51) fall in ForgeTool's DrumAnimStart..DrumAnimEnd range
+            # and cause AddGem() to return false, leaving gem_tracks[diff] null and crashing
+            # the subsequent .Select(g => g.ToArray()) call with a NullReferenceException.
+            pitch = base + 0  # lane 0 at the correct difficulty base
+            all_notes.append((count_in_ticks, pitch, 100, 120, diff))
+            continue
+        
+        notes = sorted(chart.notes, key=lambda n: n.time)
+        
+        for note in chart.notes:
+            target_start = time_to_tick(note.time) + count_in_ticks
+            # Derive the sustain in ticks from the REAL tempo map (time_to_tick),
+            # NOT a hardcoded 120 BPM. The old `note.length * 480 * 120 / 60`
+            # conversion silently stretched/compressed every sustain for any song
+            # not at exactly 120 BPM (e.g. ~76 BPM made a 2.0s-cap render as
+            # ~3.14s and bled into the next same-lane note).
+            if note.length > 0:
+                end_tick = time_to_tick(note.time + note.length) + count_in_ticks
+                target_end = end_tick
+                duration = end_tick - target_start
+            else:
+                target_end = target_start + 120
+                duration = 120
+            duration = max(48, int(round(duration)))
+
+            # Determine MIDI pitch for this note.
+            # ForgeTool (LibForge) requires difficulty-offset pitches for EVERY
+            # instrument: Easy 60 / Medium 72 / Hard 84 / Expert 96, lane = key - base
+            # (0-4). Raw 35-59 drum sound pitches and true key pitches are NOT accepted
+            # by HandleDrumTrk/HandleGuitarBass (they hit the "Unhandled midi note"
+            # branch, leaving the difficulty gem-track null and crashing GemTracks.Add
+            # with a NullReferenceException). So drums and keys are lane-encoded exactly
+            # like guitar/bass.
+            if instrument in ('drums', 'keys'):
+                lane = note.lane if note.lane is not None else 0
+                if lane < 0 or lane > 4:
+                    lane = 0
+                pitch = base + lane
+            else:
+                # Rock Band 5-button guitar/bass charts have NO "open" notes; an
+                # open-string hit is just a normal strum at its lane. `note.lane`
+                # is -1 for open strings (see `fret_string_to_lane`), so clamp to
+                # the valid 0-4 range — otherwise `base + (-1)` falls outside the
+                # 60-100 difficulty ranges and ForgeTool drops the note.
+                lane = note.lane if note.lane is not None else 0
+                if lane < 0 or lane > 4:
+                    lane = 0
+                pitch = base + lane
+            
+            all_notes.append((target_start, pitch, note.velocity, duration, diff))
+
+    # Defensive passes to guarantee a legal Rock Band instrument track:
+    #   1. Collapse exact (tick, pitch) duplicates (a note charted twice on the
+    #      same lane at the same instant renders as overlapping MIDI gems).
+    #   2. Clamp every note's tail to one tick before the next same-pitch note.
+    #      Source charts cap `length` but `build_instrument_track` floors
+    #      zero-length notes at 120 ticks, which can bleed past a close successor;
+    #      Rock Band forbids overlapping same-lane gems, so we enforce it here.
+    # Tuple layout: (tick, pitch, velocity, duration, difficulty)
+    _seen = {}
+    for _ts, _pitch, _vel, _dur, _diff in all_notes:
+        _k = (_ts, _pitch)
+        if _k not in _seen or _dur > _seen[_k][3]:
+            _seen[_k] = (_ts, _pitch, _vel, _dur, _diff)
+    _by_pitch = {}
+    for _rec in sorted(_seen.values(), key=lambda r: (r[1], r[0])):
+        _ts, _pitch, _vel, _dur, _diff = _rec
+        _prev = _by_pitch.get(_pitch)
+        if _prev is not None:
+            _pts, _pdur = _prev
+            if _ts <= _pts + _pdur:
+                _new = max(1, _ts - _pts - 1)
+                _old = _seen[(_pts, _pitch)]
+                _seen[(_pts, _pitch)] = (_pts, _pitch, _old[2], _new, _old[4])
+        _by_pitch[_pitch] = (_ts, _dur)
+    all_notes = list(_seen.values())
+
+    # Sort all notes by time, then by difficulty order (expert first for same time)
+    diff_order = {'expert': 0, 'hard': 1, 'medium': 2, 'easy': 3}
+    all_notes.sort(key=lambda x: (x[0], diff_order.get(x[4] if len(x) > 4 else 'expert', 0)))
+
+    # Build a flat, time-sorted event list of note-on / note-off pairs. Writing
+    # each note as a back-to-back (on, off) block and advancing last_tick by the
+    # note DURATION (the old approach) displaced any simultaneous chord note to
+    # AFTER the previous note ended, so chords never rendered as chords. Using a
+    # flat list keyed on absolute tick (on before off at the same tick) keeps
+    # simultaneous notes truly simultaneous.
+    flat = []
+    for target_start, pitch, velocity, duration, _ in all_notes:
+        # `duration` already carries its 48-tick floor (set when each note was
+        # built) and any same-pitch clamp from the de-overlap pass above; do NOT
+        # re-floor here, or a clamped tail would be re-inflated past its stop.
+        dur = max(1, int(duration))
+        flat.append((target_start, 0, pitch, velocity))      # note-on
+        flat.append((target_start + dur, 1, pitch, 0))        # note-off
+    flat.sort(key=lambda e: (e[0], e[1]))
+
+    events = bytearray()
+    last_tick = 0
+    for tick, typ, pitch, vel in flat:
+        delta = max(0, tick - last_tick)
+        events.extend(encode_varlen(delta))
+        if typ == 0:
+            events.extend(b"\x90" + bytes([pitch, vel]))
+        else:
+            events.extend(b"\x80" + bytes([pitch, 0]))
+        last_tick = tick
+
+    track_name = f"PART {instrument.upper()}"
+    return build_track(track_name, bytes(events))
+
+
+def build_all_instrument_tracks(
+    guitar_charts: dict = None,
+    bass_charts: dict = None,
+    drum_charts: dict = None,
+    keys_charts: dict = None,
+    freestyle_drums: bool = False,
+    count_in_ticks: int = 0,
+    time_to_tick = None,
+) -> list[bytes]:
+    """
+    Build all 4 instrument tracks (DRUMS, BASS, GUITAR, KEYS), each containing 4 difficulties.
+    
+    Returns list of 4 MTrk bytes: [drums, bass, guitar, keys]
+
+    When ``freestyle_drums`` is True, the drum track is emitted as a single placeholder
+    note (drum freestyle throughout the song) instead of using ``drum_charts``.
+    """
+    if time_to_tick is None:
+        def time_to_tick(sec):
+            return int(sec * 480 * 120 / 60)
+
+    tracks = []
+
+    if freestyle_drums:
+        tracks.append(build_instrument_track({}, 'drums', count_in_ticks, time_to_tick))
+    else:
+        tracks.append(build_instrument_track(drum_charts or {}, 'drums', count_in_ticks, time_to_tick))
+    tracks.append(build_instrument_track(bass_charts or {}, 'bass', count_in_ticks, time_to_tick))
+    tracks.append(build_instrument_track(guitar_charts or {}, 'guitar', count_in_ticks, time_to_tick))
+    tracks.append(build_instrument_track(keys_charts or {}, 'keys', count_in_ticks, time_to_tick))
+
+    return tracks
+
+
 def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id: str,
                         preview_start_ms: int = 50000, song_length_ms: int | None = None,
                         phrase_measures: int = 2, bpm: float = 120.0,
                         beat_times: list | None = None, dynamic_bpms: list | None = None,
-                        count_in_ticks: int = 0, count_in_ms: int = 0) -> Path:
+                        count_in_ticks: int = 0, count_in_ms: int = 0,
+                        guitar_charts: dict = None,  # {diff: InstrumentChart}
+                        bass_charts: dict = None,
+                        drum_charts: dict = None,
+                        keys_charts: dict = None,  # {diff: InstrumentChart}
+                        freestyle_drums: bool = False) -> Path:
     """
     Generates a fully compliant Rock Band PART VOCALS MIDI chart from synchronized JSON data.
-    Includes placeholder PART DRUMS, PART GUITAR, and PART BASS tracks (one note each) so that
-    every instrument advertised in songs.dta has a corresponding chart track.
+    Includes PART DRUMS, PART GUITAR, and PART BASS tracks. If instrument charts are provided,
+    uses full transcriptions with all four difficulties; otherwise uses placeholder tracks.
 
     ``count_in_ticks`` shifts the whole chart so tick 0 is the start of the
     MOGG's count-in silence and the first musical event lands at
@@ -261,7 +488,7 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
         with open(json_path, "r", encoding="utf-8") as f:
             track_data = json.load(f)
 
-    header = b"MThd" + struct.pack(">IHHH", 6, 1, 7, 480)
+    header = b"MThd" + struct.pack(">IHHH", 6, 1, 8, 480)
 
     ticks_per_beat = 480
     beats_per_measure = 4
@@ -472,12 +699,21 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
     )
     t0 = build_track(song_id, tempo_data)
 
-    # Track 1-4: instrument charts
-    t1 = build_placeholder_track("PART DRUMS", start_tick=count_in_ticks)
-    t2 = build_placeholder_track("PART BASS", start_tick=count_in_ticks)
-    t3 = build_placeholder_track("PART GUITAR", start_tick=count_in_ticks)
-    t4 = build_track("PART VOCALS", bytes(vocal_events))
-
+    # Track 1-3: instrument charts (DRUMS, BASS, GUITAR - each with 4 difficulties)
+    # Each track contains all 4 difficulties (Expert/Hard/Medium/Easy) distinguished by pitch range
+    instrument_tracks = build_all_instrument_tracks(
+        drum_charts=drum_charts,
+        bass_charts=bass_charts,
+        guitar_charts=guitar_charts,
+        keys_charts=keys_charts,
+        freestyle_drums=freestyle_drums,
+        count_in_ticks=count_in_ticks,
+        time_to_tick=shifted_time_to_tick,
+    )
+    
+    # Vocal track (single track, not per-difficulty)
+    t_vocals = build_track("PART VOCALS", bytes(vocal_events))
+    
     # Track 5: EVENTS with the required [music_start]/[preview]/[music_end]/[end] markers
     t5 = build_events_track(
         first_note_tick=first_note_tick or count_in_ticks,
@@ -498,15 +734,18 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
         beat_events.extend(b"\x80" + bytes([pitch, 0]))
     t6 = build_track("BEAT", bytes(beat_events))
 
+    all_tracks = [t0, *instrument_tracks, t_vocals, t5, t6]
+    # The MThd track-count must match the number of chunks actually written.
+    # If it is too low, strict parsers (e.g. ForgeTool's MidiCS) read one track
+    # fewer and silently drop the final (BEAT) track, which then crashes PKG
+    # conversion with "Sequence contains no elements" (no BEAT track found).
+    # Compute it from the real track list so it can never drift out of sync.
+    header = b"MThd" + struct.pack(">IHHH", 6, 1, len(all_tracks), 480)
+
     with open(midi_path, "wb") as f:
         f.write(header)
-        f.write(t0)
-        f.write(t1)
-        f.write(t2)
-        f.write(t3)
-        f.write(t4)
-        f.write(t5)
-        f.write(t6)
+        for track_bytes in all_tracks:
+            f.write(track_bytes)
 
     logger.info(f"Generated complete vocal MIDI chart at {midi_path}")
     return midi_path

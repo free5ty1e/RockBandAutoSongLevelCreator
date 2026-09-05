@@ -7,9 +7,9 @@
 
 By leveraging modern AI models for stem separation, pitch detection, and vocal alignment, AutoRB automates the complex manual workflow traditionally required to create custom Rock Band tracks.
 
-NOTE: The v0.0.91 alpha release is a **vocal-only MVP** — it produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart (see [Known Limitations](#-known-limitations)). Instrument charts and the remaining roadmap items are still under active development - there are a lot of features missing but the concept is now demonstrated and definitely sound.
+NOTE: The v0.0.92 alpha release now produces real (non-placeholder) **instrument charts** (guitar, bass, drums, keys) via the `autorb/transcribe/instruments` package **in addition to** the pitch-corrected solo-vocals + lyrics chart (see [Known Limitations](#-known-limitations)). The instrument charts are freshly generated and still benefit from playtest refinement, but the end-to-end concept — vocals *and* instruments — is now demonstrated.
 
-Quick demo video of an MP3 + LRC file conversion to Rock Band CON + PS4 PKG on Rock Band 4 Deluxe PS4 converted with the v0.0.91 alpha release
+Quick demo video of an MP3 + LRC file conversion to Rock Band CON + PS4 PKG on Rock Band 4 Deluxe PS4 converted with the v0.0.92 alpha release
 https://youtu.be/lcFGsQfb9tg
 
 ---
@@ -26,7 +26,7 @@ https://youtu.be/lcFGsQfb9tg
   * **Audio-true syllable timing & no doubled lyrics:** syllable starts/ends come from WhisperX character alignments when available (vowel-weighted proportion only as fallback), so syllable-internal notes follow the sung rhythm. Words with more pitch segments than syllables are never split into an empty-lyric note (Rock Band re-renders the previous lyric on empty text — the old "crack crack" doubling); they're split at vowel boundaries instead ("eighty" → "ei"/"ghty"). WhisperX word duplications (and melisma splits like "I'm-I'm") are deduplicated so one sung word is never charted twice.
   * **Audio-derived note ends:** LRC/WhisperX ends are not trusted (they're only suggestions and over/under-shoot the real sustain). Each note's end is set to the **last voiced/RMS-energetic frame of its own region** (`_audio_word_end`) and clipped to the **next note's charted start**, so every `note_on` lands exactly on its true sung onset, consecutive notes never overlap, and sustains follow the audio — no more progressive drift, no chopped ("forgottennnn") or over-held ("bored", "mirror", "floor") final syllables.
   * **Phrase-gap & late-word re-anchors (v0.0.87):** a word WhisperX glued onto the *previous* phrase's tail moves to its own phrase's true attack only when the **next word starts ≥ 1.0s away AND the `[start+0.20, +0.80]` window is vocally silent** (no voiced frame, no RMS above the floor — the 0.20s grace skips the previous word's own voiced tail) — "And" 20.94→23.80, "'Cause" 32.72→35.11. A word WhisperX pushed *late* re-anchors to the **earliest voiced-validated onset** in `(prev_end, start]` (bounded by a 2.0s window; the onset is kept only if a confident voiced frame follows within 0.15s, rejecting instrument-bleed attacks — "out" 143.6→142.15), or to a **settled pitch boundary** when the singer changed pitch and held the new note (`_last_pitch_unit_boundary`: a frame whose pitch is ≥ 3.5 semitones from the median of the stable pitch it settles into ~0.25s later, skipping in-progress descents and vibrato; it then prefers a real onset within ±0.15s when guarded by the neighbouring words) — "be"/"alone" split at the 63.37 drop. Word **ends** are now **voiced-primary** (break on voiced gaps > 0.20s; RMS only as fallback; the attack-to-voicing lead-in no longer false-triggers a break), so "it" no longer holds 1.8s past its sung tail and "listen"/"road"/"out" sustains clip to the true tail. Ends are re-ingested **between** the gap and late passes (a moved word's neighbour must see its corrected end or it re-snags the moved word).
-* **Automatic Transcription:** Converts pitch and transient audio into quantized 5-lane instrument tracks (`PART GUITAR`, `PART BASS`, `PART DRUMS`) using Spotify's **Basic-Pitch** and signal processing.
+* **Automatic Instrument Transcription:** Converts pitch and transient audio into quantized 5-lane instrument tracks (`PART GUITAR`, `PART BASS`, `PART DRUMS`, `PART KEYS`) via the `autorb/transcribe/instruments` package — Basic-Pitch pitch + librosa onsets for the fretted parts, the **ADTOF Frame-RNN neural drum transcriber** (5 classes: kick/snare/toms/hi-hat/cymbals) for drums, and progressive per-difficulty reduction (Expert/Hard/Medium/Easy) following the RBN/C3 authoring rules. Drums are transcribed from the drums stem (falling back to the mixed audio only when Demucs has left the stem's intro digitally silent); cymbal hits are re-split into ride (Blue) vs crash (Green) and toms into tom1/2/3 by spectral centroid, and all hits are grid-quantized to the 1/8 beat. Strummed guitar chords are reconstructed from the audio's chroma (the `other` stem's chordal strums get a perfect-fifth power-chord tone added so rhythm parts read as chords, not single notes). Keys reuses the guitar transcription (the guitar+keys stems are inseparable in Demucs).
 * **Robust Vocal Pitch:** The sung pitch per word is chosen from the most reliable source. **librosa pyin is primary** — a word is trusted only when its (next-word-clipped) window has ≥ 2 confident voiced frames whose rounded mode agrees with the median (rejecting harmonics/bleed split readings while keeping real vibrato/slides), its note segments don't span more than 6 semitones (a real slide never jumps that far inside one syllable), and its first note sits within 7 semitones of the outlier-rejected **robust melodic contour** (so a single harmonic misread — e.g. "road"=72, the 3rd harmonic of A3 — can't stay charted or warp the contour). Words without a trusted pyin reading fall back to a **Basic-Pitch note octave-snapped to the melodic contour** interpolated through the trusted words, and then to the contour itself — so octave-flipped or contaminated BP notes become sane, in-key pitches. Measured on "Open Road Song": consecutive jumps ≥ 4 semitones **61 → 28/283**, range **50..83 → 50..78** (and the remaining wild first-phrase/ending jumps ≥ 5 st further cut **18 → 10** in v0.0.83), **0/284 notes off the A-major scale**, and repeated phrases sing the same notes while genuine melody dips (the low "As") are preserved.
 * **Automatic Difficulty Ratings:** Computes per-instrument Rock Band difficulty (`rank`) values from chart note density (per-instrument level bands 1-6, `band` = hardest charted instrument) instead of a hardcoded value that rendered every song as "1 of 6".
 * **Stock-like Measure-Level Tempo Map:** The MIDI tempo track carries a sparse, smooth `set_tempo` map (one event per measure, tempo = that bar's mean beat interval, ~90-100 events for a 3-minute song) instead of a dense jittery per-beat map. A 1-event-per-beat map (with its ~±3 BPM per-beat oscillation) makes the game drift progressively late — the symptom we measured against the working references (stock 311 - Down DLC: 69 smooth events; Smells Like Nirvana custom: 86) — so every note tick is now derived from the *inverse* of the tempo map the file carries, keeping chart and map self-consistent (no drift by construction).
@@ -40,10 +40,9 @@ https://youtu.be/lcFGsQfb9tg
 
 ## ⚠️ Known Limitations
 
-The v0.0.76 release is a **vocal-only MVP** — the pipeline produces a fully playable, pitch-corrected **solo-vocals + lyrics** chart. Be aware of what is and isn't supported yet:
+The v0.0.92 alpha release generates real instrument charts (guitar, bass, drums, keys) alongside the pitch-corrected solo-vocals + lyrics chart, but it is still an **alpha** with many features missing and the generated charts not yet playtest-validated. Be aware of what is and isn't supported yet:
 
-- **Solo vocals only.** There are no real guitar, bass, or drum charts. `PART GUITAR` / `PART BASS` / `PART DRUMS` are *placeholder tracks* (one note per difficulty) so the game loads cleanly and ForgeTool's CON→PKG conversion doesn't crash — they are **not** playable instrument charts.
-- **Instrument transcription is not functional yet.** `Basic-Pitch` is used only for vocal pitch; automatic transcription into real 5-lane instrument tracks is still on the roadmap.
+- **Instrument charts are freshly generated, not yet playtest-validated.** `PART GUITAR` / `PART BASS` / `PART DRUMS` / `PART KEYS` are now produced by the `autorb/transcribe/instruments` package (Basic-Pitch + librosa, the **ADTOF neural drum transcriber**, 5-lane mapping, progressive RBN/C3 difficulty reduction) instead of single-note placeholders, so they are real, loadable instrument charts that no longer crash ForgeTool's CON→PKG conversion. They **have not yet been playtested against the actual audio** — note accuracy, HOPO/chord decisions, and drum-lane assignment may need tuning, and the guitar + keys stems are inseparable in Demucs (keys reuses the guitar transcription). Since v0.1.6 the drums are transcribed by the ADTOF neural model from the drums stem (the mixed audio is only used when the stem's intro is digitally silent), so intros chart as the real hi-hats/snares instead of guitar/bass lows. The bass chart starts at the true first bass note (~12 s into "Open Road Song") because the bass genuinely doesn't play in the intro — the earlier attempt to supplement it from the `other` stem was reverted after playtest (it charted guitar chords as bass). The bass stem is now energy-gated (v0.1.8: bass-band 40–250 Hz RMS vs the track's active level + a density pass for lone bleed spikes) so stem-separation bleed no longer produces phantom bass before the real first note (on "Open Road Song" the bass does not play until measure 17, ~23 s).
 - **Per-word sync has outliers.** Word starts and ends are now driven by the vocal-stem audio (onset attacks + voiced/RMS tails), correcting the LRC's global offset and WhisperX's lateness, but individual words can still be slightly early or late where the onset/voicing signal is ambiguous, and lyrics must come from a good `.lrc` file — words missing from the LRC don't get charted (detecting & filling those is on the roadmap).- **Vocal phrases are wrong.** Phrase boundaries currently fall back to fixed 2-bar measure windows on the beat grid, not the song's real phrasing — so the in-game phrase regions and vocal scoring feel all wrong. Each timestamped line in the `.lrc` file marks the **start of one vocal phrase** and should be the source of truth (falling back to the 2-bar windows only when the `.lrc` is missing or doesn't make phrasing obvious). This is the highest-priority roadmap item (see [Next Steps](#-next-steps--roadmap)).
 - **PS4 song-list preview audio is silent** on Rock Band 4 Deluxe, even though all preview metadata (`songdta_ps4`, `rbmid_ps4`, MOGG seek table) and the 10-channel audio layout (mirroring stock "311 - Down") are verified correct. This is suspected to be game-side (RB4DX caching/behavior) rather than file-side.
 - **Freestyle Vocals guide lines do not render on PS4** yet, despite `HasFreestyleVocals=1` being written to the PKG. Both gates the RB4 manual documents are satisfied, so the failure is likely RB4DX-side (how it commits/reads the flag).
@@ -52,7 +51,7 @@ The v0.0.76 release is a **vocal-only MVP** — the pipeline produces a fully pl
 
 ## 🗺️ Next Steps / Roadmap
 
-Beyond the vocal-only MVP, the roadmap (see `ROADMAP.md`) includes:
+Beyond the current alpha (vocals plus freshly-generated instrument charts), the roadmap (see `ROADMAP.md`) includes:
 
 - **LRC-line phrase source of truth** — each `.lrc` line timestamp defines the **start of one vocal phrase** (currently phrase boundaries fall back to fixed 2-bar measure windows, which makes scoring feel wrong; the 2-bar fallback remains for when the `.lrc` is missing or doesn't make phrasing obvious). **Highest priority.**
 - **Lyric/audio sync improvements** — tighten the remaining early/late per-word outliers so lyrics land exactly on the sung audio.
@@ -285,6 +284,41 @@ So from `temp/` with the clone at `temp/RockBandAutoSongLevelCreator/`, it just 
 
 Your outputs will be generated in `/full/path/to/output/` (the `.con` file + `album_art_preview.png`) and `/full/path/to/output/pkg/` (the PS4 `.pkg` file).
 
+#### Batch packaging: many CONs → one PS4 PKG
+
+If you want a single PS4 PKG installer that contains **multiple songs**, run the pipeline as many times as you like (each run drops a `.con` into the same `--output-dir`), then run **one** command that gathers every `.con` in a folder and repackages them into a single multi-song PKG — no audio/lyrics inputs needed for that final step:
+
+```bash
+# 1) Generate the first song's CON (+ Clone Hero folder + freestyle vocals)
+python -m autorb.cli \
+  input/eve6-openRoadSong.mp3 \
+  --lyrics input/eve6-openRoadSong.lrc \
+  --output-dir ./output \
+  --artist "Eve 6" \
+  --title "Open Road Song" \
+  --year 1998 \
+  --genre "Alternative" \
+  --generate-freestyle-vocals \
+  --build-clone-hero \
+&& python -m autorb.cli \
+  input/barenakedLadies-brianWilson.mp3 \
+  --lyrics input/barenakedLadies-brianWilson.lrc \
+  --output-dir ./output \
+  --artist "Barenaked Ladies" \
+  --title "Brian Wilson" \
+  --year 1992 \
+  --genre "Alternative" \
+  --generate-freestyle-vocals \
+  --build-clone-hero \
+&& python -m autorb.cli \
+  --package-con-dir ./output \
+  --ps4-pkg-id CPRIMEAUTORBDEV1
+```
+
+`--package-con-dir` switches the CLI into **batch packaging mode**: it parses every `.con` in the given directory, merges their `songs.dta` metadata into one shared file, rebuilds them into a single multi-song STFS CON, and hands that to ForgeTool to produce `./output/pkg/UP8802-CUSA02084_00-CPRIMEAUTORBDEV1.pkg`. Because it is a standalone repackaging step, `--package-con-dir` requires **none** of the pipeline inputs (`AUDIO_FILE`, `--artist`, `--lyrics`, …) — only the folder of `.con` files and an optional `--ps4-pkg-id`. The same 16-char ID rule applies (uppercase A–Z / 0–9, padded/truncated to 16); if omitted it is derived from the first `.con`'s song ID.
+
+> Note: `--package-con-dir` ignores any `song_pack.con` it previously produced in that folder, so re-running it is safe.
+
 ---
 
 ## 🚀 Quick Start & Usage
@@ -325,12 +359,23 @@ python3 -m autorb.cli \
 | `-g, --genre` | String | Genre string (Default: `"Rock"`). |
 | `-o, --output-dir` | Path | Destination folder for the compiled CON file (Default: `./output`). |
 | `--album-art` | Path | Optional. Custom album art image (PNG/JPG) for the CON's `_keep.png_xbox` texture. Defaults to a generated "Chris Prime Custom" cover (stacked CHRIS/PRIME text with an orange "BOT" badge in the top-right and a "CP" monogram in the top-left: a thick orange C forming the outer circle with a white P inscribed inside). The art's font is bundled with the package, so it renders legibly on any OS (no system font paths required). |
-| `--skip-separation` | Flag | Skip AI stem separation; requires `drums.wav`, `bass.wav`, `vocals.wav`, `other.wav` in `[output-dir]/stems`. |
+| `--skip-separation` | Flag | Skip AI stem separation; requires `drums.wav`, `bass.wav`, `vocals.wav`, `other.wav` in `[output-dir]/stems`. Optional `guitar.wav` / `piano.wav` are picked up when present and drive the guitar / keys charts directly (master-stems workflow). Nothing is ever cleared in this mode. |
+| `--separator` | Choice | Stem separation model (default: `htdemucs_ft`). Options: `htdemucs_ft` — **DEFAULT**, full Demucs `BagOfModels` ensemble, 4 stems (drums/bass/other/vocals), best quality, ~16 min on 8 GB CPU; `htdemucs` — stock single model, 4 stems, fast (~1 min), lower quality; `htdemucs_6s` — single Demucs model, **6 stems** (drums/bass/other/vocals/**guitar**/piano); with it, `guitar.wav` drives the guitar chart and `piano.wav` the keys chart (both also mixed into in-game backing audio); piano stem quality is reportedly poor. `spleeter:5stems` — Spleeter TensorFlow model, 5 stems incl. piano (**⚠️ spleeter must never be pip-installed into this venv — dependency conflict; isolated venv only**). Every new separation run first clears stale `*.wav` from `[output-dir]/stems`, so switching separators never mixes stems between runs. `--use-ft-stems`/`--no-use-ft-stems` are deprecated aliases (on/off for `htdemucs_ft`/`htdemucs`; `--separator` takes priority if both given). Quality comparison (60 s Eve6 clip): `htdemucs_ft` bass↔other NCC 0.034 vs `htdemucs` 0.046; rhythm-guitar separation in `other` ~2× cleaner; vocals clearer; ~16 min vs ~1 min on 8 GB CPU. The `--ft-*` knobs (`--ft-shifts`, `--ft-strip-seconds`, `--ft-segment`, `--ft-overlap`) only apply to `htdemucs_ft` and `htdemucs_6s`. See `llm-wiki-kb/piano_keyboard_separation.md` for the full separator comparison. |
+| `--ft-shifts` | Integer | Demucs translation-averaging passes for `--use-ft-stems` (default `1`). `shifts>1` averages shifted copies for marginally cleaner stems at N× time; measured on the 60 s clip that `shifts=2` gives **no** bleed/gain improvement over `shifts=1` (bass↔other 0.034 vs 0.034; drums↔other 0.084 vs 0.086), so `1` is the default (2× slower for nothing). Only applies with `htdemucs_ft` or `htdemucs_6s`. |
+| `--ft-strip-seconds` | Float | Strip length (seconds) for `htdemucs_ft` (default `45`). Lower = less peak RAM (auto-falls back to 20 s strips if 45 s OOMs) at the cost of more inaudible strip-seams (10 s crossfade). Tune down only on memory-constrained CPUs. Only applies with `htdemucs_ft`. |
+| `--ft-segment` | Float | Demucs internal segment length (seconds) for `htdemucs_ft` (default `None` = full-song context, highest quality). Small values (e.g. 10 s, 20 s) lower memory further but may degrade quality and slightly reduce drums↔other spectral bleed. Only applies with `htdemucs_ft`. |
+| `--ft-overlap` | Float | Demucs STFT overlap ratio for `htdemucs_ft`/`htdemucs_6s` (default `0.25`). Higher values (e.g. `0.5`) give cleaner transients / slightly better bleed reduction at ~2× time and memory cost. Only applies with `htdemucs_ft` or `htdemucs_6s`. |
+| `--ft-shifts` | Integer | Demucs translation-averaging passes for `--use-ft-stems` (default `1`). `shifts>1` averages shifted copies for marginally cleaner stems at N× time; measured on the 60 s clip that `shifts=2` gives **no** bleed/gain improvement over `shifts=1` (bass↔other 0.034 vs 0.034; drums↔other 0.084 vs 0.086), so `1` is the default (2× slower for nothing). Only applies with `--use-ft-stems`. |
+| `--ft-strip-seconds` | Float | Strip length (seconds) for `--use-ft-stems` (default `45`). Lower = less peak RAM (auto-falls back to 20 s strips if 45 s OOMs) at the cost of more inaudible strip-seams (10 s crossfade). Tune down only on memory-constrained CPUs. Only applies with `--use-ft-stems`. |
+| `--ft-segment` | Float | Demucs internal segment length (seconds) for `--use-ft-stems` (default `None` = full-song context, highest quality). Small values (e.g. 10 s, 20 s) lower memory further but may degrade quality and slightly reduce drums↔other spectral bleed. Only applies with `--use-ft-stems`. |
+| `--ft-overlap` | Float | Demucs STFT overlap ratio for `--use-ft-stems` (default `0.25`). Higher values (e.g. `0.5`) give cleaner transients / slightly better bleed reduction at ~2× time and memory cost. Only applies with `--use-ft-stems`. |
 | `--skip-tempo-detection` | Flag | Skip beat tracking; loads `tempo_map.json` from the output directory. |
 | `--skip-vocals` | Flag | Skip WhisperX alignment and basic-pitch; loads `vocals_cache.json`. |
 | `--skip-mogg` | Flag | Skip MOGG encoding; reuses the existing `.mogg` file (which is expected to already contain the count-in lead-in). The chart is still shifted past the count-in to match the reused audio. |
 | `--generate-freestyle-vocals` | Flag | Enable Rock Band 4 **Freestyle Vocals** guide lines (Hard/Expert): writes `(freestyle_vocals 1)` into `songs.dta`, which the vendored (patched) ForgeTool carries into the PS4 `songdta_ps4` `HasFreestyleVocals` flag so the game advertises and draws the diatonic guide lanes. Off by default. Requires `--build-pkg` to take effect on PS4 (the flag lives in the PKG's songdta; the Xbox 360 CON's `songs.dta` is untouched by the game's freestyle check). |
 | `--build-clone-hero` | Flag | Also export a **Clone Hero**-format song folder (`<output-dir>/clone_hero/<Artist> - <Title>/` with `song.ini` + `notes.chart` *and* `notes.mid` + `song.ogg` + `album.png`) for computer-based playtest — load the folder into Clone Hero (Settings → Open Default Songs Folder → Scan Songs) to review the vocal/lyric chart synced to audio without a PS4. The chart is count-in free so sync judgments transfer directly to the Rock Band chart. |
+| `--freestyle-drums` | Flag | Create drum freestyle mode: drum track gets only one placeholder note at the start, allowing free drum play throughout the song (the drum track is unmuted for freestyle play). |
+| `--package-con-dir` | Path | Batch packaging mode: package all `.con` files in this directory into a single PS4 PKG installer (multi-song pack). Does not require audio file or lyrics — skips the pipeline and goes straight to PS4 PKG creation. |
 | `--ps4-pkg-id` | String | Optional. 16-character PS4 Content ID for the PKG (format: `UP8802-CUSA02084_00-XXXXXXXXXXXXXXXX`). Auto-generated from artist + title (lowercase alphanumeric, padded/truncated to 16 chars) if omitted. Use to ensure unique PKG IDs per song and avoid overwriting previously installed customs on PS4. |
 
 ---
@@ -361,6 +406,34 @@ python3 -m autorb.cli input/eve6-openRoadSong.mp3 \
 
 The song folder lands in `./output/clone_hero/Eve 6 - Open Road Song/` (`song.ini` + `notes.chart` + `notes.mid` + `song.ogg` + `album.png`). In Clone Hero: *Settings → General → Open Default Songs Folder*, copy the folder in, then *Settings → General → Scan Songs*. If it still doesn't appear, check the `badsongs.txt` file Clone Hero generates (it names the exact file it couldn't load) — after adding songs you must always press **Scan Songs** for changes to take effect. The `notes.chart` tempo markers are written as **integer plain-BPM** (drift-compensated) because Clone Hero's reader — a fork of Moonscraper's `ChartReader` — parses the `B` field with `uint.TryParse` and silently drops any fractional value, which would leave the chart with no tempo map and the song invisible. Full procedure in `llm-wiki-kb/local_preview_and_testing.md`.
 
+#### Headless capture (devcontainer): load a song and screenshot a specific instrument at a specific time
+
+The devcontainer ships a fully headless Clone Hero instance (Clone Hero running under **box64** on arm64, with **Xvfb** + a null-sink **PulseAudio** and an ALSA-seq shim so RtMidi can't crash Unity). This lets you render any AutoRB-exported song and grab a screenshot of the note highway for a chosen instrument, difficulty, and point in the song — no GPU, no display, no manual clicking. It is installed automatically when the devcontainer is built (`tools/setup_clone_hero_headless.sh` is run from the Dockerfile and `post-install.sh`).
+
+Use the documented wrapper `tools/ch_capture.sh`:
+
+```bash
+# See the guitar chart at 1:15 on Expert:
+tools/ch_capture.sh \
+  --song "$PWD/output/clone_hero/Eve 6 - Open Road Song" \
+  --instrument guitar --difficulty expert --at 75 \
+  --out /tmp/guitar75.png
+
+# Confirm the drums chart actually loaded (capture early):
+tools/ch_capture.sh \
+  --song "$PWD/output/clone_hero/Eve 6 - Open Road Song" \
+  --instrument drums --difficulty expert --at 20 \
+  --out /tmp/drums20.png
+```
+
+Arguments: `--song` (absolute path to the song folder, required), `--instrument` (`guitar`/`bass`/`drums`/`vocals`/`keys`, default `guitar`), `--difficulty` (`expert`/`hard`/`medium`/`easy`, default `expert`), `--at` (seconds into the song to capture, default 30), `--out` (PNG path, default `/tmp/ch_capture.png`). Clone Hero needs ~15 s to boot under box64, so `--at` values smaller than that are clamped up to the boot grace period. Behind the scenes it calls `tools/clone_hero_headless.sh`, which boots Xvfb + PulseAudio, launches Clone Hero straight into gameplay on the requested `-p <Instrument>,<Difficulty>`, waits, and captures one frame with `ffmpeg` x11grab.
+
+Notes and gotchas:
+- **Use an absolute `--song` path.** Under box64, Clone Hero resolves relative paths from its own binary directory and fails.
+- **Keys will not appear** — Clone Hero has no playable keyboard instrument; only guitar, bass, drums, and vocals are visible. The `PART KEYS` track is still written for Rock Band / the MIDI.
+- To set up the harness outside the devcontainer (or after a manual rebuild), run `bash tools/setup_clone_hero_headless.sh` (it is idempotent: it skips anything already installed, and verifies the Clone Hero download against a pinned sha256).
+- For automated pass/fail (does the export load at all? did it render a non-blank frame? was it rejected via `badsongs.txt`?), use the load gate: `python -m autorb.testing.ch_runner --help` (the `run_load_gate()` function in `autorb/testing/ch_runner.py`). Mark related tests `@pytest.mark.devcontainer` — they are excluded from the default CI run because GitHub Actions has no X11/audio stack.
+
 ## Using Original Master Stems (For Bands/Artists)
 
 If you have access to the original studio multitracks (stems) for a song, you can skip the AI audio separation step to achieve perfect, artifact-free audio in-game.
@@ -370,8 +443,11 @@ If you have access to the original studio multitracks (stems) for a song, you ca
    - `drums.wav`
    - `bass.wav`
    - `vocals.wav`
-   - `other.wav` (Guitars, synths, backing tracks, etc.)
-3. Run the CLI tool with the `--skip-separation` flag:
+   - `other.wav` (Synths, backing tracks, anything not drums/bass/vocals)
+3. **Optionally** add dedicated stems for better charts and in-game audio:
+   - `guitar.wav` — when present, drives the **guitar chart** directly (instead of being re-detected from `other.wav`) and is mixed into the in-game backing audio
+   - `piano.wav` / keys stem — when present, drives the **keys chart**
+4. Run the CLI tool with the `--skip-separation` flag:
 
 ```bash
 python3 -m autorb.cli \
@@ -420,6 +496,15 @@ audio_file: (Required) Path to the input audio file.
 --output-dir: The directory to save all output files (default: ./output).
 
 --skip-separation: Skips the AI stem separation. Requires drums.wav, bass.wav, vocals.wav, and other.wav in the [output-dir]/stems folder.
+
+--separator: **DEFAULT: htdemucs_ft.** Stem separation model. Options:
+  - htdemucs_ft (default): Full Demucs ensemble, 4 stems (drums/bass/other/vocals), best quality. ~16 min on 8 GB CPU.
+  - htdemucs: Stock single model, 4 stems, fast (~1 min), lower quality.
+  - htdemucs_6s: Single model, 6 stems (adds guitar + piano). Splits guitar out of "other".
+  - spleeter:5stems: TensorFlow Spleeter, 5 stems (adds separate piano).
+Use --no-use-ft-stems (deprecated) as a shortcut for --separator htdemucs.
+
+--ft-shifts / --ft-strip-seconds / --ft-segment / --ft-overlap: Tunables for htdemucs_ft and htdemucs_6s. --ft-shifts (default 1; shifts=2 gives no bleed improvement). --ft-strip-seconds (default 45; lower = less RAM). --ft-segment (default None = full context, best quality). --ft-overlap (default 0.25; 0.5 = cleaner transients at 2x time/RAM). Improves stem cleanliness but does NOT reduce the guitar bridge's ~23 re-strum attacks (the re-articulation is in the audio, not the bleed — see Known Limitations).
 
 --skip-tempo-detection: Skips librosa beat tracking and loads tempo_map.json from the output directory.
 
@@ -473,13 +558,13 @@ This repository uses GitHub Actions (`.github/workflows/ci-cd.yml`) to:
 
 ```bash
 # Trigger a build release (the tag PREFIX must match the version in autorb/version.py,
-# pyproject.toml, and CHANGELOG.md — currently 0.0.91; a free-form SUFFIX is allowed,
-# e.g. v0.0.91test02, for test releases of the same version — the suffix is baked into
+# pyproject.toml, and CHANGELOG.md — currently 0.0.92; a free-form SUFFIX is allowed,
+# e.g. v0.0.92test02, for test releases of the same version — the suffix is baked into
 # the wheel/sdist filenames as a PEP 440 local version so test releases never collide
 # with the final one)
-git tag v0.0.91
-git tag v0.0.91test02   # optional: a test release without bumping the version
-git push origin v0.0.91
+git tag v0.0.92
+git tag v0.0.92test02   # optional: a test release without bumping the version
+git push origin v0.0.92
 ```
 
 ---

@@ -1,6 +1,6 @@
 # Clone Hero Devcontainer Closed-Loop Playtesting
 
-**Status:** Plan (research complete — implementation pending feasibility spike)
+**Status:** Phase 0 COMPLETE — headless CH running, songs load, audio plays, lyrics render and advance. Phase 1 (loadability gate) ready to codify.
 **Targets:** `.devcontainer/` (Dockerfile + post-install.sh), new `autorb/testing/` package, ROADMAP
 **Owner:** AutoRB agent loop (no user involvement after initial install)
 
@@ -43,7 +43,7 @@ CH parses `notes.chart`/`notes.mid` + `song.ogg` from one folder, builds its own
   - `-p / --player <instrument>,<difficulty>` → add bot players (Guitar/Bass/Rhythm/GuitarCoop/6-Fret/Keys/Drums/ProDrums; **no Vocals tag exists** — irrelevant, playback doesn't require a player; a single bot on the placeholder Guitar track is a safe default so the highway renders).
   - `-i` instrument names, `-v` versus, `--profile <name>`.
   - This removes the need for xdotool menu navigation entirely for the core loop.
-- **Audio:** CH uses FMOD; on Linux it wants ALSA. A headless container has no sound card — we give it **PulseAudio with a null sink** (`module-null-sink`), which FMOD opens as a real device whose clock advances in real time. Open question for the spike: whether FMOD falls back gracefully if no device is present (it may) — the null sink is the safe path.
+- **Audio:** CH uses **BASS** (`Bass: 2.4.18.0 BassFx: 2.4.12.6 BassMix: 2.4.12.0`); on Linux it wants ALSA. A headless container has no sound card — we give it **PulseAudio with a null sink** (`module-null-sink`), which BASS opens as a real device whose clock advances in real time. Open question for the spike: whether BASS falls back gracefully if no device is present (it may) — the null sink is the safe path.
 
 ## 5. Installation & persistence
 
@@ -79,7 +79,38 @@ export PULSE_SERVER=unix:/tmp/pulse/native PULSE_SINK=ch_sink
 
 Launch: `/opt/clonehero/clonehero --song "<song folder>" -p Guitar,Expert`
 
-**Spike acceptance:** process stays alive > 60 s, `xdotool search --name "Clone Hero"` (or `xwininfo -root -tree`) shows a window, an ffmpeg `x11grab` frame shows the song highway (not a black screen), and FMOD logged no fatal audio error. Unity games sometimes hard-require Vulkan — the env above provides both paths; the spike resolves which one CH takes on llvmpipe/lavapipe.
+**Spike acceptance:** process stays alive > 60 s, `xdotool search --name "Clone Hero"` (or `xwininfo -root -tree`) shows a window, an ffmpeg `x11grab` frame shows the song highway (not a black screen), and BASS logged no fatal audio error. Unity games sometimes hard-require Vulkan — the env above provides both paths; the spike resolves which one CH takes on llvmpipe/lavapipe.
+
+## 6b. Actual Findings (August 2026 — Phase 0 Complete)
+
+**Environment**: Debian 13 (trixie) arm64, devcontainer `mcr.microsoft.com/devcontainers/python:3.11`, user `vscode`, sudo passwordless.
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| **CH binary** | ✅ Working | v1.1.0.6142-final x86_64 standalone, extracted to `/opt/clonehero` |
+| **Architecture** | ✅ Box64 | Built v0.4.5 from source (`/usr/local/bin/box64`, libs at `/usr/lib/box64-x86_64-linux-gnu/`) |
+| **Multiarch libs** | ✅ Installed | `libasound2t64:amd64 libasound2-plugins:amd64 libgl1-mesa-dri:amd64 mesa-vulkan-drivers:amd64 libgcc-s1:amd64 libstdc++6:amd64 libgtk-3-0t64:amd64` |
+| **Graphics** | ✅ llvmpipe | `LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe`, `-force-glcore` (OpenGL 4.5 Core Profile, Mesa 25.0.7) |
+| **Audio** | ✅ PulseAudio null sink | `XDG_RUNTIME_DIR=/tmp/ch_pulse`, `PULSE_SERVER=unix:/tmp/ch_pulse/pulse/native`, `ch_sink` active, audio verified recording |
+| **MIDI/ALSA seq** | ✅ Shimmed | `/dev/snd/seq` blocked by device cgroup → `BOX64_LD_PRELOAD=/opt/clonehero/alsa_seq_shim.so` (52 symbols, x86_64) |
+| **CH settings** | ✅ Configured | `~/.clonehero/settings.ini` `[directories] path0 = /workspaces/RockBandAutoSongLevelCreator/output_fresh/clone_hero` |
+| **Song loading** | ✅ Via `--song` | **Must use absolute path**; relative path fails with NRE. `--song "/full/path/to/song"` works. |
+| **Gameplay** | ✅ Verified | Process alive > 120s, lyrics render (OCR: "hit eighty on the open road", "'Cause it's so perfect..."), lyrics **advance** over time, audio flows (RMS 0.029, peak 0.13 from 12s recording) |
+| **Bot player** | ✅ Working | `-p Guitar,Expert` spawns bot; placeholder Guitar track with 4 notes works |
+
+**Key blockers resolved:**
+1. **`/dev/snd/seq` EPERM** → Box64 ALSA-seq shim (51+ symbols), preloaded via `BOX64_LD_PRELOAD` (not `LD_PRELOAD`).
+2. **Graphics segfault** → `-force-glcore` forces OpenGL 4.5 core on llvmpipe.
+3. **`--song` relative path NRE** → Use absolute path; CH resolves relative paths from its working dir (`/opt/clonehero` under box64), not the shell CWD.
+4. **Empty song library** → Set `[directories] path0` in `~/.clonehero/settings.ini` to the parent of song folders.
+5. **"Failed to find SongScan game object"** → Benign warning; startup scan disabled but `--song` absolute path bypasses it.
+
+**Artifacts produced in `/tmp/opencode/`:**
+- `alsa_seq_shim.c` — versioned shim source (52 intercepted `snd_seq_*` symbols, rebuilt from spec)
+- `ch_verify/` — frames + OCR text + audio recording proving end-to-end sync
+- `shimtest/seq_probe` — validates `snd_seq_open` returns 0 + valid handle
+
+**Next step:** Phase 1 — codify into `tools/setup_clone_hero_headless.sh` + `tools/clone_hero_headless.sh`, wire into `.devcontainer/Dockerfile` + `post-install.sh`.
 
 ## 7. The audit loop (phased implementation)
 
@@ -121,7 +152,7 @@ Outlier words from `ch_sync_report.json` drive the existing sync roadmap items; 
 ## 9. Risks & mitigations
 
 - **R1 — Unity won't render headless on software GL/Vulkan.** Most likely failure point. Mitigations: try both `LIBGL_ALWAYS_SOFTWARE=1` and lavapipe (`VK_ICD_FILENAMES=lvp`); try `GDK_BACKEND=x11`; try `WINEDLLOVERRIDES`? (no — native build). If all fail: **YARG** (fully open-source CH-format player) as the renderer/parser under test, documented as not-quite-CH. This is why Phase 0 gates everything.
-- **R2 — FMOD refuses no-device audio → song won't start or clock misbehaves.** Mitigation: PulseAudio null sink (`module-null-sink`) as the primary plan; also test plain `--song` with no players to confirm playback doesn't require input focus.
+- **R2 — BASS refuses no-device audio → song won't start or clock misbehaves.** Mitigation: PulseAudio null sink (`module-null-sink`) as the primary plan; also test plain `--song` with no players to confirm playback doesn't require input focus.
 - **R3 — Capture audio/clock drift.** Mitigation: Phase 3 step 1 (cross-correlate capture audio to `song.ogg`) makes frame↔song-time exact regardless of capture drift.
 - **R4 — OCR brittleness.** Lyrics are rendered large and high-contrast; restrict to the lyric-bar crop, use template-matching against our own rendered text as a secondary signal. Outliers annotated as PNGs for eyeballing.
 - **R5 — Image bloat.** +~1.5 GB image. Mitigation: it's devcontainer-only (not the wheel, not CI), version-pinned, and gives the loop a capability nothing else can.

@@ -39,6 +39,76 @@ CHARTER_NAME = "AutoRB"
 #: The four .chart difficulty sections, in ascending difficulty order.
 CHART_DIFFICULTIES = ("Easy", "Medium", "Hard", "Expert")
 
+#: Clone Hero's `.mid` drums use **difficulty-offset pitches** (Easy 60 / Medium 72
+#: / Hard 84 / Expert 96 + lane 0-4), the same packed scheme AutoRB writes for the
+#: CON `.mid`. The CON's `PART DRUMS` already carries **distinct per-difficulty**
+#: notes at those bases (Easy 60-64, Medium 72-76, Hard 84-88, Expert 96-100), so the
+#: remap must preserve that — each hit stays in its own difficulty, NOT copied to all.
+CH_DRUM_MID_BASES = {"Easy": 60, "Medium": 72, "Hard": 84, "Expert": 96}
+_CH_DRUM_BASES = tuple(CH_DRUM_MID_BASES.values())
+
+
+def _rb_drum_pitch_to_ch_lane(midi_note: int) -> int:
+    """Recover the 0-4 drum lane from a difficulty-offset pitch (Easy 60 / Medium 72
+    / Hard 84 / Expert 96 + lane). 0=kick, 1=red, 2=yellow(hat), 3=blue(tom),
+    4=green(cymbal)."""
+    m = int(round(midi_note))
+    for base in _CH_DRUM_BASES:
+        if base <= m < base + 5:
+            return m - base
+    return 0
+
+
+def _rb_drum_pitch_base(midi_note: int) -> int:
+    """Return the difficulty base (60/72/84/96) a drum pitch falls into, else Expert."""
+    m = int(round(midi_note))
+    for base in _CH_DRUM_BASES:
+        if base <= m < base + 5:
+            return base
+    return 96
+
+
+def remap_drums_for_clone_hero(midi_path: Path) -> None:
+    """Normalize ``PART DRUMS`` in a Clone Hero ``notes.mid`` so each hit keeps its
+    own difficulty.
+
+    AutoRB's CON `PART DRUMS` is packed with difficulty-offset pitches (Easy 60 …
+    Expert 96 + lane 0-4) and **already encodes the four reduced difficulties as
+    separate notes at separate bases**. Rock Band / Clone Hero do NOT support
+    fully-authored double bass, and lower difficulties must be genuinely simpler
+    (see `llm-wiki-kb/difficulty_charting.md` §2), so we must NOT copy every hit
+    into all four difficulties (that made Medium/Easy identical to Expert in a
+    Clone Hero playtest). Each note is re-emitted at its own base+lane only.
+    Guitar/bass/keys/vocals tracks are left untouched.
+    """
+    mf = mido.MidiFile(str(midi_path))
+    for i, tr in enumerate(mf.tracks):
+        if tr.name != "PART DRUMS":
+            continue
+        new_abs: list = []
+        for tick, msg in _iter_abs(tr):
+            if msg.type == "note_on" and msg.velocity > 0:
+                lane = _rb_drum_pitch_to_ch_lane(msg.note)
+                base = _rb_drum_pitch_base(msg.note)
+                new_abs.append((tick, msg.copy(note=base + lane)))
+            elif msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
+                lane = _rb_drum_pitch_to_ch_lane(msg.note)
+                base = _rb_drum_pitch_base(msg.note)
+                new_abs.append((tick, msg.copy(note=base + lane)))
+            else:
+                new_abs.append((tick, msg))
+        # note_on before note_off at the same tick; preserve absolute ordering.
+        new_abs.sort(key=lambda e: (e[0], 0 if e[1].type == "note_on" else 1))
+        out = mido.MidiTrack()
+        out.name = "PART DRUMS"
+        last = 0
+        for tick, msg in new_abs:
+            out.append(msg.copy(time=tick - last))
+            last = tick
+        mf.tracks[i] = out
+        break
+    mf.save(str(midi_path))
+
 
 def midi_to_chart_file(
     midi_path: Path,
@@ -136,13 +206,42 @@ def midi_to_chart_file(
                 events.append((end, 2, "phrase_end"))
             for tick, lyric in sorted(lyrics.items()):
                 events.append((tick, 1, f"lyric {lyric}"))
-        elif name in ("PART GUITAR", "PART BASS", "PART DRUMS"):
+        elif name in ("PART GUITAR", "PART BASS", "PART DRUMS", "PART KEYS"):
             inst = name.replace("PART ", "")
-            chart_inst = {"DRUMS": "Drums", "GUITAR": "Guitar", "BASS": "Bass"}[inst]
+            chart_inst = {"DRUMS": "Drums", "GUITAR": "Guitar", "BASS": "Bass", "KEYS": "Keys"}[inst]
             notes = _extract_notes(tr, exclude=set())
-            instruments[chart_inst] = [
-                (tick, pitch % 12, sustain) for tick, pitch, sustain in notes
-            ]
+            # Build per-difficulty note lists. Guitar/Bass pack each difficulty at a
+            # distinct pitch base (Expert 60 / Hard 72 / Medium 84 / Easy 96), so we
+            # recover the difficulty from the pitch and express it as a 0-4 lane.
+            per_diff: dict[str, list] = {d: [] for d in CHART_DIFFICULTIES}
+            if inst in ("GUITAR", "BASS"):
+                bases = {"Easy": 60, "Medium": 72, "Hard": 84, "Expert": 96}
+                for tick, pitch, sustain in notes:
+                    diff = next((d for d in bases if bases[d] <= pitch < bases[d] + 5), None)
+                    if diff is not None:
+                        per_diff[diff].append((tick, pitch - bases[diff], sustain))
+            else:
+                # Drums are already in Clone Hero's difficulty-offset form after
+                # remap_drums_for_clone_hero (Easy 60 / Medium 72 / Hard 84 / Expert
+                # 96 + lane 0-4), so split by those bases and emit lane = pitch - base.
+                # Drums are percussive hits, so the .chart sustain is forced to 0 (a
+                # non-zero sustain implies a CH roll the transcription never intended).
+                # Keys are lane-encoded (base + lane) like guitar and are ignored by
+                # CH (no keyboard part), so they are copied through harmlessly.
+                if inst == "DRUMS":
+                    drum_bases = {"Easy": 60, "Medium": 72, "Hard": 84, "Expert": 96}
+                    for tick, pitch, sustain in notes:
+                        diff = next(
+                            (d for d in drum_bases if drum_bases[d] <= pitch < drum_bases[d] + 5),
+                            None,
+                        )
+                        if diff is not None:
+                            per_diff[diff].append((tick, pitch - drum_bases[diff], 0))
+                else:
+                    for tick, pitch, sustain in notes:
+                        for d in CHART_DIFFICULTIES:
+                            per_diff[d].append((tick, pitch, sustain))
+            instruments[chart_inst] = per_diff
 
     events.sort(key=lambda e: (e[0], e[1]))
 
@@ -184,12 +283,12 @@ def midi_to_chart_file(
             lines.append(f"  {tick} = N {pitch} {sustain}")
         lines.append("}")
 
-    for inst in ("Guitar", "Bass", "Drums"):
+    for inst in ("Guitar", "Bass", "Drums", "Keys"):
         for diff in CHART_DIFFICULTIES:
             lines.append("")
             lines.append(f"[{diff}{inst}]")
             lines.append("{")
-            for tick, lane, sustain in sorted(instruments.get(inst, [])):
+            for tick, lane, sustain in sorted(instruments.get(inst, {}).get(diff, [])):
                 lines.append(f"  {tick} = N {lane} {sustain}")
             lines.append("}")
 
@@ -313,6 +412,11 @@ def build_clone_hero_song(
     avg_bpm: float = 120.0,
     preview_start_ms: int = 50000,
     album_art: Path | None = None,
+    guitar_charts: dict = None,
+    bass_charts: dict = None,
+    drum_charts: dict = None,
+    keys_charts: dict = None,
+    freestyle_drums: bool = False,
 ) -> Path:
     """Export a Clone Hero song folder under ``<output_dir>/clone_hero/``.
 
@@ -352,7 +456,16 @@ def build_clone_hero_song(
         count_in_ticks=0,
         count_in_ms=0,
         preview_start_ms=preview_start_ms,
+        guitar_charts=guitar_charts,
+        bass_charts=bass_charts,
+        drum_charts=drum_charts,
+        keys_charts=keys_charts,
+        freestyle_drums=freestyle_drums,
     )
+    # Clone Hero reads the .mid and expects drums in its OWN difficulty-offset
+    # format (Easy 60 / Medium 72 / Hard 84 / Expert 96 + lane 0-4), not Rock
+    # Band's fixed 35-59 notes. Rewrite PART DRUMS so the .mid loads drums.
+    remap_drums_for_clone_hero(folder / "notes.mid")
     midi_to_chart_file(
         folder / "notes.mid",
         folder / "notes.chart",
