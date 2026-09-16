@@ -110,6 +110,10 @@ def transcribe_drums(
     # pedal). Author only what a single foot can play.
     expert_notes = reduce_double_bass(expert_notes, min_gap=0.11)
 
+    # 7c. Limit simultaneous non-kick hits to 2 (two hands).
+    # A drummer can only hit two drums/cymbals at once (plus kick with foot).
+    expert_notes = limit_simultaneous_drums(expert_notes, max_simultaneous=2)
+
     # 8. Build Expert chart.
     # For metadata, approximate element counts from lanes.
     n_kick = sum(1 for n in expert_notes if n.lane == 0)
@@ -578,6 +582,79 @@ def reduce_double_bass(notes: list, min_gap: float = 0.11) -> list:
             last_kick_t = n.time
         out.append(n)
     return out
+
+
+def _drum_difficulty_pitch_to_lane(difficulty_pitch: int) -> int:
+    """
+    Extract the drum lane (0-4) from a difficulty-offset pitch.
+
+    Rock Band drum pitches: Easy 60-64, Medium 72-76, Hard 84-88, Expert 96-100
+    lane = pitch % 12 (or more precisely, pitch - base where base is 60/72/84/96)
+    """
+    # Find which difficulty base this pitch belongs to
+    for base in (60, 72, 84, 96):
+        if base <= difficulty_pitch < base + 5:
+            return difficulty_pitch - base
+    # Fallback: assume Expert base
+    return difficulty_pitch - 96
+
+
+def limit_simultaneous_drums(notes: list, max_simultaneous: int = 2) -> list:
+    """
+    Limit simultaneous non-kick drum hits to `max_simultaneous` (default 2).
+
+    A human drummer has two hands — can only strike two drums/cymbals at once
+    (plus the kick pedal with a foot). This function processes notes grouped by
+    quantized time and, when more than `max_simultaneous` non-kick hits land
+    on the same time slot, keeps only the `max_simultaneous` most important
+    ones (prioritizing: snare > hi-hat > cymbals > toms).
+
+    Args:
+        notes: List of ChartNote objects
+        max_simultaneous: Maximum non-kick hits allowed at the same time (default 2)
+
+    Returns:
+        Filtered list of ChartNote objects
+    """
+    from collections import defaultdict
+
+    # Group notes by quantized time (rounded to 1ms to handle floating-point)
+    by_time = defaultdict(list)
+    for n in notes:
+        time_key = round(n.time, 3)
+        by_time[time_key].append(n)
+
+    # Priority order for non-kick drums (higher = more important to keep)
+    # snare (1) > hi-hat (2) > cymbals (4) > toms (3)
+    # Note: lanes are 0=kick, 1=snare, 2=hi-hat, 3=tom, 4=cymbal
+    lane_priority = {1: 4, 2: 3, 4: 2, 3: 1}  # lane -> priority
+
+    filtered = []
+    for time_key, time_notes in by_time.items():
+        # Separate kick from non-kick using difficulty_pitch
+        kick_notes = []
+        other_notes = []
+        for n in time_notes:
+            lane = _drum_difficulty_pitch_to_lane(n.difficulty_pitch)
+            if lane == 0:
+                kick_notes.append(n)
+            else:
+                other_notes.append(n)
+
+        # Keep all kick notes (foot is independent)
+        filtered.extend(kick_notes)
+
+        # If we have more non-kick hits than allowed, keep highest priority
+        if len(other_notes) > max_simultaneous:
+            other_notes.sort(key=lambda n: lane_priority.get(_drum_difficulty_pitch_to_lane(n.difficulty_pitch), 0), reverse=True)
+            kept = other_notes[:max_simultaneous]
+            filtered.extend(kept)
+        else:
+            filtered.extend(other_notes)
+
+    # Sort by time then lane
+    filtered.sort(key=lambda n: (n.time, _drum_difficulty_pitch_to_lane(n.difficulty_pitch)))
+    return filtered
 
 
 def generate_all_difficulties(expert_chart: InstrumentChart) -> dict:
