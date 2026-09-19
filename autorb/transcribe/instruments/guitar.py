@@ -38,30 +38,59 @@ _BP_CACHE = {}
 
 # Chord grouping window (seconds): Basic Pitch reports the onsets of the tones
 # of one strum within a few tens of ms of each other — group them into one chord.
-# Narrower window (30ms) to separate rapid double/triple strums that are
-# distinct strums, not chord tones. 60ms was merging rapid strums into chords.
-CHORD_WINDOW = 0.030
+# Narrower window (20ms) to separate rapid strums that are distinct, not chord tones.
+# 30ms was still merging some fast 8th-note strums at high tempo.
+CHORD_WINDOW = 0.020
 
 # Grid resolution the Expert chart is quantized to (divisions per beat).
 # 4 = 1/16 note: fine enough for eighth/sixteenth strum runs.
 SNAP_DIVISIONS = 4
 
-# Basic Pitch confidence thresholds. Defaults (0.5 / 0.3) silently drop quiet
-# guitar notes; lowering recovers missing strums but may add harmonic bleed on
-# the shared "other" stem. For a dedicated *guitar* stem (htdemucs_6s or master
-# stems), 0.40/0.30 recovers the rapid 8th-note rhythm-guitar parts the user
-# hears but Basic Pitch was silently dropping (verified on the Open Road Song
-# 198 s guitar stem: strum coverage rose from ~56% to ~78% with the lower
-# thresholds while note-level precision stayed comparable). For the shared
-# "other" stem (keys bleed risk), the higher 0.45/0.35 is still used via the
-# fallback when no dedicated guitar stem exists.
-ONSET_THRESHOLD = 0.40  # was 0.45; 0.40 recovers quiet off-beat 8th strums
-FRAME_THRESHOLD = 0.30  # was 0.35; tighter frame gate keeps harmonic bleed low
+# Basic Pitch confidence thresholds. For a dedicated *guitar* stem (htdemucs_6s or master
+# stems), lower thresholds recover rapid 8th-note rhythm-guitar parts that were
+# silently dropped. For the shared "other" stem (keys bleed risk), higher thresholds
+# are used via the fallback when no dedicated guitar stem exists.
+ONSET_THRESHOLD = 0.35  # was 0.40; lower to catch quiet off-beat 8th strums
+FRAME_THRESHOLD = 0.25  # was 0.30; tighter frame gate keeps harmonic bleed low
 
 # Deduplication tolerance for (time, lane) - notes within this many seconds
 # are considered duplicates. Guitar chords can have slight timing variations
 # between strings due to pick attack physics.
-DEDUP_TIME_TOL = 0.015  # 15ms
+DEDUP_TIME_TOL = 0.010  # 10ms
+
+#: Minimum gap between two DISTINCT strums in the audio strum backbone (s).
+#: The backbone is derived from librosa onset detection, de-duplicated at this
+#: gap. Below this, re-attacks of one chord are treated as one strum.
+MIN_STRUM_GAP = 0.06
+#: Onset-strength delta for the strum backbone (calibrated on Open Road Song:
+#: 0.08 yields ~698 strums, matching the human-audible count; see
+#: tools/guitar_tab_alignment/audio_ground_truth.py).
+STRUM_BACKBONE_DELTA = 0.08
+#: Hop for the strum backbone onset envelope.
+_STRUM_HOP = 256
+
+
+def _strum_backbone(y: np.ndarray, sr: int) -> np.ndarray:
+    """Detect the array of distinct strum onset times in the guitar stem.
+
+    Drives guitar strum timing. This is independent of Basic Pitch's note
+    onsets (which over-detect by splitting chord tones into separate onsets)
+    and reliably matches the human-audible strum rhythm (~698 strums on Open
+    Road Song vs Basic Pitch's ~1814 onsets and a 695-900 strum chart).
+    """
+    import librosa
+    oenv = librosa.onset.onset_strength(y=y, sr=sr, hop_length=_STRUM_HOP)
+    times = librosa.times_like(oenv, sr=sr, hop_length=_STRUM_HOP)
+    onsets = librosa.onset.onset_detect(
+        onset_envelope=oenv, sr=sr, hop_length=_STRUM_HOP,
+        delta=STRUM_BACKBONE_DELTA, backtrack=True,
+    )
+    all_att = sorted(float(t) for t in times[onsets])
+    kept = []
+    for t in all_att:
+        if not kept or t - kept[-1] >= MIN_STRUM_GAP:
+            kept.append(t)
+    return np.array(kept)
 
 
 def _basic_pitch_notes(stem_path: Path):
@@ -81,6 +110,286 @@ def _basic_pitch_notes(stem_path: Path):
 
 def _hz(midi_pitch: float) -> float:
     return 440.0 * (2.0 ** ((midi_pitch - 69) / 12.0))
+
+
+#: Low-band (root-fundamental) window for per-strum chord-root detection.
+#: Power-chord roots live at 82-220 Hz (E2..A3); distorted chords confuse
+#: chroma, so the root is read from the low-band spectral peak with a
+#: median filter over the strum neighborhood (see _strum_chord_roots).
+_ROOT_FMIN = 80.0
+_ROOT_FMAX = 230.0
+
+
+def _strum_chord_roots(y: np.ndarray, sr: int, strum_times: np.ndarray,
+                       n_fft: int = 8192) -> np.ndarray:
+    """Per-strum chord-root MIDI pitch, median-filtered for stability.
+
+    For each strum, window the first ~300 ms (attack + early ring), FFT with
+    zero-padding, and take the strongest peak in the root band
+    (``_ROOT_FMIN``..``_ROOT_FMAX``). A single window is still jittery on
+    distorted power chords (adjacent-bin competition), so the raw sequence is
+    median-filtered over a 5-strum window: a real chord change persists across
+    several strums, while single-window outliers do not.
+
+    Returns an array of MIDI pitches (float), same length as ``strum_times``.
+    """
+    roots = np.zeros(len(strum_times), dtype=float)
+    win = int(0.30 * sr)
+    freqs = np.fft.rfftfreq(n_fft, 1 / sr)
+    band = (freqs >= _ROOT_FMIN) & (freqs <= _ROOT_FMAX)
+    for i, t in enumerate(strum_times):
+        i0 = int(t * sr)
+        seg = y[i0:i0 + win]
+        if len(seg) < 1024:
+            roots[i] = 0.0
+            continue
+        spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg)), n=n_fft))
+        if not spec[band].any():
+            roots[i] = 0.0
+            continue
+        f_peak = float(freqs[band][np.argmax(spec[band])])
+        roots[i] = 69.0 + 12.0 * np.log2(f_peak / 440.0)
+    # Median filter over 5 strums (odd window; chord changes persist, jitter
+    # does not). Zero (undetectable) entries do not participate.
+    from scipy.signal import medfilt
+    from collections import Counter as _Counter
+    out = roots.copy()
+    if len(roots) >= 5:
+        # Replace zeros with the nearest nonzero so the filter isn't dragged
+        # to 0 by undetectable strums.
+        nz = roots[roots > 0]
+        fill = float(np.median(nz)) if len(nz) else 0.0
+        filled = np.where(roots > 0, roots, fill)
+        # MODE over a sliding 5-strum window (rounded to semitones): two nearby
+        # FFT peaks trading dominance across windows (bin competition on
+        # distorted chords) produces an alternating 113/129 Hz pattern that a
+        # MEDIAN preserves (the alternation is symmetric) but the MODE
+        # correctly resolves to the level that dominates the chord run.
+        rounded = np.round(filled)
+        for i in range(len(rounded)):
+            lo = max(0, i - 2)
+            hi = min(len(rounded), i + 3)
+            win = rounded[lo:hi]
+            out[i] = float(_Counter(win.tolist()).most_common(1)[0][0])
+    return out
+
+
+def _grid_phase(strum_times: np.ndarray, tempo_map: list,
+                divisions: int = 2) -> float:
+    """Estimate the grid phase (in beats) that best aligns the strums.
+
+    The drum-derived tempo map's beat phase does not necessarily match the
+    guitar's strum placement (the guitar may enter offbeat); snapping strums
+    onto the raw grid then produces systematically misplaced gems ("phantom
+    strums"). This finds the phase offset (in fractions of one grid step)
+    minimizing the strums' mean distance to the grid.
+
+    Returns the phase in BEATS (add to strum positions before snapping).
+    """
+    if len(strum_times) < 4 or not tempo_map:
+        return 0.0
+    beats = np.array([float(t) for t, _ in tempo_map])
+    step = 1.0 / divisions
+    best_phase, best_err = 0.0, np.inf
+    # Scan at 32nd-note resolution within one grid step (the guitar's
+    # downbeat placement can be anywhere within the step; a coarse scan
+    # quantizes the phase to the scan grid and leaves residual error).
+    for k in range(divisions * 8):  # 32nd-resolution phase scan
+        ph = k * step / 8.0
+        err = 0.0
+        for t in strum_times:
+            bi = int(np.searchsorted(beats, t)) - 1
+            bi = max(0, min(bi, len(beats) - 2))
+            b0, b1 = beats[bi], beats[bi + 1]
+            pos = bi + (t - b0) / (b1 - b0) + ph
+            r = (pos * divisions) % 1.0
+            err += min(r / divisions, (1 - r) / divisions)
+        err /= len(strum_times)
+        if err < best_err:
+            best_err, best_phase = err, ph
+    return best_phase
+
+
+def _snap_to_grid_phased(t: float, tempo_map: list, divisions: int,
+                         phase_beats: float) -> float:
+    """Snap ``t`` onto the ``divisions``-per-beat grid with a phase offset.
+
+    Works before the first beat too: grid positions <= 0 extrapolate from
+    the first beat interval, so intro strums that precede beat 0 snap to the
+    grid point they are actually nearest (the old version pushed everything
+    forward into the grid and collapsed pre-beat strums).
+    """
+    if not tempo_map:
+        return t
+    beats = np.array([float(t2) for t2, _ in tempo_map])
+    bi = int(np.searchsorted(beats, t)) - 1
+    bi = max(0, min(bi, len(beats) - 2))
+    b0, b1 = beats[bi], beats[bi + 1]
+    pos = bi + (t - b0) / (b1 - b0) + phase_beats
+    step = 1.0 / divisions
+    snapped_pos = round(pos / step) * step
+    # back-convert grid position to seconds (extrapolate before beat 0)
+    i = int(np.floor(snapped_pos))
+    frac = snapped_pos - i
+    if i < 0:
+        # extrapolate backwards using the first beat interval
+        b0, b1 = beats[0], beats[1]
+        return b0 + frac * (b1 - b0) + i * (b1 - b0)
+    i = min(i, len(beats) - 2)
+    b0, b1 = beats[i], beats[i + 1]
+    return b0 + frac * (b1 - b0)
+
+
+def _transcribe_guitar_rhythm(
+    stem_path: Path,
+    tempo_map: list,
+    song_end: float,
+    sr: int = 44100,
+) -> InstrumentChart:
+    """Rhythm-guitar Expert chart driven by the audio strum backbone.
+
+    Design (validated against the Open Road Song tab — palm-muted power chords
+    on straight 8ths; and the user's ear: the intro is a regular, repeating
+    strum cell):
+
+    1. **Strums from the audio** (``_strum_backbone``): one charted attack per
+       audible strum. No Basic-Pitch onset is trusted for timing (it splits
+       chord tones into spurious onsets).
+    2. **Grid-aligned with local phase** (``_grid_phase``): every strum snaps
+       onto the 1/8 tempo grid at the phase the guitar actually plays, so the
+       charted rhythm is a clean 8th-note pulse like the tab.
+    3. **Lane from the chord root** (``_strum_chord_roots``): each strum's
+       low-band root maps to a fret position; lane rises/falls with pitch, so
+       chord changes (A5->B5) move the chart up/down like the tab.
+    4. **Power chords**: root lane + fifth lane (2-note chord), matching the
+       tab's 5th shapes. Sustain runs until the next strum (capped at 2 s).
+    """
+    import librosa as _lr
+    from .difficulty import ChartNote, _snap
+
+    y, _ = _lr.load(stem_path, sr=sr, mono=True)
+    strums = _strum_backbone(y, sr)
+    strums = np.array([s for s in strums if 0 <= s <= song_end])
+    if len(strums) == 0:
+        return InstrumentChart(
+            notes=[], tempo_map=tempo_map,
+            metadata={"instrument": "guitar", "num_onsets": 0},
+        )
+
+    # 2. grid phase + snap
+    phase = _grid_phase(strums, tempo_map, divisions=2)
+    snapped = [_snap_to_grid_phased(float(s), tempo_map, 2, phase)
+               for s in strums]
+    # de-duplicate strums that snapped onto the same grid slot: keep the
+    # earliest raw strum per slot (two chord-tone onsets inside one strum
+    # sometimes survive the 60 ms backbone dedup; the chart must have ONE
+    # gem per grid slot). Threshold = 60% of one eighth note at the local
+    # tempo (snapped slots are exactly an eighth apart when distinct).
+    _eighth = 60.0 / (float(np.median([b for _, b in tempo_map])) or 120.0) / 2.0 \
+        if tempo_map else 0.25
+    dedup = []
+    for s in snapped:
+        if not dedup or s - dedup[-1] >= 0.6 * _eighth:
+            dedup.append(s)
+    snapped = dedup
+    strums = np.array(snapped)
+
+    # 3. chord roots per strum (median-filtered)
+    roots = _strum_chord_roots(y, sr, strums)
+
+    # Map roots to lanes MONOTONICALLY in pitch. The old
+    # pitch_to_fret_string->fret_string_to_lane chain maps via fret%5, which is
+    # cyclic (midi 43->lane 2, 45->open(-1), 47->lane 1, 50->lane 4, 52->lane
+    # 1) — a rising chord root can move the lane DOWN, which reads as "the
+    # chart doesn't follow the pitch". A rhythm chart needs the gem to track
+    # the root's pitch movement (user requirement; also how official charts
+    # feel).
+    #
+    # Rank-based mapping: rock rhythm parts use a SMALL set of chord roots
+    # (e.g. A/B/D/E). Clustering roots into distinct levels (1-semitone
+    # tolerance) and spreading the levels evenly across lanes 0-4 makes every
+    # root change visible as a lane change, while preserving order (a higher
+    # root always maps to a higher-or-equal lane, never lower).
+    _valid_roots = np.array([r for r in roots if r > 0])
+    if len(_valid_roots) == 0:
+        return InstrumentChart(
+            notes=[], tempo_map=tempo_map,
+            metadata={"instrument": "guitar", "num_onsets": 0},
+        )
+    # Cluster distinct root levels (1-semitone bins over the observed range).
+    _lvl = np.sort(_valid_roots)
+    _levels = []
+    for r in _lvl:
+        if not _levels or r - _levels[-1] > 1.0:
+            _levels.append(float(r))
+    # Cap at 5 levels (5 lanes); if more, merge by k-means-free even binning.
+    if len(_levels) > 5:
+        # keep the 5 most-population-dense levels? Simpler: evenly spaced
+        # quantiles of the observed roots.
+        _levels = [float(v) for v in np.quantile(_valid_roots, [0.1, 0.3, 0.5, 0.7, 0.9])]
+        _levels = sorted(set(_levels))
+    _levels = np.array(_levels)
+
+    def _root_to_lane(root_midi: float) -> int:
+        """Monotonic rank map: root level index spread over lanes 0-4."""
+        # nearest level
+        li = int(np.argmin(np.abs(_levels - root_midi)))
+        frac = li / max(len(_levels) - 1, 1)
+        return int(np.clip(round(frac * 4.0), 0, 4))
+
+    expert_notes = []
+    for s, root in zip(strums, roots):
+        if root <= 0:
+            continue
+        lane = _root_to_lane(root)
+        # power chord: root lane + the fifth above (clamped to the highway)
+        lane5 = min(4, lane + 2)
+        if lane5 == lane:
+            lanes = [lane]
+        else:
+            lanes = sorted([lane, lane5])
+        expert_notes.append({
+            "time": float(s), "lanes": lanes, "root": float(root),
+        })
+
+    # 4. build ChartNotes: sustain to next strum (cap 2 s), power chords as
+    # 2-lane chords with is_chord linkage.
+    notes = []
+    for k, rec in enumerate(expert_notes):
+        t = rec["time"]
+        lanes = rec["lanes"]
+        nxt = expert_notes[k + 1]["time"] if k + 1 < len(expert_notes) else song_end
+        length = float(np.clip(nxt - t - 0.02, 0.08, 2.0))
+        chord = len(lanes) > 1
+        members = []
+        for lane in lanes:
+            n = ChartNote(
+                time=t, lane=lane, length=length,
+                is_open=False, is_hopo=False, velocity=100,
+                difficulty_pitch=60 + lane,
+            )
+            n.is_chord = chord
+            members.append(n)
+            notes.append(n)
+        if chord:
+            members[0].chord_notes = list(members)
+    notes.sort(key=lambda n: (n.time, n.lane))
+
+    solos = _detect_solo_sections(notes, tempo_map)
+    bre = _detect_bre_section(notes, song_end)
+    return InstrumentChart(
+        notes=notes,
+        tempo_map=tempo_map,
+        solo_sections=solos,
+        bre_section=bre,
+        overdrive_phrases=[],
+        metadata={
+            "instrument": "guitar",
+            "num_onsets": len(notes),
+            "grid_phase_beats": float(phase),
+            "algorithm": "strum_backbone_rhythm",
+        },
+    )
 
 
 def _transcribe_fretted(
@@ -193,6 +502,71 @@ def _transcribe_fretted(
             metadata={"instrument": instrument, "num_onsets": 0},
         )
 
+    # 2b. (GUITAR) Snap Basic Pitch note onsets onto the audio strum backbone.
+    # Basic Pitch over-detects rhythm-guitar onsets (it splits each strum's chord
+    # tones into separate onsets -- ~1814 onsets on Open Road Song vs ~698 real
+    # strums), and the old post-processing collapsed the dense 8th-note intro
+    # into held notes. Instead, detect the real strum attack times from the
+    # audio (librosa onset strength, de-duplicated at 60 ms) and assign each
+    # Basic Pitch note to the NEAREST strum backbone time. This makes the chart
+    # rhythm match the audio strums 1:1 while still using Basic Pitch's pitches
+    # for lane assignment. Repeated strums of one chord then group per-strum.
+    if instrument == "guitar":
+        import librosa as _lr_bk
+        _stem_y, _ = _lr_bk.load(stem_path, sr=sr, mono=True)
+        _backbone = _strum_backbone(_stem_y, sr)
+        _tol_snap = 0.15  # max distance a BP note may snap onto a strum (captures ~96% of strums)
+        if len(_backbone):
+            # Pass 1: snap each BP note onto its nearest backbone strum (within tol).
+            _snapped = []
+            for _r in raw:
+                _d = np.abs(_backbone - _r["start"])
+                _j = int(np.argmin(_d))
+                if _d[_j] <= _tol_snap:
+                    _r2 = dict(_r)
+                    _r2["start"] = float(_backbone[_j])
+                    _snapped.append(_r2)
+            raw = _snapped
+
+            # Pass 2 (GAP-FILL): some strums have NO Basic Pitch note nearby
+            # (a repeated chord strum Basic Pitch missed). For each backbone
+            # strum with no charted note, inherit the chord lane-set from a
+            # nearby matched strum (within 0.6 s) so the rhythm stays dense and
+            # captures every audible strum, matching repeated-chord riffs.
+            _matched = {}
+            for _r in raw:
+                _matched.setdefault(_r["start"], set()).add(_r["lane"])
+            _tol_fill = 0.6
+            _added = 0
+            for _b in _backbone:
+                if _b in _matched:
+                    continue
+                # find nearest matched strum (any time) within tol_fill
+                _best_j = None; _best_d = _tol_fill
+                for _r in raw:
+                    _d = abs(_r["start"] - _b)
+                    if _d < _best_d:
+                        _best_d = _d; _best_j = _r
+                if _best_j is not None:
+                    # replicate the neighbor's lanes at this strum (short note)
+                    for _lane in sorted({r["lane"] for r in raw if r["start"] == _best_j["start"]}):
+                        raw.append({
+                            "start": float(_b),
+                            "lane": _lane,
+                            "is_open": _best_j["is_open"],
+                            "length": _best_j["length"],
+                            "pitch": _best_j["pitch"],
+                            "band_rms": _best_j.get("band_rms"),
+                        })
+                        _added += 1
+            if _added:
+                raw.sort(key=lambda r: r["start"])
+        if not raw:
+            return InstrumentChart(
+                notes=[], tempo_map=tempo_map,
+                metadata={"instrument": instrument, "num_onsets": 0},
+            )
+
     # 3a. For bass: second-pass density gate. A note that cleared the hard floor
     # but sits in the ambiguous low-energy band ([floor, 0.5*active)) is only kept
     # if it has a neighboring bass note within 0.5 s -- real bass is rhythmically
@@ -278,12 +652,12 @@ def _transcribe_fretted(
     #
     # Strategy: Two-tier merge
     # 1. Per-gap merge (existing): fuse consecutive chord groups within _frag_gap
-    #    if chroma-stable AND envelope-continuous AND fragments sustained.
-    # 2. Windowed-chord-identity merge (bridge fix): For regions where per-gap
-    #    merge didn't collapse enough, apply a sliding window (3-4s) majority vote
-    #    on chroma ROOT. If >70% of the window shares the same root, collapse
-    #    the entire window to ONE sustained chord. This handles the bridge where
-    #    the power chord rings but Basic Pitch re-emits with slight variations.
+    #    if lane-set-stable AND envelope-continuous AND fragments sustained.
+    # 2. Windowed-LANE merge (bridge fix): For sustained regions where per-gap
+    #    merge didn't collapse enough, apply a sliding window and collapse if
+    #    the SAME LANE SET appears consistently AND envelope stays up.
+    #    IMPORTANT: Only collapse if the notes are actually SUSTAINED (long length),
+    #    not short strum fragments. This preserves rhythm strum riffs.
     if instrument == "guitar":
         _rms = _lr.feature.rms(y=_y, hop_length=_hop)[0]
         _ct = _lr.frames_to_time(np.arange(_chroma.shape[1]), sr=sr, hop_length=_hop)
@@ -291,18 +665,11 @@ def _transcribe_fretted(
         # _frag_gap: how far apart two chord fragments can be and still
         # merge into one sustained chord. Must be SHORTER than the song's
         # active strum interval so rhythm-guitar 8th-note parts aren't
-        # collapsed into single holds. 3 eighth-notes is a safe upper bound:
-        # at 120 BPM that's 0.75 s, at 200 BPM it's 0.45 s. (The old fixed
-        # 1.5 s swallowed ~8 strums at 169 BPM.) The 2.0 s hard cap (legacy)
-        # only applies to extremely slow songs where 3 eighths > 2 s.
-        _n_eighths = 3
-        _frag_gap = min(_n_eighths * (60.0 / max(_bpm, 40.0) / 2), 2.0)
+        # collapsed into single holds. 2 eighth-notes is a safe upper bound:
+        # at 120 BPM that's 0.5 s, at 200 BPM it's 0.3 s.
+        _n_eighths = 2
+        _frag_gap = min(_n_eighths * (60.0 / max(_bpm, 40.0) / 2), 1.0)
         _ENV_FLOOR = 0.15
-
-        def _chroma_root(t):
-            """Get chroma root (0-11) at time t."""
-            j = int(np.clip(np.searchsorted(_ct, t), 0, len(_ct) - 1))
-            return int(np.argmax(_chroma[:, j]))
 
         def _lane_set(group):
             """Return frozenset of lanes for a group."""
@@ -343,33 +710,31 @@ def _transcribe_fretted(
             return frac_above >= 0.50
 
         # Tier 1: Per-gap merge (conservative, preserves strum riffs)
+        # ONLY merge fragments that are genuinely sustained (length > 2.0s).
+        # Short strum fragments (< 2s) are NEVER merged - they stay as separate strums.
         _merged = []
         for _g in groups:
             if _merged:
                 _pg = _merged[-1]
                 _gap = _g[0]["start"] - _pg[0]["start"]
+                # Only merge if BOTH fragments are genuinely sustained chords (> 2s each)
+                _pg_sustained = all(r["length"] > 2.0 for r in _pg)
+                _g_sustained = all(r["length"] > 2.0 for r in _g)
                 if (0.0 < _gap < _frag_gap
                         and _stable(_pg[-1]["start"], _g[0]["start"])
-                        and _held(_pg[-1]["start"], _g[0]["start"])):
-                    _g_end = max(r["start"] + r["length"] for r in _g)
-                    for _r in _pg:
-                        _r["length"] = max(_r["length"], _g_end - _r["start"])
+                        and _held(_pg[-1]["start"], _g[0]["start"])
+                        and _pg_sustained and _g_sustained):
+                    # DO NOT extend lengths here - keep original lengths to not fool Tier 2
                     continue  # absorb _g as a fragment of the held chord
             _merged.append(_g)
         groups = _merged
 
-        # Tier 2: Windowed-LANE merge for sustained sections (bridge fix)
-        # Pitch classes are unreliable due to Basic Pitch re-detection variations.
-        # Lane sets are stable after pitch-to-lane mapping. A sustained power chord
-        # shows the same 2 lanes repeatedly (root + fifth lanes). We slide a window
-        # and if fragments share the same LANE SET, collapse to one held chord.
-        _window_sec = 4.0  # 4s window
-        _min_fragments = 3  # minimum fragments in window
-        _min_set_coverage = 0.50  # 50% of fragments must share the same lane set
-
-        def _lane_set(group):
-            """Return frozenset of lanes for a group."""
-            return frozenset(r["lane"] for r in group)
+        # Tier 2: Windowed-LANE merge for SUSTAINED sections only (bridge fix)
+        # Only collapse if fragments share the same LANE SET AND are VERY LONG (> 3s each).
+        # This is extremely conservative - only for bridge sections with held power chords.
+        _window_sec = 6.0  # larger window for bridge detection
+        _min_fragments = 5  # minimum fragments in window (more conservative)
+        _min_set_coverage = 0.85  # 85% of fragments must share the same lane set
 
         _i = 0
         while _i < len(groups):
@@ -386,7 +751,6 @@ def _transcribe_fretted(
 
             if len(_window_groups) >= _min_fragments:
                 # Check lane SET agreement.
-                # For power chords, each fragment should have the same 2 lanes.
                 from collections import Counter
                 _lane_sets = [_lane_set(g) for g in _window_groups]
                 _set_counts = Counter(_lane_sets)
@@ -397,51 +761,23 @@ def _transcribe_fretted(
                 _t_window_end = groups[_j - 1][0]["start"] if _j - 1 < len(groups) else _t_end
                 _sustained = _held(_t_start, _t_window_end)
 
-                # Accept if the same lane set appears in >= 50% of fragments
-                # and the region is sustained (minimum 2 lanes for power chord)
-                if _set_coverage >= _min_set_coverage and _sustained and len(_majority_set) >= 2:
+                # Only merge if ALL fragments are VERY LONG (> 3.0s each) - genuinely held chords
+                _all_sustained = all(r["length"] > 3.0 for g in _window_groups for r in g)
+
+                # Accept if: very high set coverage, sustained envelope, ALL notes > 3s,
+                # and minimum 2 lanes for power chord
+                if (_set_coverage >= _min_set_coverage
+                        and _sustained
+                        and _all_sustained
+                        and len(_majority_set) >= 2):
                     # Collapse entire window to ONE sustained chord
                     _window_end = max(r["start"] + r["length"] for g in _window_groups for r in g)
-                    # Merge all notes into first group (deduplicate lanes)
                     _all_notes = [r for g in _window_groups for r in g]
                     _merged_group = _all_notes
                     _merged_group[0]["length"] = _window_end - _merged_group[0]["start"]
-                    # Replace window with single merged group
                     groups[_i:_j] = [_merged_group]
                     _i += 1
                     continue
-
-            # Tier 2b: Aggressive merge for repeated strums of same chord
-            # Even if envelope dips between strums (re-strumming a held chord),
-            # if the lane set is the same and we're in a region with
-            # generally high envelope, collapse to sustained chord.
-            if len(_window_groups) >= _min_fragments:
-                from collections import Counter
-                _lane_sets = [_lane_set(g) for g in _window_groups]
-                _set_counts = Counter(_lane_sets)
-                _majority_set, _majority_count = _set_counts.most_common(1)[0]
-                _set_coverage = _majority_count / len(_window_groups)
-
-                # Check if envelope is generally high (above 20% of peak)
-                _t_window_end = groups[_j - 1][0]["start"] if _j - 1 < len(groups) else _t_end
-                j0 = int(np.clip(np.searchsorted(_ct, _t_start), 0, len(_ct) - 1))
-                j1 = int(np.clip(np.searchsorted(_ct, _t_window_end), 0, len(_ct) - 1))
-                if j1 > j0:
-                    seg = _rms[j0:j1 + 1]
-                    if len(seg) >= 2:
-                        mx = float(seg.max())
-                        if mx > 0:
-                            # More relaxed: envelope above 20% of peak for most of region
-                            frac_above = float(np.mean(seg >= 0.20 * mx))
-                            # If set coverage is high (70%) and envelope is generally up
-                            if _set_coverage >= 0.70 and frac_above >= 0.40 and len(_majority_set) >= 2:
-                                _window_end = max(r["start"] + r["length"] for g in _window_groups for r in g)
-                                _all_notes = [r for g in _window_groups for r in g]
-                                _merged_group = _all_notes
-                                _merged_group[0]["length"] = _window_end - _merged_group[0]["start"]
-                                groups[_i:_j] = [_merged_group]
-                                _i += 1
-                                continue
             _i += 1
 
 
@@ -623,7 +959,16 @@ def transcribe_guitar(
     song_end: float,
     sr: int = 44100,
 ) -> InstrumentChart:
-    return _transcribe_fretted(stem_path, tempo_map, song_end, sr, "guitar")
+    """Guitar Expert chart.
+
+    Rhythm guitar (the common case this pipeline serves — strummed power
+    chords) uses the audio-strum-backbone algorithm
+    (``_transcribe_guitar_rhythm``): timing from real strums, lanes from
+    chord roots, grid-quantized like the tab. Basic Pitch's note onsets are
+    NOT trusted for rhythm-guitar timing (they split chord tones into
+    spurious onsets and missed/phantom strums were the standing complaint).
+    """
+    return _transcribe_guitar_rhythm(stem_path, tempo_map, song_end, sr)
 
 
 def transcribe_bass(

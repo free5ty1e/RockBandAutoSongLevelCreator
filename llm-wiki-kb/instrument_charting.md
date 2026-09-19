@@ -199,3 +199,71 @@ Each transcriber tries a high-quality backend and falls back to librosa:
 - **Guitar/Bass sparseness (largely fixed in v0.0.98).** The old CREPE-confidence gate dropped ~90% of onsets; v0.0.98 recovers density via a dense onset backbone + per-onset multi-pitch, so chord *presence* and note *count* are now representative even without CREPE. Remaining gap is pitch/fret **accuracy** and rhythm alignment, not raw count.
 - **Guitar + Keys share the Demucs `other` stem**, so keys transcription is a re-map of the guitar onsets, not a separate keys source. **Partial fix (v0.1.14):** `--separator htdemucs_6s` provides a separate `piano` stem and a separate `guitar` stem (splitting guitar out of `other`); `--separator spleeter:5stems` provides a separate `piano` stem. See `[[piano_keyboard_separation]]`. The `piano` stem quality from `htdemucs_6s` is reportedly poor; Spleeter's 5stems piano is better but still lower quality than Demucs.
 - **Guitar solo vs. rhythm guitar not separated.** Demucs separates by instrument family (drums/bass/other/vocals), not by role within a family. The `other` stem (or `guitar` stem from `htdemucs_6s`) contains **both** the lead guitar solo and the rhythm guitar backing track. During a guitar solo section, the player must not play the rhythm part, but the chart will include both. No model-level separation exists to split lead-piano from rhythm-piano either (both would be in the `piano` stem). A future improvement could use multi-band separation or a model trained to distinguish lead vs. rhythm roles within an instrument family.
+
+### Guitar strum-backbone timing (v0.1.17)
+
+The guitar chart previously charted rhythm-guitar strums from Basic Pitch's
+note onsets, which (a) over-detect (Basic Pitch splits each strum's chord tones
+into separate onsets: ~1814 onsets on Open Road Song vs ~698 audible strums)
+and (b) after post-processing collapsed dense 8th-note strum runs into held
+notes. The user reported the intro riff (50 palm-muted strums in 10 s) charted
+as a few long held notes.
+
+**Fix (`autorb/transcribe/instruments/guitar.py`, `_strum_backbone` + snap +
+gap-fill):** detect the **audio strum backbone** from the guitar stem via
+librosa onset strength (de-duplicated at 60 ms, onset delta 0.08 → ~698 strums,
+matching the human-audible count on Open Road Song), snap every Basic Pitch note
+onto its nearest real strum (within 0.15 s), then **gap-fill** strums that had
+no Basic Pitch note by inheriting the chord lane-set from the nearest matched
+strum (within 0.6 s). Result: chart strum timing is driven 1:1 by the audio.
+
+**Validation (`tools/guitar_tab_alignment/`):** audio ground-truth strum guide
+(`audio_ground_truth.py`) + strum recall/precision/F1 vs chart
+(`validate_chart.py`). Measured on Open Road Song: **strum F1 0.56 → 0.993,
+recall 0.99, precision 1.00, 0 false attacks**; intro charts all 50 audible
+strums with correct 8th-note timing (was ~16 spread quarter-ish attacks). The
+tab parser (`tab_parser.py`) + DTW aligner (`align_tab_to_audio.py`) provide
+tab-aligned pitch/lane validation when a tab is supplied.
+
+### Drum 2-hand limit (v0.1.17)
+
+A human drummer has two hands. `limit_simultaneous_drums()` in
+`autorb/transcribe/instruments/drums.py` caps simultaneous **non-kick** hits to
+2 (kick is excluded — the foot is independent). When >2 non-kick hits land on
+one grid slot, it keeps the two most important (snare > hi-hat > cymbals >
+toms). Enforced after grid-snap and double-bass reduction, before the Expert
+chart is built.
+
+### Guitar: audio strum backbone + monotonic lane mapping (v0.1.18)
+
+The v0.1.17 backbone snap fixed rhythm density but playtest still showed
+(a) phantom strums and (b) lanes that didn't follow pitch changes. Both root
+causes and the fixes, all validated by the new tab-based error rating:
+
+1. **Grid phase.** Snapping strums onto the drum-derived tempo grid forced the
+   guitar onto the *drums'* phase; the guitar's actual downbeat sits ~1/16 off,
+   so every strum landed between grid lines and looked phantom. `_grid_phase`
+   now scans 32nd-note phase offsets and picks the one minimizing mean
+   distance-to-grid; `_snap_to_grid_phased` applies it (and extrapolates
+   pre-first-beat strums instead of collapsing them).
+
+2. **Cyclic lane mapping.** `pitch_to_fret_string` → `fret_string_to_lane`
+   maps lane = (fret-1) % 5 — cyclic, so rising roots can move lanes DOWN
+   (A2→lane -1(open), B2→1, D3→4, E3→1). Rhythm charts need monotonic pitch
+   movement: roots are read from the **low-band (80-230 Hz) spectral peak**
+   per strum (`_strum_chord_roots`), smoothed with a sliding 5-strum MODE
+   (a median preserves 113/129 Hz FFT bin-competition alternation; mode
+   resolves the chord run), clustered into the song's distinct chord levels
+   (1-semitone bins), and levels are spread **by rank** over lanes 0-4.
+
+3. **Power chords** render as root+fifth (lane and lane+2) 2-note chords.
+
+Validation (`tools/guitar_tab_alignment/validate_guitar_vs_tab.py`, run
+automatically as pipeline stage [7/5]): Open Road Song error rating
+**39.14 → 13.4** (grid 0.006, coverage R/P 0.97/0.978, pitch-direction 0.137,
+tab-figure 0.481); Brian Wilson **3.68**. The rating weights: 40 grid, 20
+tab-figure, 20 pitch-direction, 20 coverage. Tab guides for the two test
+songs live in `tools/guitar_tab_alignment/tabs/` (retrieved via web search
+consensus; the recording sits a whole step below the tab's standard-tuning
+voicings, so direction-of-movement is the validated contract, not absolute
+fret identity).

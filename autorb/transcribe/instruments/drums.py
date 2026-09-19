@@ -584,21 +584,6 @@ def reduce_double_bass(notes: list, min_gap: float = 0.11) -> list:
     return out
 
 
-def _drum_difficulty_pitch_to_lane(difficulty_pitch: int) -> int:
-    """
-    Extract the drum lane (0-4) from a difficulty-offset pitch.
-
-    Rock Band drum pitches: Easy 60-64, Medium 72-76, Hard 84-88, Expert 96-100
-    lane = pitch % 12 (or more precisely, pitch - base where base is 60/72/84/96)
-    """
-    # Find which difficulty base this pitch belongs to
-    for base in (60, 72, 84, 96):
-        if base <= difficulty_pitch < base + 5:
-            return difficulty_pitch - base
-    # Fallback: assume Expert base
-    return difficulty_pitch - 96
-
-
 def limit_simultaneous_drums(notes: list, max_simultaneous: int = 2) -> list:
     """
     Limit simultaneous non-kick drum hits to `max_simultaneous` (default 2).
@@ -608,6 +593,12 @@ def limit_simultaneous_drums(notes: list, max_simultaneous: int = 2) -> list:
     quantized time and, when more than `max_simultaneous` non-kick hits land
     on the same time slot, keeps only the `max_simultaneous` most important
     ones (prioritizing: snare > hi-hat > cymbals > toms).
+
+    Operates on ChartNotes as produced by ``transcribe_drums``, where ``lane``
+    is the authoritative 0-4 element (0=kick, 1=snare, 2=hi-hat, 3=tom,
+    4=cymbal). ``difficulty_pitch`` at this stage still carries the raw GM
+    drum pitch (36/38/42/...), NOT the difficulty-offset pitch — that packing
+    happens later in the MIDI generator, so it must not be used here.
 
     Args:
         notes: List of ChartNote objects
@@ -626,34 +617,27 @@ def limit_simultaneous_drums(notes: list, max_simultaneous: int = 2) -> list:
 
     # Priority order for non-kick drums (higher = more important to keep)
     # snare (1) > hi-hat (2) > cymbals (4) > toms (3)
-    # Note: lanes are 0=kick, 1=snare, 2=hi-hat, 3=tom, 4=cymbal
-    lane_priority = {1: 4, 2: 3, 4: 2, 3: 1}  # lane -> priority
+    lane_priority = {1: 4, 2: 3, 4: 2, 3: 1}
 
     filtered = []
     for time_key, time_notes in by_time.items():
-        # Separate kick from non-kick using difficulty_pitch
-        kick_notes = []
-        other_notes = []
-        for n in time_notes:
-            lane = _drum_difficulty_pitch_to_lane(n.difficulty_pitch)
-            if lane == 0:
-                kick_notes.append(n)
-            else:
-                other_notes.append(n)
+        # Separate kick from non-kick by lane (foot is independent)
+        kick_notes = [n for n in time_notes if n.lane == 0]
+        other_notes = [n for n in time_notes if n.lane != 0]
 
-        # Keep all kick notes (foot is independent)
+        # Keep all kick notes
         filtered.extend(kick_notes)
 
         # If we have more non-kick hits than allowed, keep highest priority
         if len(other_notes) > max_simultaneous:
-            other_notes.sort(key=lambda n: lane_priority.get(_drum_difficulty_pitch_to_lane(n.difficulty_pitch), 0), reverse=True)
+            other_notes.sort(key=lambda n: lane_priority.get(n.lane, 0), reverse=True)
             kept = other_notes[:max_simultaneous]
             filtered.extend(kept)
         else:
             filtered.extend(other_notes)
 
     # Sort by time then lane
-    filtered.sort(key=lambda n: (n.time, _drum_difficulty_pitch_to_lane(n.difficulty_pitch)))
+    filtered.sort(key=lambda n: (n.time, n.lane))
     return filtered
 
 

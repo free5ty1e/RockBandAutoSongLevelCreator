@@ -32,6 +32,37 @@ def _clear_stems_dir(stems_dir: Path) -> None:
                    f"{', '.join(removed)}")
 
 
+def _available_memory_gb() -> float:
+    """Best-effort available system memory in GB (Linux /proc/meminfo)."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return float(line.split()[1]) / (1024 * 1024)
+    except OSError:
+        pass
+    return 8.0  # assume the documented 8 GB host
+
+
+def _pick_strip_seconds(requested: float) -> float:
+    """Choose a strip size that fits the CURRENTLY available memory.
+
+    A kernel OOM-kill is SIGKILL — no Python exception fires, so the
+    RuntimeError fallback chain is useless against it. The only reliable
+    defense is to size the work to the memory that is actually free right
+    now (the devcontainer shares the host with other processes; a run that
+    fit an idle 8 GB host can OOM on a busy one).
+
+    Empirical envelope (htdemucs_6s, CPU): 45 s strips want ~3.5 GB free,
+    20 s ~2.2 GB, 10 s ~1.2 GB. We require ~25% headroom on top.
+    """
+    avail = _available_memory_gb()
+    for strip, need in ((45.0, 4.4), (20.0, 2.8), (12.0, 1.8), (10.0, 1.5)):
+        if avail >= need and strip <= requested:
+            return strip
+    return 10.0
+
+
 def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu",
                    model_name: str = "htdemucs_ft", shifts: int = 1,
                    overlap: float = 0.25, segment: float = None,
@@ -81,16 +112,28 @@ def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu",
     stems_paths = {}
 
     # Use memory-bounded strip processing for ALL models on long tracks
-    # This writes stems directly to files, never holding full track in memory
+    # This writes stems directly to files, never holding full track in memory.
+    # Strip size is chosen for the memory available RIGHT NOW (a kernel
+    # OOM-kill is SIGKILL and cannot be caught, so we must not oversize).
+    strip_seconds = _pick_strip_seconds(strip_seconds)
+    click.echo(f"Using {strip_seconds:g}s strips (available memory: "
+               f"{_available_memory_gb():.1f} GB).")
     try:
         _separate_strips(model, wav, sr, device,
                          strip_seconds=strip_seconds, overlap_seconds=10.0,
-                         chunk_seconds=10.0, apply_kwargs=apply_kwargs,
+                         chunk_seconds=min(10.0, strip_seconds / 2),
+                         apply_kwargs=apply_kwargs,
                          progress=lambda k, m: click.echo(
                              f"  separating strip {k}/{m} ({model_name})...",
                              err=True),
                          output_stems_dir=stems_dir, stem_names=stem_names)
     except (RuntimeError, torch.cuda.OutOfMemoryError):
+        # Catchable (device) OOM or allocator failure: free everything and
+        # retry with progressively smaller strips. (Kernel OOM-kill is
+        # prevented upstream by _pick_strip_seconds.)
+        gc.collect()
+        if device == "cuda":
+            torch.cuda.empty_cache()
         click.echo(f"{strip_seconds}s strips OOM'd; retrying with 20 s strips...")
         try:
             _separate_strips(model, wav, sr, device,
@@ -101,6 +144,9 @@ def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu",
                                  err=True),
                              output_stems_dir=stems_dir, stem_names=stem_names)
         except (RuntimeError, torch.cuda.OutOfMemoryError):
+            gc.collect()
+            if device == "cuda":
+                torch.cuda.empty_cache()
             click.echo(f"{model_name} still OOMs on this device; trying 10s strips...")
             _separate_strips(model, wav, sr, device,
                              strip_seconds=10.0, overlap_seconds=5.0,
@@ -114,42 +160,62 @@ def separate_stems(audio_path: Path, out_dir: Path, device: str = "cpu",
     click.echo("Generating preview mix...")
     preview_file = out_dir / "preview_mix.mp3"
 
-    # Sum stems from disk to avoid holding full track in memory
-    mix_data = None
-    for i, name in enumerate(stem_names):
-        out_file = stems_dir / f"{name}.wav"
-        click.echo(f"Loading {name} stem from {out_file}...")
-        audio_data, _ = sf.read(str(out_file), dtype='float32')
-        if audio_data.ndim == 1:
-            audio_data = np.expand_dims(audio_data, axis=1)
-        # Convert to (channels, time)
-        audio_data = audio_data.T
-        stems_paths[name] = out_file
-
-        if mix_data is None:
-            mix_data = audio_data.copy()
-        else:
-            mix_data += audio_data
-
-    if mix_data is not None:
-        if mix_data.ndim == 2:
-            mix_data = mix_data.T
-
-        peak = np.max(np.abs(mix_data))
+    # Sum stems from disk in 10 s blocks so the peak allocation is one block
+    # per stem, not the whole track (the old full-track read of all stems
+    # together was a multi-hundred-MB allocation and an OOM risk on a busy
+    # 8 GB host).
+    import io as _io
+    mix_wav = out_dir / "preview_mix.wav"
+    block = int(10 * sr)
+    first = True
+    peak = 0.0
+    open_handles = []
+    try:
+        for name in stem_names:
+            out_file = stems_dir / f"{name}.wav"
+            open_handles.append(sf.SoundFile(str(out_file), mode='r'))
+            stems_paths[name] = out_file
+        n_frames = min(h.frames for h in open_handles)
+        with sf.SoundFile(str(mix_wav), mode='w', samplerate=sr,
+                          channels=open_handles[0].channels,
+                          subtype='FLOAT', format='WAV') as dst:
+            pos = 0
+            while pos < n_frames:
+                n = min(block, n_frames - pos)
+                acc = None
+                for h in open_handles:
+                    data = h.read(n, dtype='float32')
+                    if acc is None:
+                        acc = data.astype(np.float64)
+                    else:
+                        acc += data
+                peak = max(peak, float(np.max(np.abs(acc))) if acc is not None else 0.0)
+                dst.write(acc.astype(np.float32))
+                pos += n
+        # Normalize if the summed stems clip (read back in blocks).
         if peak > 1.0:
-            mix_data = mix_data / peak
+            norm = peak
+            src = sf.SoundFile(str(mix_wav), mode='r')
+            tmp = out_dir / "preview_mix_norm.wav"
+            with src, sf.SoundFile(str(tmp), mode='w', samplerate=sr,
+                                   channels=src.channels, subtype='FLOAT',
+                                   format='WAV') as dst:
+                while True:
+                    data = src.read(block, dtype='float32')
+                    if len(data) == 0:
+                        break
+                    dst.write((data / norm).astype(np.float32))
+            mix_wav.unlink()
+            mix_wav = tmp
+    finally:
+        for h in open_handles:
+            h.close()
 
-        # Write to an in-memory WAV buffer, then encode to MP3 using pydub
-        import io
+    if mix_wav.exists():
         from pydub import AudioSegment
-
-        wav_io = io.BytesIO()
-        sf.write(wav_io, mix_data, sr, format='WAV')
-        wav_io.seek(0)
-
-        preview_audio = AudioSegment.from_wav(wav_io)
+        preview_audio = AudioSegment.from_wav(str(mix_wav))
         preview_audio.export(str(preview_file), format="mp3", bitrate="192k")
-
+        mix_wav.unlink()
         click.echo(f"Preview mix saved to {preview_file}")
         stems_paths["preview_mix"] = preview_file
 

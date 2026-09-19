@@ -4,6 +4,8 @@ import click
 from pathlib import Path
 import torch
 import re
+import sys
+import json
 
 
 def _generate_ps4_pkg_id(artist: str, title: str, custom_id: str | None = None) -> str:
@@ -440,6 +442,51 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             click.echo(f"Clone Hero song exported: {ch_folder}")
             click.echo("Load it in Clone Hero (Songs folder -> Scan Songs) to playtest "
                        "lyric/vocal sync on your computer without a PS4.")
+
+            # Guitar chart validation vs the official tabs (formal validation
+            # stage): scores the chart's rhythm + pitch fidelity against the
+            # tab guide and writes guitar_validation.json with an error rating
+            # (0 = perfect). Non-fatal — reports and continues.
+            tab_guide = None
+            _tga = Path(__file__).resolve().parents[1] / "tools" / "guitar_tab_alignment"
+            _tabs_dir = _tga / "tabs"
+            if _tabs_dir.is_dir():
+                def _tok(s):
+                    return re.sub(r"[^a-z0-9]+", "", s.lower())
+                _a, _t = _tok(artist), _tok(title)
+                for cand in sorted(_tabs_dir.glob("*.yaml")):
+                    stem = _tok(cand.stem)
+                    # match if the guide's filename contains both the artist
+                    # and title token streams (e.g. eve6_open_road_song).
+                    if _a[:6] in stem and _t[:8] in stem:
+                        tab_guide = cand
+                        break
+                if tab_guide is None and (_tabs_dir / f"{song_id}.yaml").exists():
+                    tab_guide = _tabs_dir / f"{song_id}.yaml"
+            if tab_guide is not None:
+                click.echo(f"\n[7/5] Validating guitar chart against tab guide: {tab_guide.name}")
+                import subprocess as _sp
+                res = _sp.run(
+                    [sys.executable, str(_tga / "validate_guitar_vs_tab.py"),
+                     "--chart-dir", str(out_path), "--tab-guide", str(tab_guide)],
+                    capture_output=True, text=True,
+                )
+                report_file = out_path / "guitar_validation.json"
+                if report_file.exists():
+                    rep = json.loads(report_file.read_text())
+                    click.echo(f"  Guitar error rating: {rep['error_rating']} "
+                               f"(threshold {rep['threshold']}) — "
+                               f"{'PASS' if rep['pass'] else 'FAIL'}")
+                    click.echo(f"  grid_err={rep['grid_error']} "
+                               f"cell_err={rep['rhythm_cell_error']} "
+                               f"pitch_dir_err={rep['pitch_direction_error']} "
+                               f"coverage R/P={rep['coverage_recall']}/{rep['coverage_precision']}")
+                else:
+                    click.echo(f"  Validation did not produce a report "
+                               f"(exit {res.returncode}); see guitar_validation.json", err=True)
+            else:
+                click.echo("  No tab guide found for this song; skipping tab validation "
+                           "(add tools/guitar_tab_alignment/tabs/<song>.yaml to enable).")
 
         if build_pkg:
             click.echo("\n[7/5] Building PS4 PKG installer...")
