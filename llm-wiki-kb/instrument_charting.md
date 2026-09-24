@@ -267,3 +267,36 @@ songs live in `tools/guitar_tab_alignment/tabs/` (retrieved via web search
 consensus; the recording sits a whole step below the tab's standard-tuning
 voicings, so direction-of-movement is the validated contract, not absolute
 fret identity).
+
+### Strip merge geometry: the flush-to-tail corruption (v0.1.19)
+
+The strip pipeline's final strip starts at `n - strip_len` (flush to the
+tail), so its gap from the previous strip is `n mod step`, NOT the regular
+`step`. On the 198 s Eve 6 track with 45 s strips / 10 s overlap: starts are
+0/35/70/105/140/**153.09 s** — the last gap is 13.09 s and the last strip's
+TRUE overlap with its predecessor is 31.9 s, not the nominal 10 s. The old
+sequential merge assumed each strip begins exactly `overlap` after the
+accumulated output, so it crossfaded only 10 s of a 31.9 s overlap: content
+from ~153 s mixed into output ~175 s+ and the tail replayed 21.9 s shifted.
+Measured: input-vs-sum-of-stems correlation 0.998 → 0.33 → ~0 from 175 s.
+
+**Rule: strip merges must be position-aware.** Place every strip at its
+actual start, window ONCE (raw strips out of separation; fades in the merge),
+and normalize by the summed crossfade weights —
+`out[k] = Σ d_i(k)·w_i(k) / Σ w_i(k)` — which is exact for ANY geometry
+(the division self-corrects wherever window sums ≠ 1). See
+`_merge_strips_by_position` and `tests/test_stems_strip_merge.py`.
+
+### Lead-solo detection: register energy, not root contour (v0.1.19)
+
+During a lead solo the rhythm guitar typically KEEPS PLAYING underneath
+(Open Road Song 1:37: chord roots stay steady, std ~1.6 semitones — the
+strum backbone keeps extracting rhythm strums through the solo). A root-
+contour detector therefore misses the solo entirely. The reliable signature
+is REGISTER ENERGY: high band (600–1600 Hz) vs low band (80–230 Hz) RMS
+ratio ≈ 2.4–2.8 during the solo vs ≈ 0.3–0.7 during rhythm chugging.
+`_detect_solo_regions` marks sustained high-register-dominant windows
+(ratio ≥ 1.5); regions are reported in the pipeline log always, and with the
+experimental `--guitar-solo-charting` flag the solo regions chart as single
+lead notes (pyin pitch contour, reliable in the monophonic lead register)
+instead of rhythm power chords.

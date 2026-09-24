@@ -240,11 +240,93 @@ def _snap_to_grid_phased(t: float, tempo_map: list, divisions: int,
     return b0 + frac * (b1 - b0)
 
 
+def _detect_solo_regions(y: np.ndarray, sr: int,
+                         strums: np.ndarray,
+                         min_duration: float = 4.0,
+                         window: float = 3.0) -> list:
+    """Detect lead-guitar solo regions from the stem's register energy.
+
+    During a lead solo the RHYTHM guitar usually keeps playing underneath
+    (verified on Open Road Song at ~97 s: the low-band chord roots stay
+    steady, std ~1.6 semitones, while the solo soars above), so a root-
+    contour detector cannot see it. The reliable signature is REGISTER
+    ENERGY: solo sections show the high band (lead register, ~600-1600 Hz)
+    dominating the low chord band (80-230 Hz) — measured ratio ~2.4-2.8
+    during the Open Road Song solo vs ~0.3-0.7 during rhythm chugging.
+
+    A window is marked solo when the high/low RMS ratio >= 1.5 for a
+    sustained run (>= min_duration). Windows step at window/2.
+
+    Returns [(start_s, end_s), ...].
+    """
+    if len(strums) < 8:
+        return []
+    from scipy.signal import butter, sosfiltfilt
+    nyq = sr / 2.0
+    sos_lo = butter(4, [80.0 / nyq, 230.0 / nyq], btype='band', output='sos')
+    sos_hi = butter(4, [600.0 / nyq, 1600.0 / nyq], btype='band', output='sos')
+    y_lo = sosfiltfilt(sos_lo, y)
+    y_hi = sosfiltfilt(sos_hi, y)
+
+    solo_mask = np.zeros(len(strums), dtype=bool)
+    step = window / 2.0
+    t = 0.0
+    last = float(strums[-1]) if len(strums) else 0.0
+    while t < last:
+        i0, i1 = int(t * sr), int((t + window) * sr)
+        lo = float(np.sqrt(np.mean(y_lo[i0:i1] ** 2))) if i1 <= len(y_lo) else 0.0
+        hi = float(np.sqrt(np.mean(y_hi[i0:i1] ** 2))) if i1 <= len(y_hi) else 0.0
+        if lo > 1e-6 and hi / lo >= 1.5:
+            sel = (strums >= t) & (strums < t + window)
+            solo_mask |= sel
+        t += step
+    idx = np.where(solo_mask)[0]
+    if len(idx) == 0:
+        return []
+    # Expand marked strums into contiguous regions (gaps > 1.5 s split).
+    regions = []
+    start = strums[idx[0]]
+    prev_end = strums[idx[0]]
+    for a, b in zip(idx[:-1], idx[1:]):
+        if strums[b] - strums[b - 1] > 1.5:
+            regions.append((float(start), float(prev_end)))
+            start = strums[b]
+        prev_end = strums[b]
+    regions.append((float(start), float(prev_end)))
+    merged = []
+    for r in regions:
+        if merged and r[0] - merged[-1][1] < 1.0:
+            merged[-1] = (merged[-1][0], r[1])
+        else:
+            merged.append(list(r))
+    return [(float(a), float(b)) for a, b in merged if b - a >= min_duration]
+
+
+def _note_pitch_at(y: np.ndarray, sr: int, t: float,
+                    fmin: float = 200.0, fmax: float = 1600.0):
+    """Dominant pitch (Hz) of a lead note at time ``t`` (pyin over 150 ms).
+
+    Lead/solo guitar is typically single-line above the chord band, where pyin
+    is reliable (it fails on polyphonic distorted chords — which is why the
+    rhythm path reads roots from the low-band FFT instead).
+    """
+    import librosa as _lr
+    i = int(t * sr)
+    seg = y[max(0, i): i + int(0.15 * sr)]
+    if len(seg) < int(0.10 * sr):
+        return None
+    f0, _, v = _lr.pyin(seg, fmin=fmin, fmax=fmax, sr=sr,
+                        frame_length=1024, hop_length=256)
+    voiced = f0[(v >= 0.4) & (f0 > 0)]
+    return float(np.median(voiced)) if len(voiced) else None
+
+
 def _transcribe_guitar_rhythm(
     stem_path: Path,
     tempo_map: list,
     song_end: float,
     sr: int = 44100,
+    solo_charting: bool = False,
 ) -> InstrumentChart:
     """Rhythm-guitar Expert chart driven by the audio strum backbone.
 
@@ -263,6 +345,11 @@ def _transcribe_guitar_rhythm(
        chord changes (A5->B5) move the chart up/down like the tab.
     4. **Power chords**: root lane + fifth lane (2-note chord), matching the
        tab's 5th shapes. Sustain runs until the next strum (capped at 2 s).
+
+    With ``solo_charting=True``, detected lead-solo regions
+    (``_detect_solo_regions``) are charted as SINGLE notes whose lane follows
+    the lead pitch contour (``_note_pitch_at`` pyin) instead of the rhythm
+    power chords underneath.
     """
     import librosa as _lr
     from .difficulty import ChartNote, _snap
@@ -337,9 +424,40 @@ def _transcribe_guitar_rhythm(
         frac = li / max(len(_levels) - 1, 1)
         return int(np.clip(round(frac * 4.0), 0, 4))
 
+    # --- Solo detection (lead vs. rhythm). Always computed (the regions are
+    # also chart solo_sections metadata); with solo_charting=True the strums
+    # INSIDE a solo region are charted as single lead notes following the
+    # pyin pitch contour instead of the rhythm power chord.
+    solo_regions = _detect_solo_regions(y, sr, strums)
+
+    def _in_solo(t: float) -> bool:
+        return any(a <= t <= b for a, b in solo_regions)
+
     expert_notes = []
     for s, root in zip(strums, roots):
         if root <= 0:
+            continue
+        if solo_charting and _in_solo(s):
+            # Lead note: lane follows the soloist's melodic pitch (pyin in the
+            # lead register). Falls back to the root lane when pyin fails.
+            hz = _note_pitch_at(y, sr, s)
+            lane = None
+            if hz:
+                lead_midi = 69.0 + 12.0 * np.log2(hz / 440.0)
+                # rank the lead pitch against the song's chord levels for
+                # consistency, then clamp: leads sit above the chords, so a
+                # lead at/below the highest chord level maps to the top lane.
+                if lead_midi > _levels[-1]:
+                    frac = min(1.0, (lead_midi - _levels[0]) /
+                               max(_levels[-1] - _levels[0], 1.0))
+                    lane = int(np.clip(round(frac * 4.0), 0, 4))
+                else:
+                    lane = 4  # lead inside/below the chord band: top lane
+            if lane is None:
+                lane = _root_to_lane(root)
+            expert_notes.append({
+                "time": float(s), "lanes": [lane], "root": float(root),
+            })
             continue
         lane = _root_to_lane(root)
         # power chord: root lane + the fifth above (clamped to the highway)
@@ -375,7 +493,10 @@ def _transcribe_guitar_rhythm(
             members[0].chord_notes = list(members)
     notes.sort(key=lambda n: (n.time, n.lane))
 
-    solos = _detect_solo_sections(notes, tempo_map)
+    # Solo sections: prefer the audio-detected lead regions (they are ground
+    # truth when solo_charting replaced the rhythm), else the old density
+    # heuristic.
+    solos = solo_regions if solo_regions else _detect_solo_sections(notes, tempo_map)
     bre = _detect_bre_section(notes, song_end)
     return InstrumentChart(
         notes=notes,
@@ -388,6 +509,8 @@ def _transcribe_guitar_rhythm(
             "num_onsets": len(notes),
             "grid_phase_beats": float(phase),
             "algorithm": "strum_backbone_rhythm",
+            "solo_regions": [(round(a, 2), round(b, 2)) for a, b in solo_regions],
+            "solo_charting": bool(solo_charting),
         },
     )
 
@@ -958,6 +1081,7 @@ def transcribe_guitar(
     tempo_map: list,
     song_end: float,
     sr: int = 44100,
+    solo_charting: bool = False,
 ) -> InstrumentChart:
     """Guitar Expert chart.
 
@@ -967,8 +1091,14 @@ def transcribe_guitar(
     chord roots, grid-quantized like the tab. Basic Pitch's note onsets are
     NOT trusted for rhythm-guitar timing (they split chord tones into
     spurious onsets and missed/phantom strums were the standing complaint).
+
+    ``solo_charting=True`` (the CLI's experimental --guitar-solo-charting)
+    charts detected lead-solo regions as single lead notes (pyin pitch
+    contour) instead of the rhythm power chords there. Solo regions are
+    ALWAYS detected and reported in the chart metadata either way.
     """
-    return _transcribe_guitar_rhythm(stem_path, tempo_map, song_end, sr)
+    return _transcribe_guitar_rhythm(stem_path, tempo_map, song_end, sr,
+                                     solo_charting=solo_charting)
 
 
 def transcribe_bass(

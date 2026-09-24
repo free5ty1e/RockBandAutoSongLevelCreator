@@ -50,9 +50,10 @@ def _generate_ps4_pkg_id(artist: str, title: str, custom_id: str | None = None) 
 @click.option('--build-clone-hero', is_flag=True, help='Also export a Clone Hero-format song folder (song.ini + notes.mid + song.ogg + album.png) under <output-dir>/clone_hero/ for computer-based playtest/preview without a PS4')
 @click.option('--generate-freestyle-vocals', is_flag=True, help='Enable Rock Band 4 freestyle-vocals guide lines (Hard/Expert) by setting HasFreestyleVocals in the PS4 songdta')
 @click.option('--freestyle-drums', is_flag=True, help='Create drum freestyle mode: drum track gets only one placeholder note at the start, allowing free drum play throughout the song')
+@click.option('--guitar-solo-charting', 'guitar_solo_charting', is_flag=True, default=False, help='EXPERIMENTAL: in detected lead-guitar solo regions, chart the solo line (single notes following the lead pitch) instead of the rhythm guitar. Without this flag the rhythm guitar is charted throughout, and detected solo regions are reported in the log for review.')
 @click.option('--package-con-dir', type=click.Path(exists=True, file_okay=False, dir_okay=True), default=None, help='Package all .con files in this directory into a single PS4 PKG installer (batch packaging mode)')
 @click.option('--ps4-pkg-id', type=str, default=None, help='Optional 16-char PS4 Content ID for the PKG (auto-generated from artist+title if omitted)')
-def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, separator, use_ft_stems, ft_shifts, ft_strip_seconds, ft_segment, ft_overlap, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, build_clone_hero, generate_freestyle_vocals, freestyle_drums, package_con_dir, ps4_pkg_id):
+def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, separator, use_ft_stems, ft_shifts, ft_strip_seconds, ft_segment, ft_overlap, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, build_clone_hero, generate_freestyle_vocals, freestyle_drums, guitar_solo_charting, package_con_dir, ps4_pkg_id):
     # Batch packaging mode: package all .con files in a directory into a single PS4 PKG
     if package_con_dir:
         click.echo(f"Batch packaging mode: packaging all .con files in {package_con_dir}")
@@ -250,9 +251,20 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
     else:
         click.echo("  Transcribing guitar (from 'other' stem)...")
     try:
-        guitar_expert = transcribe_guitar(guitar_stem, list(zip(beat_times, dynamic_bpms)), song_end)
+        guitar_expert = transcribe_guitar(guitar_stem, list(zip(beat_times, dynamic_bpms)), song_end,
+                                          solo_charting=guitar_solo_charting)
         guitar_charts = create_all_difficulties(guitar_expert, "guitar")
-        click.echo("  Guitar transcription complete.")
+        solo_regions = guitar_expert.metadata.get("solo_regions") or []
+        if solo_charting:
+            click.echo(f"  Guitar transcription complete "
+                       f"(solo charting ON; detected solo regions: "
+                       f"{[(round(a,1), round(b,1)) for a, b in solo_regions]}).")
+        else:
+            click.echo("  Guitar transcription complete"
+                       + (f" (detected solo regions: "
+                          f"{[(round(a,1), round(b,1)) for a, b in solo_regions]}; "
+                          f"use --guitar-solo-charting to chart them as lead)"
+                          if solo_regions else "") + ".")
     except Exception as e:
         click.echo(f"  Warning: guitar transcription failed: {e}", err=True)
         guitar_charts = None

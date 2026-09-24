@@ -10,6 +10,24 @@ import click
 from demucs.apply import apply_model
 from demucs.pretrained import get_model
 
+#: Nominal strip overlap (samples) used by the strip pipeline. The fade
+#: windows below are the level-constant pair (fade_out + fade_in = 1.0 in the
+#: overlap) shared by the per-strip windowing at separation time and the
+#: position-aware merge (:func:`_merge_strips_by_position`) so the two can
+#: never diverge. They are lazily sized to the actual overlap at merge time.
+_OVERLAP_NOMINAL = None
+_FADE_IN = None
+_FADE_OUT = None
+
+
+def _init_fades(overlap: int) -> None:
+    """Build (or rebuild) the module-level crossfade windows for ``overlap``."""
+    global _OVERLAP_NOMINAL, _FADE_IN, _FADE_OUT
+    _OVERLAP_NOMINAL = int(overlap)
+    lin = np.linspace(0.0, 1.0, max(2, _OVERLAP_NOMINAL), dtype=np.float32)
+    _FADE_IN = lin
+    _FADE_OUT = 1.0 - lin
+
 
 def _clear_stems_dir(stems_dir: Path) -> None:
     """Remove stale stem WAVs before a new separation run.
@@ -283,6 +301,98 @@ def _separate_audio(model, wav, sr, device, chunked=False, chunk_seconds=20.0,
     return sources_p[:, :, step:step + n]
 
 
+def _merge_strips_by_position(strip_files, starts, out_file, sr, ch, n):
+    """Merge per-strip stem WAVs into one output, placing each strip at its
+    ACTUAL start offset (memory-bounded).
+
+    The previous sequential merge assumed every strip begins exactly
+    ``overlap`` samples after the accumulated output. That holds for on-grid
+    strips but NOT for the final flush-to-tail strip, whose start is
+    ``n - strip_len`` — up to (step - overlap) earlier than assumed. Its
+    content then blended into the wrong output position and the tail replayed
+    time-shifted (verified: Open Road Song outro, input↔sum-of-stems
+    correlation 0.998 → ~0 from ~175 s).
+
+    This merge streams the output in blocks and, for each output block,
+    accumulates every strip's weighted contribution over the samples it
+    actually covers, then divides by the summed weights:
+
+        out[k] = Σ_i strip_i[k - start_i] * w_i(k - start_i) / Σ_i w_i(k - start_i)
+
+    The strip files hold RAW (unwindowed) separation output; ``w_i`` (linear
+    fade-in over the strip's first `overlap` samples, fade-out over its last
+    `overlap` samples, 1 in between) is applied HERE, exactly once. The
+    division makes the reconstruction exact wherever the covering windows sum
+    to something other than 1 -- including the flush-to-tail strip whose
+    true overlap exceeds the nominal one (both windows are fully developed
+    where they overlap and the weighted average is exact).
+
+    Peak memory is one block per stem, never the full track.
+    """
+    if not strip_files:
+        return
+    # Fade windows applied here (single windowing). _separate_strips calls
+    # _init_fades(overlap) before this so the module windows exist.
+    fades = []
+    for i, path in enumerate(strip_files):
+        with sf.SoundFile(str(path)) as h:
+            seg_len = len(h)
+        fo = min(_OVERLAP_NOMINAL, seg_len)
+        w = np.ones(seg_len, dtype=np.float32)
+        if i > 0:
+            w[:fo] = _FADE_IN[:fo]
+        if i < len(strip_files) - 1:
+            w[seg_len - fo:] = _FADE_OUT[len(_FADE_OUT) - fo:]
+        fades.append(w)
+    # NOTE: strip lengths are all equal in the current pipeline (each covers
+    # strip_seconds of audio except possibly the last). starts[i] is the
+    # sample offset of strip i in the full track.
+    block = int(10 * sr)
+    with sf.SoundFile(str(out_file), mode='w', samplerate=sr,
+                      channels=ch, subtype='FLOAT', format='WAV') as dst:
+        pos = 0
+        while pos < n:
+            end = min(pos + block, n)
+            # Per-block accumulators sized to the block; strips may cover only
+            # part of a block (short final strip, partial overlap), so each
+            # contribution adds into its own [lo, hi) slice of the block.
+            acc = np.zeros((end - pos, ch), dtype=np.float64)
+            wacc = np.zeros((end - pos, 1), dtype=np.float64)
+            for i, path in enumerate(strip_files):
+                s = starts[i]
+                e = s + len(fades[i])
+                # does this strip overlap the current output block?
+                if e <= pos or s >= end:
+                    continue
+                # region of the output block this strip covers
+                lo = max(pos, s)
+                hi = min(end, e)
+                src_lo = lo - s
+                src_hi = hi - s
+                # read only the needed slice from the temp file.
+                # SoundFile.read() squeezes mono files to 1-D, which would
+                # broadcast against the (N, 1) weight slice into an
+                # (N, N) allocation (OOM-kill); force 2-D (frames, ch).
+                with sf.SoundFile(str(path)) as h:
+                    h.seek(src_lo)
+                    data = h.read(src_hi - src_lo, dtype='float32', always_2d=True)
+                w_slice = fades[i][src_lo:src_hi, None]
+                acc[lo - pos:hi - pos] += data * w_slice
+                wacc[lo - pos:hi - pos] += w_slice
+            # samples covered by no strip (theoretical; e.g. n beyond the last
+            # strip end) stay zero instead of dividing 0/0.
+            wrote = False
+            if wacc.max() > 0:
+                out_block = np.zeros((end - pos, ch), dtype=np.float32)
+                covered = wacc[:, 0] > 0
+                out_block[covered] = (acc[covered] / wacc[covered]).astype(np.float32)
+                dst.write(out_block)
+                wrote = True
+            if not wrote:
+                dst.write(np.zeros((end - pos, ch), dtype=np.float32))
+            pos = end
+
+
 def _separate_strips(model, wav, sr, device,
                      strip_seconds=45.0, overlap_seconds=10.0,
                      chunk_seconds=10.0, progress=None, apply_kwargs=None,
@@ -332,10 +442,12 @@ def _separate_strips(model, wav, sr, device,
 
     # level-constant crossfade: fade_out (1->0) + fade_in (0->1) sum to 1.0 in the
     # overlap, so acc/wsum preserves level with no seam. (These are smooth stems,
-    # so a linear blend over the 10 s overlap is inaudible.)
-    lin = torch.linspace(0.0, 1.0, overlap, device=device)
-    win_fade_in = lin
-    win_fade_out = 1.0 - lin
+    # so a linear blend over the 10 s overlap is inaudible.) The windows are
+    # ALSO used by the position-aware merge (_merge_strips_by_position), so
+    # they live in module globals via _init_fades to keep the two in lockstep.
+    _init_fades(overlap)
+    win_fade_in = torch.from_numpy(_FADE_IN).to(device)
+    win_fade_out = torch.from_numpy(_FADE_OUT).to(device)
 
     starts = list(range(0, n - strip_len + 1, step))
     if not starts or starts[-1] + strip_len < n:
@@ -357,8 +469,14 @@ def _separate_strips(model, wav, sr, device,
             strip_temp_files.append([])
 
         try:
-            # Process each strip and write to individual temp files (one per strip per source)
-            # Then merge them at the end with proper crossfade overlap
+            # Process each strip and write RAW (unwindowed) audio to individual
+            # temp files (one per strip per source). Windowing happens ONCE, in
+            # the position-aware merge (_merge_strips_by_position), which
+            # applies the fades and normalizes by the summed weights — exact
+            # for any strip geometry (the old design windowed at separation
+            # AND summed naively in the merge, which is only correct when the
+            # strips are on-grid; the flush-to-tail strip's larger overlap
+            # broke it and corrupted the outro).
             for i, s in enumerate(starts):
                 if progress:
                     progress(i, n_strips)
@@ -370,16 +488,10 @@ def _separate_strips(model, wav, sr, device,
                 seg_sources = _separate_audio(model, seg, sr, device,
                                               chunked=False,
                                               apply_kwargs=apply_kwargs)
-                seg_len = seg_sources.shape[2]
-                w = torch.ones(seg_len, device=device)
-                if i > 0:                          # fade in the head (overlap prev strip)
-                    w[:overlap] = win_fade_in[:overlap]
-                if i < n_strips - 1:               # fade out the tail (overlap next strip)
-                    w[-overlap:] = win_fade_out[:overlap]
 
-                # Write each source's strip to its own temp file
+                # Write each source's strip to its own temp file (raw)
                 for src_idx in range(n_src):
-                    strip_data = seg_sources[src_idx].cpu().numpy() * w.cpu().numpy()
+                    strip_data = seg_sources[src_idx].cpu().numpy()
                     # Transpose to (time, channels) for soundfile
                     if strip_data.ndim == 2:
                         strip_data = strip_data.T
@@ -399,71 +511,23 @@ def _separate_strips(model, wav, sr, device,
             if progress:
                 progress(n_strips, n_strips)
 
-            # Merge all strip temp files into final output with proper crossfade
-            # Keep the overlap tail in memory (small: 10s * sr * ch * 4 bytes ≈ 3.5 MB per source)
-            # CRITICAL: strip_data is ALREADY windowed during separation (fade_in at head, fade_out at tail).
-            # The merge should NOT apply windowing again - just sum the already-windowed overlap regions.
-            # In the overlap: strip_{i-1} has fade_out, strip_i has fade_in.
-            # Since fade_out + fade_in = 1 (level-constant), we just add them: overlap_tail + strip_i_head.
+            # Position-aware merge. The OLD sequential merge assumed every strip
+            # begins exactly `overlap` after the accumulated output -- true for
+            # on-grid strips, but the final flush-to-tail strip starts up to
+            # (step - overlap) EARLIER than assumed (its true overlap is larger
+            # than the nominal one). Misplaced content then blended into the
+            # wrong output position and the tail replayed shifted -- the
+            # "glitchy, skips around" outro corruption verified on Open Road
+            # Song (input vs sum-of-stems correlation 0.998 -> -0.02 after
+            # ~175 s). Placing each strip at its ACTUAL start and dividing by
+            # the summed crossfade weights is exact for ANY strip geometry.
             for src_idx, name in enumerate(stem_names):
-                out_file = Path(output_stems_dir) / f"{name}.wav"
-                strip_files = strip_temp_files[src_idx]
+                _merge_strips_by_position(
+                    strip_temp_files[src_idx], starts,
+                    Path(output_stems_dir) / f"{name}.wav",
+                    sr=sr, ch=ch, n=n,
+                )
 
-                with sf.SoundFile(str(out_file), mode='w', samplerate=sr,
-                                  channels=ch, subtype='FLOAT', format='WAV') as dst:
-                    # overlap_tail holds the last 'overlap' samples of the previous strip
-                    # (already windowed with fade_out by the separation step)
-                    overlap_tail = None
-                    total_written = 0
-                    for i, strip_path in enumerate(strip_files):
-                        with sf.SoundFile(strip_path, mode='r') as src:
-                            strip_data = src.read(dtype='float32')
-                            strip_len_samples = strip_data.shape[0]
-
-                            if i == 0:
-                                # First strip: write full (includes fade-out at tail, no fade_in at head)
-                                # But don't write more than n samples total
-                                to_write = min(strip_len_samples, n)
-                                dst.write(strip_data[:to_write])
-                                total_written += to_write
-                                # Save the overlap tail: last 'overlap' samples (already has fade_out applied)
-                                overlap_tail = strip_data[max(0, to_write-overlap):to_write].copy()
-                            else:
-                                if total_written >= n:
-                                    break
-                                # Subsequent strips: overlap region already has:
-                                #   - overlap_tail = strip_{i-1}[-overlap:] * fade_out (already windowed)
-                                #   - strip_data[:overlap] = strip_i[:overlap] * fade_in (already windowed)
-                                # Since fade_out + fade_in = 1, correct reconstruction is just the sum:
-                                mixed = overlap_tail + strip_data[:overlap]
-                                # Overwrite the last overlap samples with the crossfade mix
-                                dst.seek(dst.tell() - overlap)
-                                dst.write(mixed)
-                                # Write remainder of strip (after overlap), but only up to n total
-                                remainder = strip_data[overlap:]
-                                to_write = min(len(remainder), n - total_written)
-                                if to_write > 0:
-                                    dst.write(remainder[:to_write])
-                                    total_written += to_write
-                                # Save new overlap tail: last 'overlap' samples of what we wrote
-                                # For the next crossfade, we need the fade_out portion of this strip
-                                # The remainder starts past the fade_in region, so its tail already has fade_out
-                                if total_written >= overlap:
-                                    if to_write >= overlap:
-                                        # We wrote at least 'overlap' samples of remainder
-                                        # The last 'overlap' samples are the end of remainder (already has fade_out)
-                                        overlap_tail = remainder[to_write-overlap:to_write].copy()
-                                    else:
-                                        # to_write < overlap: tail spans mixed region and remainder
-                                        # mixed already has fade_in+fade_out = 1 (correct level)
-                                        # remainder[:to_write] has w=1 (not yet in fade_out region)
-                                        # We need the tail to be the part that WILL have fade_out applied
-                                        # But since we haven't applied fade_out to remainder yet...
-                                        # Actually: the next strip's overlap will handle this.
-                                        # For now, the tail is the end of mixed + beginning of remainder
-                                        overlap_tail = np.concatenate([mixed[-(overlap-to_write):], remainder[:to_write]])
-                                else:
-                                    overlap_tail = strip_data[max(0, to_write+overlap-overlap):to_write+overlap].copy()
 
             return None  # Files written directly
         finally:
