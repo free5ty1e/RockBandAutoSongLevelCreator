@@ -214,6 +214,16 @@ def midi_to_chart_file(
             # distinct pitch base (Expert 60 / Hard 72 / Medium 84 / Easy 96), so we
             # recover the difficulty from the pitch and express it as a 0-4 lane.
             per_diff: dict[str, list] = {d: [] for d in CHART_DIFFICULTIES}
+            if inst == "GUITAR":
+                # RBN solo markers are pitch-103 notes (start, length = solo
+                # duration). Clone Hero expresses solos as `solo` / `soloend`
+                # Events-section entries; convert them and keep them OUT of the
+                # gem sections.
+                for tick, pitch, sustain in notes:
+                    if pitch == 103:
+                        events.append((tick, 0, "solo"))
+                        events.append((tick + sustain, 0, "soloend"))
+                notes = [n for n in notes if n[1] != 103]
             if inst in ("GUITAR", "BASS"):
                 bases = {"Easy": 60, "Medium": 72, "Hard": 84, "Expert": 96}
                 for tick, pitch, sustain in notes:
@@ -417,6 +427,7 @@ def build_clone_hero_song(
     drum_charts: dict = None,
     keys_charts: dict = None,
     freestyle_drums: bool = False,
+    guitar_solo_sections: list = None,  # [(start_s, end_s), ...]
 ) -> Path:
     """Export a Clone Hero song folder under ``<output_dir>/clone_hero/``.
 
@@ -458,6 +469,7 @@ def build_clone_hero_song(
         drum_charts=drum_charts,
         keys_charts=keys_charts,
         freestyle_drums=freestyle_drums,
+        guitar_solo_sections=guitar_solo_sections,
     )
     # Clone Hero reads the .mid and expects drums in its OWN difficulty-offset
     # format (Easy 60 / Medium 72 / Hard 84 / Expert 96 + lane 0-4), not Rock

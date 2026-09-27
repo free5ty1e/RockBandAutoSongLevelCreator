@@ -300,3 +300,34 @@ ratio ≈ 2.4–2.8 during the solo vs ≈ 0.3–0.7 during rhythm chugging.
 experimental `--guitar-solo-charting` flag the solo regions chart as single
 lead notes (pyin pitch contour, reliable in the monophonic lead register)
 instead of rhythm power chords.
+
+### Guitar solo sections: pitch-103 markers + lead-contour charting (v0.1.20)
+
+**Solo markers (RB3 CON, ground truth from tools/libforge RBMidConverter.cs
+`HandleGuitarBass`):** `const byte SoloMarker = 103` — a note at pitch 103 on
+PART GUITAR whose start tick is the solo start and whose length is the solo
+duration is parsed into `solo_markers` → the CON's solo-scoring sections, so
+the game recognizes and scores the solo separately. `build_instrument_track`
+emits these from `guitar_charts[EXPERT].solo_sections` (always the audio-
+detected regions). Clone Hero has no pitch-103 convention: the CH exporter
+converts them to `solo`/`soloend` Events-section entries and keeps 103 out of
+the gem sections.
+
+**Solo-region charting (`--guitar-solo-charting`):** the lead line is
+recovered from the pyin LEAD CONTOUR inside each region, not from the strum
+backbone — during a held lead note the backbone only fires on the rhythm
+chug underneath, which is why per-strum lead charting showed rhythm wherever
+the soloist held a note. `_lead_notes_in_region` gates on pyin's voiced FLAG
+(NOT voiced_probs: pyin's probability is ~0 for most genuinely-voiced lead
+frames — argument-order gotcha; gating on prob ≥ 0.5 keeps ~13 frames vs
+~4700 with the flag), filters pitches below the rhythm chord ceiling
+(75th pct of the song's chord roots), segments at >120 ms gaps or
+>5-semitone jumps, and preserves the measured sustain (held leads chart as
+real sustains).
+
+**Timeline contract (fixed v0.1.20):** `build_instrument_track`'s
+`time_to_tick` must ALREADY be on the MIDI timeline (count-in included) —
+the old code added `+ count_in_ticks` on top of the already-shifted
+`shifted_time_to_tick`, double-shifting EVERY instrument gem in the CON one
+count-in (~4.3 s) late. The Clone Hero export (count_in_ticks=0) was
+unaffected — which is why CH playtests never caught it.

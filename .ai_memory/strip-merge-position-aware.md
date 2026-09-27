@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 1da62c8c-2a31-4d74-867a-5910bdb836b9
-  modified: 2026-09-19T20:13:47.364Z
+  modified: 2026-09-24T06:01:19.769Z
 ---
 
 Two hard-won findings from the v0.1.19 guitar/stems work:
@@ -36,3 +36,14 @@ irregular geometry (tests/test_stems_strip_merge.py).
    `--guitar-solo-charting` (experimental) charts solo regions as single
    lead notes via pyin in the lead register. Related:
    [[guitar-strum-backbone-approach]].
+
+3. **CON instrument gems were double-shifted by the count-in (v0.1.20 fix).**
+   `generate_vocal_midi` passes `shifted_time_to_tick` (already includes
+   `count_in_ticks`) into `build_instrument_track`, which historically ALSO
+   added `+ count_in_ticks` — every CON instrument gem shipped ~4.3 s late.
+   Clone Hero (count_in_ticks=0) was unaffected, so CH playtests couldn't
+   catch it. Contract now: the tick function is on the MIDI timeline;
+   `build_instrument_track` adds nothing. When adding new event types to
+   instrument tracks (e.g. solo markers at pitch 103), do NOT add
+   count_in_ticks inside — and verify placement against a known gem in the
+   resulting file.

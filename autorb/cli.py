@@ -255,7 +255,8 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
                                           solo_charting=guitar_solo_charting)
         guitar_charts = create_all_difficulties(guitar_expert, "guitar")
         solo_regions = guitar_expert.metadata.get("solo_regions") or []
-        if solo_charting:
+        guitar_solo_sections = list(guitar_expert.solo_sections)  # [(start_s, end_s), ...]
+        if guitar_solo_charting:
             click.echo(f"  Guitar transcription complete "
                        f"(solo charting ON; detected solo regions: "
                        f"{[(round(a,1), round(b,1)) for a, b in solo_regions]}).")
@@ -266,9 +267,13 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
                           f"use --guitar-solo-charting to chart them as lead)"
                           if solo_regions else "") + ".")
     except Exception as e:
-        click.echo(f"  Warning: guitar transcription failed: {e}", err=True)
+        import traceback
+        click.echo("  ERROR: guitar transcription failed — aborting (a placeholder "
+                   "guitar chart is never shippable):", err=True)
+        traceback.print_exc()
         guitar_charts = None
-    
+        return 1
+
     click.echo("  Transcribing bass...")
     try:
         bass_expert = transcribe_bass(stems["bass"], list(zip(beat_times, dynamic_bpms)), song_end)
@@ -350,6 +355,7 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             drum_charts=drum_charts,
             keys_charts=keys_charts,
             freestyle_drums=freestyle_drums,
+            guitar_solo_sections=guitar_solo_sections,
         )
 
         # 3. Generate songs.dta configuration metadata
@@ -415,6 +421,7 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             drum_charts=drum_charts,
             keys_charts=keys_charts,
             freestyle_drums=freestyle_drums,
+            guitar_solo_sections=guitar_solo_sections,
         )
         from autorb.export.alignment_report import build_lyrics_srt, build_alignment_report
         build_lyrics_srt(synced_output_json, out_path / "lyrics_preview.srt")
@@ -450,6 +457,7 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
                 drum_charts=drum_charts,
                 keys_charts=keys_charts,
                 freestyle_drums=freestyle_drums,
+                guitar_solo_sections=guitar_solo_sections,
             )
             click.echo(f"Clone Hero song exported: {ch_folder}")
             click.echo("Load it in Clone Hero (Songs folder -> Scan Songs) to playtest "
@@ -493,6 +501,17 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
                                f"cell_err={rep['rhythm_cell_error']} "
                                f"pitch_dir_err={rep['pitch_direction_error']} "
                                f"coverage R/P={rep['coverage_recall']}/{rep['coverage_precision']}")
+                    if not rep["pass"]:
+                        # A failed validation means the exported guitar chart
+                        # does not match the official tabs (or transcription
+                        # collapsed to the placeholder — coverage 0). Shipping
+                        # such a chart silently wastes a playtest, so refuse.
+                        click.echo(
+                            "  ERROR: guitar validation FAILED — the exported chart "
+                            "does not match the tab guide. Refusing to hand off this "
+                            "build; see guitar_validation.json for the breakdown.",
+                            err=True)
+                        return 1
                 else:
                     click.echo(f"  Validation did not produce a report "
                                f"(exit {res.returncode}); see guitar_validation.json", err=True)

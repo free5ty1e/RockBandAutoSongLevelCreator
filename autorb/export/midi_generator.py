@@ -225,10 +225,11 @@ def build_instrument_track(
     instrument: str,
     count_in_ticks: int,
     time_to_tick,
+    solo_sections: list = None,  # [(start_s, end_s), ...]
 ) -> bytes:
     """
     Build a Rock Band instrument track (GUITAR, BASS, DRUMS, KEYS) containing all 4 difficulties.
-    
+
     Rock Band (ForgeTool) stores all difficulties in a single track, distinguished by
     pitch ranges (a packed MIDI where every instrument uses the same scheme):
     - Expert: base 96
@@ -237,13 +238,21 @@ def build_instrument_track(
     - Easy: base 60
     Each note's pitch is ``base + lane`` (lane 0-4); the raw 35-59 drum sound pitches and
     the true key pitches are NOT valid here (they crash ForgeTool's MIDI converter).
-    
+
+    Solo sections (RBN authoring convention): each solo is a note at pitch 103
+    whose start tick is the solo start and whose length is the solo duration.
+    LibForge's ``HandleGuitarBass`` parses pitch 103 into ``solo_markers`` ->
+    the CON's solo-scoring sections, so the game recognizes and scores the solo
+    separately (verified against tools/libforge RBMidConverter.cs, where
+    ``const byte SoloMarker = 103``). Only emitted for guitar.
+
     Args:
         charts: Dict mapping difficulty -> InstrumentChart
         instrument: 'guitar', 'bass', 'drums', 'keys'
         count_in_ticks: Count-in offset
         time_to_tick: Function to convert seconds to MIDI ticks
-    
+        solo_sections: [(start_s, end_s), ...] — pitch-103 solo markers (guitar only)
+
     Returns:
         MTrk bytes for the instrument track (contains all 4 difficulties)
     """
@@ -305,14 +314,21 @@ def build_instrument_track(
         notes = sorted(chart.notes, key=lambda n: n.time)
         
         for note in chart.notes:
-            target_start = time_to_tick(note.time) + count_in_ticks
+            # NOTE: ``time_to_tick`` is expected to be ALREADY on the MIDI
+            # timeline (i.e. include any count-in shift — the production
+            # caller passes ``shifted_time_to_tick``). Do NOT add
+            # ``count_in_ticks`` again: the pre-existing double-shift put
+            # every instrument gem ~one count-in late in the CON (the Clone
+            # Hero export uses count_in_ticks=0 and was unaffected, which is
+            # why CH playtests looked fine while the CON was shifted).
+            target_start = time_to_tick(note.time)
             # Derive the sustain in ticks from the REAL tempo map (time_to_tick),
             # NOT a hardcoded 120 BPM. The old `note.length * 480 * 120 / 60`
             # conversion silently stretched/compressed every sustain for any song
             # not at exactly 120 BPM (e.g. ~76 BPM made a 2.0s-cap render as
             # ~3.14s and bled into the next same-lane note).
             if note.length > 0:
-                end_tick = time_to_tick(note.time + note.length) + count_in_ticks
+                end_tick = time_to_tick(note.time + note.length)
                 target_end = end_tick
                 duration = end_tick - target_start
             else:
@@ -345,6 +361,19 @@ def build_instrument_track(
                 pitch = base + lane
             
             all_notes.append((target_start, pitch, note.velocity, duration, diff))
+
+    # Solo markers (guitar only, RBN convention: pitch 103 spanning the solo).
+    # LibForge HandleGuitarBass: `else if (e.Key == SoloMarker) solo_markers.Add(
+    #   { StartTicks = e.StartTicks, LengthTicks = e.LengthTicks })` -> the
+    # CON's solo-scoring sections. Velocity 100, difficulty tag 'expert' (the
+    # tag is only for the difficulty-order sort; markers are not gems).
+    if instrument == 'guitar' and solo_sections:
+        for solo_start_s, solo_end_s in solo_sections:
+            # time_to_tick is already on the MIDI timeline (see note above).
+            s_tick = time_to_tick(solo_start_s)
+            e_tick = time_to_tick(solo_end_s)
+            dur = max(48, e_tick - s_tick)
+            all_notes.append((s_tick, 103, 100, dur, 'expert'))
 
     # Defensive passes to guarantee a legal Rock Band instrument track:
     #   1. Collapse exact (tick, pitch) duplicates (a note charted twice on the
@@ -415,6 +444,7 @@ def build_all_instrument_tracks(
     freestyle_drums: bool = False,
     count_in_ticks: int = 0,
     time_to_tick = None,
+    guitar_solo_sections: list = None,  # [(start_s, end_s), ...]
 ) -> list[bytes]:
     """
     Build all 4 instrument tracks (DRUMS, BASS, GUITAR, KEYS), each containing 4 difficulties.
@@ -425,8 +455,10 @@ def build_all_instrument_tracks(
     note (drum freestyle throughout the song) instead of using ``drum_charts``.
     """
     if time_to_tick is None:
+        # Contract: the tick function is on the MIDI timeline (count-in
+        # included). Shift the default to match.
         def time_to_tick(sec):
-            return int(sec * 480 * 120 / 60)
+            return int(sec * 480 * 120 / 60) + count_in_ticks
 
     tracks = []
 
@@ -435,7 +467,8 @@ def build_all_instrument_tracks(
     else:
         tracks.append(build_instrument_track(drum_charts or {}, 'drums', count_in_ticks, time_to_tick))
     tracks.append(build_instrument_track(bass_charts or {}, 'bass', count_in_ticks, time_to_tick))
-    tracks.append(build_instrument_track(guitar_charts or {}, 'guitar', count_in_ticks, time_to_tick))
+    tracks.append(build_instrument_track(guitar_charts or {}, 'guitar', count_in_ticks, time_to_tick,
+                                         solo_sections=guitar_solo_sections))
     tracks.append(build_instrument_track(keys_charts or {}, 'keys', count_in_ticks, time_to_tick))
 
     return tracks
@@ -450,7 +483,8 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
                         bass_charts: dict = None,
                         drum_charts: dict = None,
                         keys_charts: dict = None,  # {diff: InstrumentChart}
-                        freestyle_drums: bool = False) -> Path:
+                        freestyle_drums: bool = False,
+                        guitar_solo_sections: list = None) -> Path:
     """
     Generates a fully compliant Rock Band PART VOCALS MIDI chart from synchronized JSON data.
     Includes PART DRUMS, PART GUITAR, and PART BASS tracks. If instrument charts are provided,
@@ -709,6 +743,7 @@ def generate_vocal_midi(synced_json_path: str | Path, output_dir: Path, song_id:
         freestyle_drums=freestyle_drums,
         count_in_ticks=count_in_ticks,
         time_to_tick=shifted_time_to_tick,
+        guitar_solo_sections=guitar_solo_sections,
     )
     
     # Vocal track (single track, not per-difficulty)

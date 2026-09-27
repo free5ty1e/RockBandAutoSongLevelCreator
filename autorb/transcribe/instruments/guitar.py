@@ -321,6 +321,74 @@ def _note_pitch_at(y: np.ndarray, sr: int, t: float,
     return float(np.median(voiced)) if len(voiced) else None
 
 
+def _lead_notes_in_region(y: np.ndarray, sr: int, start_s: float, end_s: float,
+                          min_midi: float, tempo_map: list,
+                          hop: int = 256) -> list:
+    """Segment the pyin lead contour in [start_s, end_s] into chartable notes.
+
+    Returns [{start, length, midi}] — one entry per lead note — with:
+      * pitch-below-min filtering (rejects rhythm-chord harmonic bleed),
+      * segmentation at >120 ms unvoiced gaps or >5-semitone jumps,
+      * grid snapping (1/16 grid, guitar phase applied by the caller).
+
+    This is the "chart the SOLO" detector for `--guitar-solo-charting`: pyin
+    follows the monophonic lead line (including held notes the strum backbone
+    misses — the rhythm guitar keeps chugging underneath, so onset-based
+    backbones chart rhythm during sustained lead notes, exactly the case the
+    user reported).
+    """
+    import librosa as _lr
+    i0, i1 = int(start_s * sr), int(end_s * sr)
+    seg = y[i0:i1]
+    if len(seg) < int(0.2 * sr):
+        return []
+    # librosa.pyin returns (f0, voiced_flag, voiced_probs). Gate on the FLAG
+    # (pyin's own voiced/unvoiced decision): the probability array is ~0 for
+    # most genuinely-voiced frames on lead guitar, so gating on prob>=0.5
+    # keeps only a handful of frames and decimates the contour.
+    f0, vflag, _vprob = _lr.pyin(seg, fmin=180.0, fmax=1800.0, sr=sr,
+                                 frame_length=2048, hop_length=hop)
+    times = _lr.frames_to_time(np.arange(len(f0)), sr=sr, hop_length=hop) + start_s
+    voiced = (vflag.astype(bool)) & (f0 > 0)
+    notes = []
+    cur = None
+    prev_f = None
+    for t, f, v in zip(times, f0, voiced):
+        midi = 69.0 + 12.0 * np.log2(f / 440.0) if f > 0 else None
+        in_band = v and midi is not None and midi >= min_midi
+        if in_band:
+            if cur is None:
+                cur = {"start": float(t), "end": float(t), "f": [f]}
+                prev_f = f
+            else:
+                jump = abs(12 * np.log2(f / prev_f)) if prev_f else 0.0
+                if t - cur["end"] > 0.12 or jump > 5.0:
+                    notes.append(cur)
+                    cur = {"start": float(t), "end": float(t), "f": [f]}
+                else:
+                    cur["end"] = float(t)
+                    cur["f"].append(f)
+                prev_f = f
+        else:
+            if cur is not None and t - cur["end"] > 0.12:
+                notes.append(cur)
+                cur = None
+                prev_f = None
+    if cur is not None:
+        notes.append(cur)
+    out = []
+    for n in notes:
+        dur = n["end"] - n["start"]
+        if dur < 0.06:
+            continue
+        out.append({
+            "start": n["start"],
+            "length": float(dur),
+            "midi": float(69.0 + 12.0 * np.log2(np.median(n["f"]) / 440.0)),
+        })
+    return out
+
+
 def _transcribe_guitar_rhythm(
     stem_path: Path,
     tempo_map: list,
@@ -347,9 +415,14 @@ def _transcribe_guitar_rhythm(
        tab's 5th shapes. Sustain runs until the next strum (capped at 2 s).
 
     With ``solo_charting=True``, detected lead-solo regions
-    (``_detect_solo_regions``) are charted as SINGLE notes whose lane follows
-    the lead pitch contour (``_note_pitch_at`` pyin) instead of the rhythm
-    power chords underneath.
+    (``_detect_solo_regions``) are charted from the pyin LEAD CONTOUR
+    (``_lead_notes_in_region``): the solo line is monophonic in the lead
+    register, so pyin tracks it reliably (including HELD notes the strum
+    backbone completely misses while the rhythm guitar chugs underneath —
+    the "soloist holding notes" case where the old per-strum approach
+    charted rhythm instead). Contour notes above the rhythm chord band are
+    segmented (gap >120 ms or >5-semitone jump = new note), grid-snapped,
+    and charted as single notes.
     """
     import librosa as _lr
     from .difficulty import ChartNote, _snap
@@ -425,59 +498,96 @@ def _transcribe_guitar_rhythm(
         return int(np.clip(round(frac * 4.0), 0, 4))
 
     # --- Solo detection (lead vs. rhythm). Always computed (the regions are
-    # also chart solo_sections metadata); with solo_charting=True the strums
-    # INSIDE a solo region are charted as single lead notes following the
-    # pyin pitch contour instead of the rhythm power chord.
+    # also chart solo_sections metadata); with solo_charting=True the lead
+    # line INSIDE a solo region is charted from the pyin contour
+    # (_lead_notes_in_region) — single notes with real sustains, including
+    # HELD lead notes the strum backbone misses while rhythm chugs below.
     solo_regions = _detect_solo_regions(y, sr, strums)
+
+    # The lead must sit above the rhythm chord band to be charted as lead
+    # (filters chord-harmonic bleed out of the contour).
+    _rhythm_ceiling = float(np.percentile(_valid_roots, 75))
 
     def _in_solo(t: float) -> bool:
         return any(a <= t <= b for a, b in solo_regions)
 
-    expert_notes = []
-    for s, root in zip(strums, roots):
-        if root <= 0:
-            continue
-        if solo_charting and _in_solo(s):
-            # Lead note: lane follows the soloist's melodic pitch (pyin in the
-            # lead register). Falls back to the root lane when pyin fails.
-            hz = _note_pitch_at(y, sr, s)
-            lane = None
-            if hz:
-                lead_midi = 69.0 + 12.0 * np.log2(hz / 440.0)
-                # rank the lead pitch against the song's chord levels for
-                # consistency, then clamp: leads sit above the chords, so a
-                # lead at/below the highest chord level maps to the top lane.
-                if lead_midi > _levels[-1]:
-                    frac = min(1.0, (lead_midi - _levels[0]) /
-                               max(_levels[-1] - _levels[0], 1.0))
-                    lane = int(np.clip(round(frac * 4.0), 0, 4))
-                else:
-                    lane = 4  # lead inside/below the chord band: top lane
-            if lane is None:
-                lane = _root_to_lane(root)
-            expert_notes.append({
-                "time": float(s), "lanes": [lane], "root": float(root),
-            })
-            continue
-        lane = _root_to_lane(root)
-        # power chord: root lane + the fifth above (clamped to the highway)
-        lane5 = min(4, lane + 2)
-        if lane5 == lane:
-            lanes = [lane]
-        else:
-            lanes = sorted([lane, lane5])
-        expert_notes.append({
-            "time": float(s), "lanes": lanes, "root": float(root),
-        })
+    lead_notes = []
+    if solo_charting and solo_regions:
+        for a, b in solo_regions:
+            lead_notes.extend(_lead_notes_in_region(y, sr, a, b, _rhythm_ceiling,
+                                                    tempo_map))
+        lead_notes.sort(key=lambda n: n["start"])
 
-    # 4. build ChartNotes: sustain to next strum (cap 2 s), power chords as
-    # 2-lane chords with is_chord linkage.
+    expert_notes = []
+    if solo_charting and lead_notes:
+        # Chart the lead contour in solo regions; rhythm strums OUTSIDE them.
+        lead_idx = 0
+        for s, root in zip(strums, roots):
+            # skip rhythm strums that fall inside a solo region
+            if root <= 0 or _in_solo(s):
+                continue
+            lane = _root_to_lane(root)
+            lane5 = min(4, lane + 2)
+            lanes = [lane] if lane5 == lane else sorted([lane, lane5])
+            expert_notes.append({"time": float(s), "lanes": lanes,
+                                 "root": float(root)})
+        # lead notes: single gems, lane monotonic in pitch across the song's
+        # lead range, sustain = the held note's real duration.
+        _lead_midis = np.array([n["midi"] for n in lead_notes])
+        _llo = float(np.percentile(_lead_midis, 5))
+        _lhi = float(np.percentile(_lead_midis, 95))
+        if _lhi - _llo < 2.0:
+            _lhi = _llo + 2.0
+        for n in lead_notes:
+            frac = (n["midi"] - _llo) / (_lhi - _llo)
+            lane = int(np.clip(round(frac * 4.0), 0, 4))
+            t = _snap_to_grid_phased(n["start"], tempo_map, 4, phase)
+            expert_notes.append({"time": t, "lanes": [lane],
+                                 "root": float(n["midi"]),
+                                 "length": float(min(n["length"], 4.0))})
+        expert_notes.sort(key=lambda r: r["time"])
+        # de-duplicate lead/rhythm collisions at the same slot (keep lead)
+        _seen_slots = {}
+        for r in expert_notes:
+            k = round(r["time"], 3)
+            if k in _seen_slots:
+                r_prev = _seen_slots[k]
+                if len(r["lanes"]) == 1 and len(r_prev["lanes"]) > 1:
+                    # lead single note wins over a rhythm chord at same slot
+                    r_prev["lanes"] = r["lanes"]
+                    r_prev["root"] = r["root"]
+                    r_prev["length"] = r.get("length", 0.08)
+                continue
+            _seen_slots[k] = r
+        expert_notes = list(_seen_slots.values())
+    else:
+        for s, root in zip(strums, roots):
+            if root <= 0:
+                continue
+            lane = _root_to_lane(root)
+            # power chord: root lane + the fifth above (clamped to the highway)
+            lane5 = min(4, lane + 2)
+            if lane5 == lane:
+                lanes = [lane]
+            else:
+                lanes = sorted([lane, lane5])
+            expert_notes.append({
+                "time": float(s), "lanes": lanes, "root": float(root),
+            })
+
+    # 4. build ChartNotes: sustain to next strum (cap 2 s; lead notes keep
+    # their measured sustain, also capped), power chords as 2-lane chords
+    # with is_chord linkage.
     notes = []
     for k, rec in enumerate(expert_notes):
         t = rec["time"]
         lanes = rec["lanes"]
         nxt = expert_notes[k + 1]["time"] if k + 1 < len(expert_notes) else song_end
-        length = float(np.clip(nxt - t - 0.02, 0.08, 2.0))
+        if "length" in rec:
+            # lead note: the pyin-measured hold (capped at the next gem)
+            length = float(np.clip(rec["length"], 0.08, max(0.08, nxt - t - 0.02)))
+        else:
+            length = float(np.clip(nxt - t - 0.02, 0.08, 2.0))
         chord = len(lanes) > 1
         members = []
         for lane in lanes:
