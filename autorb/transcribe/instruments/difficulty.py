@@ -253,6 +253,25 @@ def _ensure_lane_consistency(expert_notes, reduced_notes, tempo_map, difficulty)
 # Fretted instruments (guitar / bass / keys)
 # --------------------------------------------------------------------------
 
+def _single_note_slots(notes):
+    """Force one note per time slot (bass: chords are not charted).
+
+    Keeps the lowest-lane note at each slot and clears chord flags — the RBN
+    Guitar/Bass authoring rule is that bass is essentially single-note; any
+    simultaneous notes are treated as artifacts.
+    """
+    slots = {}
+    for n in sorted(notes, key=lambda x: (x.time, x.lane)):
+        k = round(n.time, 4)
+        if k not in slots:
+            slots[k] = n
+    out = sorted(slots.values(), key=lambda n: n.time)
+    for n in out:
+        n.is_chord = False
+        n.chord_notes = []
+    return out
+
+
 def _reduce_fretted(notes, tempo_map, difficulty, all_lanes: bool):
     """Reduce a fretted (guitar/bass/keys) Expert chart to ``difficulty``.
 
@@ -526,6 +545,11 @@ class DifficultyReducer:
                                Difficulty.HARD, all_lanes)
         hard = _ensure_lane_consistency(expert_chart.notes, hard,
                                         expert_chart.tempo_map, Difficulty.HARD)
+        # BASS IS SINGLE-NOTE (RBN Guitar/Bass authoring: bass chords are
+        # super-rare, 3-note bass chords unheard of). Defense in depth: even
+        # if a chart path passes chords in, every difficulty stays single-note.
+        if self.instrument == "bass":
+            hard = _single_note_slots(hard)
         hard_chart = self._wrap(hard, expert_chart, "hard")
         if target == Difficulty.HARD:
             return hard_chart
@@ -536,6 +560,8 @@ class DifficultyReducer:
         # orange / certain 2-note pairs), and forcing every Expert lane into
         # Medium would make Medium denser than Hard, inverting the difficulty
         # ordering. Hard and Easy still get lane-consistency below.
+        if self.instrument == "bass":
+            medium = _single_note_slots(medium)
         medium_chart = self._wrap(medium, expert_chart, "medium")
         if target == Difficulty.MEDIUM:
             return medium_chart
@@ -543,6 +569,8 @@ class DifficultyReducer:
                                Difficulty.EASY, all_lanes)
         easy = _ensure_lane_consistency(expert_chart.notes, easy,
                                         expert_chart.tempo_map, Difficulty.EASY)
+        if self.instrument == "bass":
+            easy = _single_note_slots(easy)
         return self._wrap(easy, expert_chart, "easy")
 
     def _wrap(self, notes, src, diff):

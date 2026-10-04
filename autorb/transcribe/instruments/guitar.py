@@ -1024,6 +1024,17 @@ def _transcribe_fretted(
                 continue
             seen_lanes.add(r["lane"])
             unique.append(r)
+        # BASS IS SINGLE-NOTE ONLY (Rock Band authoring rule, see
+        # llm-wiki-kb/difficulty_charting.md): chords are super-rare on bass
+        # and 3-note bass chords are unheard of. Basic Pitch frequently
+        # reports 2-3 simultaneous tones for one bass pluck (the attack's
+        # harmonics), which grouped into chords — Open Road Song shipped 247
+        # two-note + 46 three-note Expert bass chords. Keep only the LOWEST
+        # pitched tone per group (the bass line's fundamental). Proper
+        # deliberate 2-note bass chords (double-stops) are a future roadmap
+        # item and need detection, not accidental harmonic inclusion.
+        if instrument == "bass":
+            unique = [min(unique, key=lambda r: r["pitch"])]
         qtime = _snap(float(np.median([r["start"] for r in unique])),
                       tempo_map, 2.0 if instrument == "bass" else SNAP_DIVISIONS)
         is_chord = len(unique) > 1
@@ -1098,6 +1109,24 @@ def _transcribe_fretted(
         if n.chord_notes:
             n.chord_notes = [c for c in n.chord_notes if id(c) not in _dropped]
     expert_notes = sorted(_cleaned, key=lambda n: (n.time, n.lane))
+
+    # 6b. (BASS) One note per time slot. Bass is single-note (see step 3c);
+    # two different chord-WINDOW groups can still snap to the SAME grid time
+    # on DIFFERENT lanes (both survive step 6 because the key is (time,
+    # lane)). Drop all but the lowest-lane note at each slot. This is the
+    # second half of the bass-chord fix: measured on Open Road Song, 160
+    # same-time multi-lane slots survived to the reducer and re-emerged as
+    # Hard/Medium "chords".
+    if instrument == "bass":
+        _slots = {}
+        for n in expert_notes:
+            k = round(n.time, 4)
+            if k not in _slots or n.lane < _slots[k].lane:
+                _slots[k] = n
+        expert_notes = sorted(_slots.values(), key=lambda n: n.time)
+        for n in expert_notes:
+            n.is_chord = False
+            n.chord_notes = []
 
     solos = _detect_solo_sections(expert_notes, tempo_map)
     bre = _detect_bre_section(expert_notes, song_end)

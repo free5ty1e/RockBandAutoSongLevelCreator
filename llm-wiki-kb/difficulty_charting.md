@@ -269,3 +269,19 @@ decisions worth recording:
 - 5 Lane Keyboard Authoring; Pro Keyboard Authoring (C3)
 - Rock Band chart-format reference (MIDI notes / lane conventions)
 - YARG wiki Difficulty page (confirms Easy 3-fret focus, etc.)
+
+## Bass is single-note (v0.1.21)
+
+RBN Guitar/Bass authoring: bass chords are super-rare (deliberate 2-note
+double-stops only) and 3-note bass chords are unheard of. AutoRB enforces
+single-note bass at every difficulty:
+
+- **Transcriber** (`guitar.py` `_transcribe_fretted`): keeps only the
+  lowest-pitched Basic Pitch tone per chord-window group (one pluck's
+  attack harmonics report 2-3 tones), and step 6b forces one note per
+  quantized time slot (two groups can snap onto the same grid slot with
+  different lanes; the (time, lane) dedup misses that case).
+- **Reducer** (`difficulty.py` `_single_note_slots`): Hard/Medium/Easy are
+  forced to one gem per slot regardless of what Expert contains.
+- Future: deliberate double-stop DETECTION is a roadmap item (spectral
+  two-fundamental evidence at the attack, sustained through the note).
