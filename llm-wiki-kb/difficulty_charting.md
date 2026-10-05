@@ -285,3 +285,21 @@ single-note bass at every difficulty:
   forced to one gem per slot regardless of what Expert contains.
 - Future: deliberate double-stop DETECTION is a roadmap item (spectral
   two-fundamental evidence at the attack, sustained through the note).
+
+## Expert drums on the 1/16 grid (v0.1.22)
+
+Expert drum charts quantize to **1/16**, not 1/8 — 16th-note snare rolls and
+rapid hi-hat/tom runs are Expert content ("we should be playing every note of
+those rolls"). Lower difficulties still thin: the reducer filters Medium to
+the 1/8 grid and Easy to quarters (Hard thins kick/snare accents to quarters
+but keeps hi-hat density). A same-lane faster-than-16th rejection bounds
+detector noise; its min-gap must be computed at each note's LOCAL tempo —
+`_local_bpm(tempo_map, 0.0)` falls back to 120 BPM when the map's first beat
+is at t>0 (0.894s on ORS), which silently doubled the gap and ate every
+second hit of a 172 BPM 16th roll.
+
+## Single-note bass: holds cap to the next attack on ANY lane (v0.1.22)
+
+Per-lane sustain capping is wrong for single-note bass — a lane-1 hold can
+bleed across a lane-3 gem (85 overlaps on the shipped ORS chart). Bass is
+ONE timeline: cap each hold to the next attack regardless of lane.

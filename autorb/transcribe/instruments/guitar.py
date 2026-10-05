@@ -1056,20 +1056,38 @@ def _transcribe_fretted(
     # 4. Cap sustains so a held note never bleeds into the next same-lane note,
     #    and never exceeds a sane maximum ring.
     # Bass holds can be much longer than guitar; guitar chords rarely exceed 2s.
+    # BASS IS SINGLE-NOTE: since only one gem sounds at a time, a hold must
+    # also end before the NEXT NOTE ON ANY LANE (the old per-lane cap let a
+    # lane-1 sustain bleed across a lane-3 gem — 85 overlapping-sustain pairs
+    # measured on the shipped Open Road Song chart).
     max_hold = 8.0 if instrument == "bass" else 2.0
     min_note_len = 0.04 if instrument == "guitar" else 0.03  # 40ms guitar, 30ms bass
-    for lane in range(5):
-        lane_notes = [n for n in expert_notes if n.lane == lane]
-        for k in range(len(lane_notes) - 1):
-            nxt = lane_notes[k + 1].time
-            max_len = max(0.0, nxt - lane_notes[k].time - 0.02)
-            if lane_notes[k].length > max_len:
-                lane_notes[k].length = max_len
-        for n in lane_notes:
+    if instrument == "bass":
+        # single-note timeline: cap each hold to the next attack (any lane)
+        by_time = sorted(expert_notes, key=lambda n: n.time)
+        for k in range(len(by_time) - 1):
+            nxt = by_time[k + 1].time
+            max_len = max(0.0, nxt - by_time[k].time - 0.02)
+            if by_time[k].length > max_len:
+                by_time[k].length = max_len
+        for n in by_time:
             if n.length > max_hold:
                 n.length = max_hold
             if 0 < n.length < min_note_len:
                 n.length = 0.0
+    else:
+        for lane in range(5):
+            lane_notes = [n for n in expert_notes if n.lane == lane]
+            for k in range(len(lane_notes) - 1):
+                nxt = lane_notes[k + 1].time
+                max_len = max(0.0, nxt - lane_notes[k].time - 0.02)
+                if lane_notes[k].length > max_len:
+                    lane_notes[k].length = max_len
+            for n in lane_notes:
+                if n.length > max_hold:
+                    n.length = max_hold
+                if 0 < n.length < min_note_len:
+                    n.length = 0.0
 
     # 5. Expert HOPO pass: a non-chord, non-open note that follows the previous
     #    note on an adjacent lane within 120 ms (same direction) becomes a HOPO.

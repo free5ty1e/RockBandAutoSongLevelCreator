@@ -90,10 +90,16 @@ def transcribe_drums(
             stem_path, mixed_audio_path, other_stem_path, tempo_map, song_end, sr
         )
 
-    # Grid-quantize to 1/8 notes: Rock Band drum charts live on the beat grid,
-    # and the difficulty reduction below assumes grid-aligned hits.
+    # Grid-quantize Expert to 1/16 notes. The old 1/8 snap flattened real
+    # 16th-note snare rolls and rapid hi-hat/tom/cymbal runs into sparser
+    # on-beat hits (user report: "we should be playing every note of those
+    # snare rolls"). ADTOF's frame-level timestamps carry sub-8th timing
+    # (measured: 8 rapid-snare runs on Open Road Song, incl. a 9-hit roll
+    # ~142.4-143.2s at 16th spacing); 1/16 preserves them while still
+    # quantizing away onset jitter. Lower difficulties are reduced to
+    # coarser grids by create_all_difficulties, so only Expert gets denser.
     for n in expert_notes:
-        n.time = _snap(n.time, tempo_map, 2)
+        n.time = _snap(n.time, tempo_map, 4)
 
     # De-duplicate same-lane hits that landed on the same grid slot.
     expert_notes = sorted(expert_notes, key=lambda n: (n.time, n.lane))
@@ -105,6 +111,27 @@ def transcribe_drums(
         seen.add(key)
         deduped.append(n)
     expert_notes = deduped
+
+    # 7a. Reject rolls faster than 1/16 — a human cannot play 32nds with two
+    # sticks on one pad; hits closer than a 16th-note gap on the SAME lane are
+    # detector noise (already mostly deduped). Anything on two ADJACENT 16th
+    # slots stays (that's a real 16th roll). The 16th length varies with the
+    # drift-correct tempo map, so the gap is measured at EACH NOTE's local
+    # tempo (the roll at 142 s on Open Road Song sits at ~172 BPM where a 16th
+    # is 0.087 s — using the opening 161.5 BPM tempo discarded every second
+    # hit of the roll).
+    if tempo_map:
+        from .difficulty import _beat_dur
+        kept_by_lane = {lane: [] for lane in range(5)}
+        for n in sorted(expert_notes, key=lambda x: (x.lane, x.time)):
+            seq = kept_by_lane[n.lane]
+            if seq:
+                min_gap = _beat_dur(tempo_map, seq[-1].time) / 4.0 * 0.85
+                if n.time - seq[-1].time < min_gap:
+                    continue
+            seq.append(n)
+        expert_notes = sorted([n for seq in kept_by_lane.values() for n in seq],
+                              key=lambda x: (x.time, x.lane))
 
     # 7b. Rock Band does NOT support fully-authored double bass (alternating
     # pedal). Author only what a single foot can play.
