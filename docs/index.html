@@ -54,13 +54,20 @@
 
   .drop { border:2px dashed var(--border); border-radius:var(--radius);
     padding:22px 14px; text-align:center; color:var(--dim); cursor:pointer;
-    transition: border-color .15s, background .15s; margin-bottom:10px; }
+    transition: border-color .15s, background .15s; margin-bottom:10px;
+    display:block; }
   .drop:hover, .drop.hover { border-color:var(--accent);
     background:rgba(249,115,22,.06); }
   .drop.has { border-style:solid; border-color:var(--ok); }
   .drop .big { font-size:15px; color:var(--text); font-weight:600; }
   .drop small { display:block; margin-top:4px; font-size:12px; }
-  .drop input[type=file] { display:none; }
+  /* Real file inputs live OUTSIDE the clickable zones (a hidden input inside
+     a click-forwarding label is the classic no-chooser bug: the forwarded
+     click bubbles back into the label and the browser suppresses it).
+     Visually hidden but still activatable: 1px, off-screen, not clipped
+     from tab order. */
+  .fileinp { position:absolute; left:-9999px; width:1px; height:1px;
+    opacity:0; overflow:hidden; }
   .filelist { font-size:13px; margin:8px 0 0; padding:0; list-style:none;
     color:var(--ok); }
   .filelist:empty { display:none; }
@@ -210,40 +217,39 @@ python -m webui.server</code></div>
       <p class="hint">Give us the audio — an MP3 (or WAV/FLAC/M4A), or stems
         you already separated. Everything stays on your machine.</p>
 
-      <div class="drop" id="dropAudio" tabindex="0" role="button"
-           aria-label="Choose audio file">
+      <label class="drop" id="dropAudio" for="audio"
+             aria-label="Choose audio file">
         <span class="big">🎵 Choose audio file</span>
         <small>MP3 · WAV · FLAC · M4A · OGG — up to 600 MB</small>
-        <input type="file" id="audio" accept=".mp3,.wav,.flac,.m4a,.ogg,.aac,.wma">
-      </div>
+      </label>
+      <input type="file" id="audio" class="fileinp" accept=".mp3,.wav,.flac,.m4a,.ogg,.aac,.wma">
       <ul class="filelist" id="audioList"></ul>
       <ul class="filelist" id="miscList"></ul>
       <ul class="filelist" id="miscList2"></ul>
 
-      <div class="drop" id="dropStems" tabindex="0" role="button"
-           aria-label="Choose stem files">
+      <label class="drop" id="dropStems" for="stemsFiles"
+             aria-label="Choose stem files">
         <span class="big">🥁 …or pre-separated stems</span>
         <small>drums / bass / other / vocals .wav (guitar / piano optional) —
           skips AI separation. Pick <a href="#" id="pickZip">a .zip</a> or
           <a href="#" id="pickWavs">individual .wav files</a>.</small>
-        <input type="file" id="stemsZip" accept=".zip">
-        <input type="file" id="stemsFiles" accept=".wav" multiple>
-      </div>
+      </label>
+      <input type="file" id="stemsZip" class="fileinp" accept=".zip">
+      <input type="file" id="stemsFiles" class="fileinp" accept=".wav" multiple>
       <ul class="filelist" id="stemsList"></ul>
 
       <div class="row2">
-        <div class="drop" id="dropLrc" tabindex="0" role="button">
+        <label class="drop" id="dropLrc" for="lrc">
           <span class="big">📝 Lyrics <small>(optional)</small></span>
           <small>.lrc file — without it, AI transcribes the words</small>
-          <input type="file" id="lrc" accept=".lrc,.txt">
-        </div>
-        <div class="drop" id="dropArt" tabindex="button" role="button">
+        </label>
+        <input type="file" id="lrc" class="fileinp" accept=".lrc,.txt">
+        <label class="drop" id="dropArt" for="albumArt">
           <span class="big">🖼️ Album art <small>(optional)</small></span>
           <small>PNG / JPG cover</small>
-          <input type="file" id="albumArt" accept=".png,.jpg,.jpeg">
-        </div>
+        </label>
+        <input type="file" id="albumArt" class="fileinp" accept=".png,.jpg,.jpeg">
       </div>
-      <ul class="filelist" id="miscList"></ul>
     </div>
 
     <div class="card">
@@ -267,9 +273,9 @@ python -m webui.server</code></div>
 
       <label class="field">Stem separator
         <select id="separator">
-          <option value="htdemucs_ft" selected>Demucs FT ensemble — best quality (~30 min)</option>
-          <option value="htdemucs">Demucs standard — fast (~5 min)</option>
-          <option value="htdemucs_6s">Demucs 6-stem — adds separate guitar/piano</option>
+          <option value="htdemucs_6s" selected>Demucs 6-stem — separates guitar & piano (validated default)</option>
+          <option value="htdemucs_ft">Demucs FT ensemble — 4 stems, best separation quality (~30 min)</option>
+          <option value="htdemucs">Demucs standard — 4 stems, fast (~5 min)</option>
           <option value="spleeter:5stems">Spleeter 5-stem — adds separate piano</option>
         </select>
       </label>
@@ -403,18 +409,11 @@ const $ = id => document.getElementById(id);
 let pickedAudio = null, pickedLrc = null, pickedArt = null;
 let pickedStemsZip = null, pickedStemFiles = [];
 
-/* wire each drop zone: click opens picker, drop accepts files */
+/* wire each drop zone: the <label for=input> opens the chooser natively on
+   click AND keyboard; JS only handles drag-and-drop + change events. */
 function wireDrop(dropId, inputIds, onFiles) {
   const drop = $(dropId);
   const inputs = inputIds.map(i => $(i));
-  drop.addEventListener("click", e => {
-    if (e.target.closest("a")) return;      // inner links pick their own input
-    inputs[0].click();
-  });
-  drop.addEventListener("keydown", e => {
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault();
-      inputs[0].click(); }
-  });
   inputs.forEach(inp => inp.addEventListener("change", () => {
     onFiles([...inp.files]); refreshGo(); }));
   drop.addEventListener("dragover", e => {
@@ -450,11 +449,13 @@ wireDrop("dropStems", ["stemsZip", "stemsFiles"], fs => {
       ? ("Missing core stems: " + missing.join(", ") + ".wav") : null,
   ]);
 });
-/* the .zip / .wav links inside the stems drop open the matching picker */
+/* The .zip / .wav links inside the stems label route to the right input.
+   They must stop the event before the enclosing <label for=stemsFiles>
+   fires too (preventDefault alone doesn't stop label forwarding). */
 $("pickZip").addEventListener("click", e => { e.preventDefault();
-  $("stemsZip").click(); });
+  e.stopPropagation(); $("stemsZip").click(); });
 $("pickWavs").addEventListener("click", e => { e.preventDefault();
-  $("stemsFiles").click(); });
+  e.stopPropagation(); $("stemsFiles").click(); });
 wireDrop("dropLrc", ["lrc"], fs => {
   pickedLrc = fs.find(f => /\.(lrc|txt)$/i.test(f.name)) || null;
   showFiles("miscList", [], [pickedLrc ? "Lyrics: " + pickedLrc.name : null]);

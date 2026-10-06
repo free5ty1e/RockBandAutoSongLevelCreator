@@ -13,7 +13,10 @@ See .ai_memory/web_interface.md for the architecture.
 """
 
 import io
+import os
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import zipfile
@@ -422,6 +425,67 @@ class TestStaticUI:
         for frag in ('id="connect"', 'id="engineUrl"',
                      'id="revealBtn"'):
             assert frag in html, frag
+
+    def test_drop_zones_are_labels_with_external_inputs(self, client):
+        """The no-file-chooser bug (user report, v0.1.23): the file inputs
+        were CHILDREN of click-forwarding divs, so the forwarded click
+        bubbled back into the handler and the browser suppressed the whole
+        interaction — drag-and-drop was the only way to add files. Contract:
+        every drop zone is a native <label for=...> and its input lives
+        OUTSIDE the label (hidden off-screen, never display:none)."""
+        c, _ = client
+        html = c.get("/").text
+        import re
+        from html.parser import HTMLParser
+
+        class Structure(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.zones = {}     # id -> (tag, for_attr)
+                self.nesting = {}   # input_id -> inside which zone
+                self._zone = None
+                self.inputs = {}    # input_id -> attrs
+
+            def handle_starttag(self, tag, attrs):
+                a = dict(attrs)
+                if tag == "label" and a.get("class", "").startswith("drop"):
+                    self.zones[a.get("id")] = ("label", a.get("for"))
+                    self._zone = a.get("for")
+                elif tag == "input" and a.get("type") == "file":
+                    self.inputs[a.get("id")] = a
+                    if self._zone:
+                        self.nesting[a.get("id")] = self._zone
+                    # style must be off-screen, not display:none
+                    cls = a.get("class", "")
+                    assert "fileinp" in cls, \
+                        f"#{a.get('id')} must use the .fileinp class"
+
+            def handle_endtag(self, tag):
+                if tag == "label" and self._zone is not None:
+                    self._zone = None
+
+        sp = Structure()
+        sp.handle_starttag  # noqa
+        sp.feed(html)
+        assert sp.nesting == {}, \
+            f"file inputs nested inside drop zones: {sp.nesting}"
+        assert set(sp.zones) == {"dropAudio", "dropStems", "dropLrc",
+                                 "dropArt"}
+        for zid, (_tag, for_attr) in sp.zones.items():
+            assert for_attr, f"{zid} is a label without for="
+            assert for_attr in sp.inputs, \
+                f"{zid} points at missing input #{for_attr}"
+
+    def test_default_separator_is_6s(self, client):
+        """User-validated default: htdemucs_6s (drives the guitar chart from
+        the dedicated guitar stem — the configuration the whole validation
+        loop ran on)."""
+        c, _ = client
+        html = c.get("/").text
+        import re
+        m = re.search(r'<option value="([^"]+)" selected>', html)
+        assert m and m.group(1) == "htdemucs_6s", \
+            "web UI default separator must be htdemucs_6s"
         # never fabricates: failures surface
         assert "Failed" in html
 
@@ -518,6 +582,55 @@ class TestCliContract:
 
 # --------------------------------------------------------------- reveal ----
 # (covered in TestRevealUnit above)
+
+
+# ---------------------------------------------- real-browser interaction ----
+# Requires Playwright + headless Chromium (devcontainer has it; plain CI
+# skips). This is the regression test for the reported bug: "clicked on all
+# the areas under section 1 and couldn't get any file choosers to appear".
+def _playwright_available() -> bool:
+    try:
+        import playwright  # noqa: F401
+        from playwright.sync_api import sync_playwright
+        return True
+    except ImportError:
+        return False
+
+
+@pytest.mark.devcontainer
+@pytest.mark.skipif(not _playwright_available(),
+                    reason="playwright not installed (devcontainer test)")
+def test_clicking_every_drop_zone_opens_a_file_chooser():
+    import webui.server as srv  # noqa: F401  (env docs)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "webui.server"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env={**os.environ, "AUTORB_WEBUI_PORT": "7877",
+             "AUTORB_WEBUI_JOBS": tempfile.mkdtemp(prefix="webui_pw_")})
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            errors = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto("http://127.0.0.1:7877/")
+            page.wait_for_selector("#dropAudio", timeout=10000)
+            zones = [("dropAudio", "audio"), ("dropStems", "stemsFiles"),
+                     ("dropLrc", "lrc"), ("dropArt", "albumArt")]
+            for zid, inp in zones:
+                with page.expect_file_chooser(timeout=5000) as fc:
+                    page.click(f"#{zid}", position={"x": 20, "y": 30})
+                fc.value
+            # keyboard: focus the (off-screen) input, Enter opens the chooser
+            page.focus("#audio")
+            with page.expect_file_chooser(timeout=5000):
+                page.keyboard.press("Enter")
+            browser.close()
+            assert not errors, f"page errors: {errors}"
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
 
 
 def test_no_placeholder_statuses_leak():

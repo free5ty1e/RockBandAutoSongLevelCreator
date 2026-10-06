@@ -47,6 +47,13 @@ version = {attr = "autorb.version.__version__"}
 [project.scripts]
 autorb-webui = "webui.server:main"
 
+[tool.pytest.ini_options]
+markers = [
+    # Tests needing the full devcontainer environment (headless browser,
+    # Clone Hero/X11, etc.) — excluded from default CI runs.
+    "devcontainer: needs the devcontainer environment (browser, X11, audio)",
+]
+
 [tool.setuptools]
 packages = ["autorb", "autorb.audio", "autorb.export", "autorb.pitch", "autorb.transcribe", "webui"]
 
