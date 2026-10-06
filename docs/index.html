@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutoRB — Make Your Own Rock Band Chart</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23111'/%3E%3Cpath d='M20 4l-11 13h6l-2 11 11-13h-6z' fill='%23f97316'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0d0d11; --panel: #17171f; --panel2: #1e1e29; --border: #2a2a3a;
+    --text: #e8e8f0; --dim: #9a9aae; --accent: #f97316; --accent2: #fb923c;
+    --ok: #4ade80; --bad: #f87171; --link: #7dd3fc;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f4f4f7; --panel:#fff; --panel2:#f0f0f5; --border:#dcdce6;
+            --text:#1a1a24; --dim:#5a5a70; --link:#0284c7; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 24px 20px 80px; }
+  header { display:flex; align-items:center; gap:14px; margin-bottom:6px; }
+  .logo { width:40px; height:40px; flex:none; }
+  h1 { font-size: 24px; margin: 0; letter-spacing: .5px; }
+  h1 em { color: var(--accent); font-style: normal; }
+  .sub { color: var(--dim); margin: 0 0 22px 54px; font-size: 14px; }
+  .banner { display:none; background:#3b2f14; border:1px solid #a4761e;
+    color:#ffd98a; padding:10px 14px; border-radius:var(--radius);
+    margin:0 0 18px; font-size:14px; }
+  .banner.show { display:block; }
+
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap:18px; }
+  @media (max-width: 860px){ .grid { grid-template-columns: 1fr; } }
+  .card { background:var(--panel); border:1px solid var(--border);
+    border-radius:var(--radius); padding:18px 18px 20px; }
+  .card h2 { font-size:15px; margin:0 0 4px; text-transform:uppercase;
+    letter-spacing:1.2px; color:var(--accent); }
+  .card .hint { color:var(--dim); font-size:13px; margin:0 0 14px; }
+
+  label.field { display:block; margin-bottom:12px; font-size:13px;
+    color:var(--dim); font-weight:600; }
+  label.field input, label.field select, label.field textarea {
+    display:block; width:100%; margin-top:5px; padding:9px 11px;
+    background:var(--panel2); color:var(--text); border:1px solid var(--border);
+    border-radius:7px; font-size:14px;
+  }
+  label.field input:focus, select:focus { outline:2px solid var(--accent);
+    outline-offset:-1px; }
+  .row2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+
+  .drop { border:2px dashed var(--border); border-radius:var(--radius);
+    padding:22px 14px; text-align:center; color:var(--dim); cursor:pointer;
+    transition: border-color .15s, background .15s; margin-bottom:10px; }
+  .drop:hover, .drop.hover { border-color:var(--accent);
+    background:rgba(249,115,22,.06); }
+  .drop.has { border-style:solid; border-color:var(--ok); }
+  .drop .big { font-size:15px; color:var(--text); font-weight:600; }
+  .drop small { display:block; margin-top:4px; font-size:12px; }
+  .drop input[type=file] { display:none; }
+  .filelist { font-size:13px; margin:8px 0 0; padding:0; list-style:none;
+    color:var(--ok); }
+  .filelist:empty { display:none; }
+  .filelist li { word-break:break-all; }
+  .filelist .rej { color:var(--bad); }
+  .drop small a { color: var(--link); text-decoration: underline; }
+
+  .checks { display:grid; gap:9px; }
+  .check { display:flex; align-items:flex-start; gap:9px; font-size:14px;
+    cursor:pointer; }
+  .check input { margin-top:3px; accent-color:var(--accent); width:16px;
+    height:16px; }
+  .check .d { color:var(--dim); font-size:12px; display:block; }
+  .check .badge { font-size:10px; background:var(--accent); color:#141414;
+    border-radius:4px; padding:1px 6px; font-weight:700; margin-left:6px;
+    letter-spacing:.5px; vertical-align:1px; }
+
+  details.adv { margin-top:12px; border-top:1px solid var(--border);
+    padding-top:10px; }
+  details.adv summary { cursor:pointer; color:var(--dim); font-size:13px; }
+  details.adv .row2 { margin-top:10px; }
+  details.adv label.field input { font-size:13px; }
+
+  .btn { display:inline-block; border:none; border-radius:8px; padding:12px 26px;
+    font-size:15px; font-weight:700; cursor:pointer; letter-spacing:.3px; }
+  .btn:disabled { opacity:.45; cursor:not-allowed; }
+  .btn.primary { background:var(--accent); color:#141414; }
+  .btn.primary:hover:not(:disabled) { background:var(--accent2); }
+  .btn.ghost { background:transparent; color:var(--text);
+    border:1px solid var(--border); }
+  .btn.ghost:hover { border-color:var(--accent); color:var(--accent); }
+  .btn.danger { background:transparent; color:var(--bad);
+    border:1px solid var(--bad); }
+  .btn.danger:hover { background:rgba(248,113,113,.12); }
+  .actions { display:flex; gap:12px; margin-top:20px; align-items:center;
+    flex-wrap:wrap; }
+  .err { color:var(--bad); font-size:14px; margin-top:10px; display:none;
+    white-space:pre-wrap; }
+  .err.show { display:block; }
+
+  /* progress */
+  .jobcard { margin-top:22px; }
+  .stage-line { display:flex; justify-content:space-between; align-items:baseline;
+    gap:10px; }
+  #stageName { font-weight:700; font-size:16px; }
+  #jobState { font-size:12px; color:var(--dim); }
+  .bar { height:14px; background:var(--panel2); border-radius:7px;
+    overflow:hidden; margin:10px 0 6px; border:1px solid var(--border); }
+  .bar > div { height:100%; width:0%;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));
+    transition:width .6s ease; border-radius:7px; }
+  .meta-line { display:flex; justify-content:space-between; color:var(--dim);
+    font-size:12px; }
+  #log { background:#08080c; border:1px solid var(--border); color:#b6e3b6;
+    font:12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    border-radius:8px; padding:12px; height:230px; overflow-y:auto;
+    white-space:pre-wrap; word-break:break-all; margin-top:12px; }
+  @media (prefers-color-scheme: light){ #log { color:#1d5c1d; } }
+
+  .results { margin-top:14px; display:none; }
+  .results.show { display:block; }
+  .results h3 { margin:14px 0 8px; font-size:14px; color:var(--accent);
+    text-transform:uppercase; letter-spacing:1px; }
+  .artifacts { display:flex; flex-wrap:wrap; gap:8px; }
+  .artifact { background:var(--panel2); border:1px solid var(--border);
+    padding:7px 12px; border-radius:7px; font-size:13px; }
+  .artifact a { color:var(--link); text-decoration:none; }
+  .artifact a:hover { text-decoration:underline; }
+  .artifact .sz { color:var(--dim); margin-left:6px; font-size:11px; }
+
+  /* connect panel (Pages mode) */
+  .connect { display:none; background:var(--panel); border:1px solid var(--border);
+    border-radius:var(--radius); padding:22px; margin-bottom:20px; }
+  .connect.show { display:block; }
+  .connect h2 { margin:0 0 6px; font-size:18px; }
+  .connect p { color:var(--dim); margin:0 0 14px; font-size:14px; }
+  .connect code, .cmd code { display:block; background:#08080c; color:#8be98b;
+    border:1px solid var(--border); border-radius:8px; padding:12px 14px;
+    font:13px/1.5 ui-monospace, Menlo, Consolas, monospace; overflow-x:auto;
+    margin:8px 0 16px; white-space:pre; }
+  .connect label { font-size:13px; color:var(--dim); font-weight:600; }
+  .connect input { display:block; width:100%; margin-top:5px; padding:9px 11px;
+    background:var(--panel2); color:var(--text); border:1px solid var(--border);
+    border-radius:7px; font-size:14px; }
+  .steps { margin:14px 0 0; padding-left:20px; color:var(--text);
+    font-size:14px; }
+  .steps li { margin-bottom:8px; }
+  .steps b { color:var(--accent); }
+
+  footer { margin-top:36px; color:var(--dim); font-size:12px;
+    border-top:1px solid var(--border); padding-top:14px; }
+  footer a { color:var(--link); }
+  .spinner { display:inline-block; width:14px; height:14px;
+    border:2px solid var(--dim); border-top-color:var(--accent);
+    border-radius:50%; animation:spin 1s linear infinite; vertical-align:-2px;
+    margin-right:6px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <svg class="logo" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#17171f"/><path d="M20 4l-11 13h6l-2 11 11-13h-6z" fill="#f97316"/></svg>
+    <h1>Auto<em>RB</em> — Chart Any Song for Rock Band</h1>
+  </header>
+  <p class="sub">Drop in a song, get a playable Rock Band 3 CON + Clone Hero chart —
+    vocals, guitar, bass, drums & keys, transcribed by AI.</p>
+
+  <div class="banner" id="banner"></div>
+
+  <!-- ================= CONNECT PANEL (GitHub Pages mode) ================= -->
+  <div class="connect" id="connect">
+    <h2>🎛️ Connect to your AutoRB engine</h2>
+    <p>This page is just the control panel. The charting engine — AI stem
+    separation, transcription, packaging — runs <b>on your own computer</b>
+    (your song files never leave your machine). Start it with two commands,
+    then this page lights up:</p>
+    <div class="cmd"><b>Windows (PowerShell):</b><code>git clone https://github.com/free5ty1e/RockBandAutoSongLevelCreator.git
+cd RockBandAutoSongLevelCreator
+pip install -e .
+python -m webui.server</code>
+    <b>macOS / Linux (Terminal):</b><code>git clone https://github.com/free5ty1e/RockBandAutoSongLevelCreator.git
+cd RockBandAutoSongLevelCreator
+pip install -e .
+python -m webui.server</code></div>
+    <p>Requires <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3.11–3.13</a>
+    and <a href="https://ffmpeg.org/download.html" target="_blank" rel="noopener">FFmpeg</a>.
+    Then keep this tab open and point it at the engine:</p>
+    <label>Engine URL
+      <input id="engineUrl" type="text" placeholder="http://127.0.0.1:7860">
+    </label>
+    <ol class="steps">
+      <li><b>Install & start</b> the engine with the commands above.</li>
+      <li>Check the engine URL above (default is fine unless you changed
+        <code>AUTORB_WEBUI_PORT</code>).</li>
+      <li>The form below will activate automatically — or click
+        <b>Retry connection</b>.</li>
+    </ol>
+    <div class="actions"><button class="btn primary" id="retryBtn">Retry connection</button></div>
+  </div>
+
+  <!-- ============================== FORM ================================ -->
+  <div class="grid" id="formGrid">
+    <div class="card">
+      <h2>1 · Your song</h2>
+      <p class="hint">Give us the audio — an MP3 (or WAV/FLAC/M4A), or stems
+        you already separated. Everything stays on your machine.</p>
+
+      <div class="drop" id="dropAudio" tabindex="0" role="button"
+           aria-label="Choose audio file">
+        <span class="big">🎵 Choose audio file</span>
+        <small>MP3 · WAV · FLAC · M4A · OGG — up to 600 MB</small>
+        <input type="file" id="audio" accept=".mp3,.wav,.flac,.m4a,.ogg,.aac,.wma">
+      </div>
+      <ul class="filelist" id="audioList"></ul>
+      <ul class="filelist" id="miscList"></ul>
+      <ul class="filelist" id="miscList2"></ul>
+
+      <div class="drop" id="dropStems" tabindex="0" role="button"
+           aria-label="Choose stem files">
+        <span class="big">🥁 …or pre-separated stems</span>
+        <small>drums / bass / other / vocals .wav (guitar / piano optional) —
+          skips AI separation. Pick <a href="#" id="pickZip">a .zip</a> or
+          <a href="#" id="pickWavs">individual .wav files</a>.</small>
+        <input type="file" id="stemsZip" accept=".zip">
+        <input type="file" id="stemsFiles" accept=".wav" multiple>
+      </div>
+      <ul class="filelist" id="stemsList"></ul>
+
+      <div class="row2">
+        <div class="drop" id="dropLrc" tabindex="0" role="button">
+          <span class="big">📝 Lyrics <small>(optional)</small></span>
+          <small>.lrc file — without it, AI transcribes the words</small>
+          <input type="file" id="lrc" accept=".lrc,.txt">
+        </div>
+        <div class="drop" id="dropArt" tabindex="button" role="button">
+          <span class="big">🖼️ Album art <small>(optional)</small></span>
+          <small>PNG / JPG cover</small>
+          <input type="file" id="albumArt" accept=".png,.jpg,.jpeg">
+        </div>
+      </div>
+      <ul class="filelist" id="miscList"></ul>
+    </div>
+
+    <div class="card">
+      <h2>2 · Song info & options</h2>
+      <p class="hint">This is what shows up in your Rock Band library.</p>
+
+      <label class="field">Artist *
+        <input id="artist" type="text" placeholder="Eve 6" required>
+      </label>
+      <label class="field">Title *
+        <input id="title" type="text" placeholder="Open Road Song" required>
+      </label>
+      <div class="row2">
+        <label class="field">Year
+          <input id="year" type="number" placeholder="1997" min="1900" max="2100">
+        </label>
+        <label class="field">Genre
+          <input id="genre" type="text" placeholder="Rock">
+        </label>
+      </div>
+
+      <label class="field">Stem separator
+        <select id="separator">
+          <option value="htdemucs_ft" selected>Demucs FT ensemble — best quality (~30 min)</option>
+          <option value="htdemucs">Demucs standard — fast (~5 min)</option>
+          <option value="htdemucs_6s">Demucs 6-stem — adds separate guitar/piano</option>
+          <option value="spleeter:5stems">Spleeter 5-stem — adds separate piano</option>
+        </select>
+      </label>
+
+      <div class="checks" style="margin-top:12px">
+        <label class="check"><input type="checkbox" id="buildCloneHero" checked>
+          <span>Export Clone Hero folder
+            <span class="d">Playtest on your computer right away</span></span></label>
+        <label class="check"><input type="checkbox" id="buildPkg">
+          <span>Build PS4 PKG installer
+            <span class="d">For Rock Band 4 Deluxe on a modded PS4</span></span></label>
+        <label class="check"><input type="checkbox" id="freestyleVocals">
+          <span>Freestyle vocals guide lines
+            <span class="d">RB4 freestyle-vocal guide lines (Hard/Expert)</span></span></label>
+        <label class="check"><input type="checkbox" id="freestyleDrums">
+          <span>Freestyle drums
+            <span class="d">Free-play drums (one placeholder note)</span></span></label>
+        <label class="check"><input type="checkbox" id="guitarSoloCharting">
+          <span>Chart lead solos on guitar <span class="badge">EXPERIMENTAL</span>
+            <span class="d">Chart the solo line instead of rhythm during detected solos</span></span></label>
+      </div>
+
+      <details class="adv">
+        <summary>Advanced separation tuning</summary>
+        <div class="row2">
+          <label class="field">FT shifts (1)
+            <input id="ftShifts" type="number" value="1" min="1" max="8">
+          </label>
+          <label class="field">Strip seconds (45)
+            <input id="ftStripSeconds" type="number" value="45" min="10" max="240" step="5">
+          </label>
+          <label class="field">FT segment
+            <input id="ftSegment" type="number" placeholder="auto" min="1" max="60" step="0.5">
+          </label>
+          <label class="field">FT overlap (0.25)
+            <input id="ftOverlap" type="number" value="0.25" min="0" max="0.75" step="0.05">
+          </label>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn primary" id="goBtn" disabled>🎸 Chart my song</button>
+    <span style="color:var(--dim);font-size:13px" id="goHint">
+      Add an audio file (or stems) and fill in artist + title</span>
+    <span class="spinner" id="spin" style="display:none"></span>
+  </div>
+  <div class="err" id="formErr"></div>
+
+  <!-- ============================ PROGRESS ============================== -->
+  <div class="card jobcard" id="jobCard" style="display:none">
+    <div class="stage-line">
+      <span id="stageName">Starting…</span>
+      <span id="jobState">queued</span>
+    </div>
+    <div class="bar"><div id="barFill"></div></div>
+    <div class="meta-line">
+      <span id="pct">0%</span>
+      <span id="elapsed"></span>
+    </div>
+    <div id="log"></div>
+    <div class="actions" style="margin-top:14px">
+      <button class="btn danger" id="cancelBtn">Cancel</button>
+      <button class="btn ghost" id="revealBtn" style="display:none">📂 Show in Explorer</button>
+    </div>
+    <div class="results" id="results">
+      <h3>Your chart is ready</h3>
+      <div class="artifacts" id="artifactList"></div>
+      <h3>What happens next</h3>
+      <ul class="steps">
+        <li><b>Clone Hero:</b> copy the <code>clone_hero/<artist> - <title></code>
+          folder into your Clone Hero <b>Songs</b> folder, then Settings →
+          <b>Scan Songs</b>.</li>
+        <li><b>Rock Band 3 (RPCS3/PS4):</b> copy the <code>.con</code> (or the
+          <code>.pkg</code> if you built one) per your setup's install guide.</li>
+        <li><b>Explore everything:</b> the “Show in Explorer” button above opens
+          the whole output folder — MOGG audio, MIDI chart, lyrics preview,
+          validation report and more.</li>
+      </ul>
+    </div>
+  </div>
+
+  <footer>
+    AutoRB runs the full pipeline locally: Demucs AI stem separation →
+    beat/tempo detection → WhisperX vocal alignment → Basic-Pitch/ADTOF
+    instrument transcription → Rock Band CON packaging. Nothing is uploaded
+    anywhere. <a href="https://github.com/free5ty1e/RockBandAutoSongLevelCreator"
+    target="_blank" rel="noopener">Source & docs on GitHub</a>.
+    <span id="capsLine"></span>
+  </footer>
+</div>
+
+<script>
+"use strict";
+/* ===================== engine URL + connection handling ================= */
+const ON_PAGES = location.protocol === "https:";
+const DEFAULT_ENGINE = "http://127.0.0.1:7860";
+let ENGINE = DEFAULT_ENGINE;
+
+function getEngineUrl() {
+  if (!ON_PAGES) return "";            // same-origin when engine serves us
+  const saved = localStorage.getItem("autorb_engine");
+  return saved || DEFAULT_ENGINE;
+}
+function setEngineUrl(u) {
+  ENGINE = u.replace(/\/+$/, "");
+  if (ON_PAGES) localStorage.setItem("autorb_engine", ENGINE);
+}
+
+async function api(method, path, body) {
+  const url = ENGINE ? ENGINE + path : path;
+  const opts = { method, headers: {} };
+  if (body !== undefined) {
+    if (body instanceof FormData) opts.body = body;
+    else { opts.headers["Content-Type"] = "application/json";
+           opts.body = JSON.stringify(body); }
+  }
+  const r = await fetch(url, opts);
+  let data = null;
+  try { data = await r.json(); } catch (_) {}
+  if (!r.ok) {
+    const msg = (data && (data.detail || data.message)) || ("HTTP " + r.status);
+    throw new Error(msg);
+  }
+  return data;
+}
+
+/* ================================ state ================================= */
+const $ = id => document.getElementById(id);
+let pickedAudio = null, pickedLrc = null, pickedArt = null;
+let pickedStemsZip = null, pickedStemFiles = [];
+
+/* wire each drop zone: click opens picker, drop accepts files */
+function wireDrop(dropId, inputIds, onFiles) {
+  const drop = $(dropId);
+  const inputs = inputIds.map(i => $(i));
+  drop.addEventListener("click", e => {
+    if (e.target.closest("a")) return;      // inner links pick their own input
+    inputs[0].click();
+  });
+  drop.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault();
+      inputs[0].click(); }
+  });
+  inputs.forEach(inp => inp.addEventListener("change", () => {
+    onFiles([...inp.files]); refreshGo(); }));
+  drop.addEventListener("dragover", e => {
+    e.preventDefault(); drop.classList.add("hover"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("hover"));
+  drop.addEventListener("drop", e => {
+    e.preventDefault(); drop.classList.remove("hover");
+    onFiles([...e.dataTransfer.files]); refreshGo(); });
+}
+wireDrop("dropAudio", ["audio"], fs => {
+  pickedAudio = fs.find(f => /\.(mp3|wav|flac|m4a|ogg|aac|wma)$/i.test(f.name)) || null;
+  if (pickedAudio) { pickedStemFiles = []; pickedStemsZip = null; }
+  showFiles("audioList", pickedAudio ? [pickedAudio] : [],
+            [pickedAudio && "Accepted: " + pickedAudio.name]);
+});
+wireDrop("dropStems", ["stemsZip", "stemsFiles"], fs => {
+  const zip = fs.find(f => /\.zip$/i.test(f.name));
+  const wavs = fs.filter(f => /\.wav$/i.test(f.name));
+  if (zip) { pickedStemsZip = zip; pickedAudio = null; pickedStemFiles = []; }
+  else if (wavs.length) {
+    pickedStemFiles = wavs; pickedStemsZip = null; pickedAudio = null;
+  }
+  const names = [];
+  if (pickedStemsZip) names.push("ZIP: " + pickedStemsZip.name);
+  pickedStemFiles.forEach(f => names.push(f.name));
+  const core = ["drums","bass","other","vocals"];
+  const names_set = new Set(pickedStemFiles.map(f =>
+    f.name.toLowerCase().replace(/\.wav$/,"")));
+  const missing = core.filter(c => !names_set.has(c));
+  showFiles("stemsList", [], [
+    names.length ? "Stems: " + names.join(", ") : null,
+    (pickedStemFiles.length && missing.length)
+      ? ("Missing core stems: " + missing.join(", ") + ".wav") : null,
+  ]);
+});
+/* the .zip / .wav links inside the stems drop open the matching picker */
+$("pickZip").addEventListener("click", e => { e.preventDefault();
+  $("stemsZip").click(); });
+$("pickWavs").addEventListener("click", e => { e.preventDefault();
+  $("stemsFiles").click(); });
+wireDrop("dropLrc", ["lrc"], fs => {
+  pickedLrc = fs.find(f => /\.(lrc|txt)$/i.test(f.name)) || null;
+  showFiles("miscList", [], [pickedLrc ? "Lyrics: " + pickedLrc.name : null]);
+});
+wireDrop("dropArt", ["albumArt"], fs => {
+  pickedArt = fs.find(f => /\.(png|jpe?g)$/i.test(f.name)) || null;
+  showFiles("miscList2", [], [pickedArt ? "Album art: " + pickedArt.name : null]);
+});
+
+function showFiles(listId, files, notes) {
+  const ul = $(listId);
+  ul.innerHTML = "";
+  (files || []).forEach(f => {
+    const li = document.createElement("li"); li.textContent = "✓ " + f.name;
+    ul.appendChild(li); });
+  (notes || []).forEach(n => {
+    if (!n) return;
+    const li = document.createElement("li"); li.textContent = n;
+    if (n.startsWith("Skipped") || n.startsWith("Rejected")) li.className = "rej";
+    ul.appendChild(li); });
+  ["dropAudio","dropStems","dropLrc","dropArt"].forEach(id => {
+    const has = (id === "dropAudio" && pickedAudio) ||
+      (id === "dropStems" && (pickedStemsZip || pickedStemFiles.length)) ||
+      (id === "dropLrc" && pickedLrc) || (id === "dropArt" && pickedArt);
+    $(id).classList.toggle("has", !!has);
+  });
+}
+
+/* enable the Go button when we can run */
+function refreshGo() {
+  const hasSong = pickedAudio || pickedStemsZip || pickedStemFiles.length;
+  const ok = hasSong && $("artist").value.trim() && $("title").value.trim();
+  $("goBtn").disabled = !ok;
+  $("goHint").textContent = !hasSong
+    ? "Add an audio file (or stems) and fill in artist + title"
+    : (!ok ? "Fill in artist + title" :
+       "Ready — roughly 10–40 min on a typical laptop");
+}
+$("artist").addEventListener("input", refreshGo);
+$("title").addEventListener("input", refreshGo);
+
+/* ================================ submit ================================ */
+let activeJobId = null, pollTimer = null;
+
+$("goBtn").addEventListener("click", async () => {
+  hideErr(); setBusy(true);
+  try {
+    // 1. upload files
+    const fd = new FormData();
+    if (pickedAudio) fd.append("audio", pickedAudio);
+    if (pickedLrc) fd.append("lrc", pickedLrc);
+    if (pickedArt) fd.append("album_art", pickedArt);
+    if (pickedStemsZip) fd.append("stems_zip", pickedStemsZip);
+    pickedStemFiles.forEach(f => fd.append("stems_files", f));
+    const up = await api("POST", "/api/upload", fd);
+
+    // 2. start the job with options
+    const opts = {
+      artist: $("artist").value.trim(),
+      title: $("title").value.trim(),
+      year: $("year").value || null,
+      genre: $("genre").value || null,
+      separator: $("separator").value,
+      build_clone_hero: $("buildCloneHero").checked,
+      build_pkg: $("buildPkg").checked,
+      generate_freestyle_vocals: $("freestyleVocals").checked,
+      freestyle_drums: $("freestyleDrums").checked,
+      guitar_solo_charting: $("guitarSoloCharting").checked,
+    };
+    if ($("ftShifts").value) opts.ft_shifts = +$("ftShifts").value;
+    if ($("ftStripSeconds").value) opts.ft_strip_seconds = +$("ftStripSeconds").value;
+    if ($("ftSegment").value) opts.ft_segment = +$("ftSegment").value;
+    if ($("ftOverlap").value) opts.ft_overlap = +$("ftOverlap").value;
+
+    await api("POST", `/api/jobs/${up.job_id}/start`, { options: opts });
+    activeJobId = up.job_id;
+    $("jobCard").style.display = "";
+    $("results").classList.remove("show");
+    $("revealBtn").style.display = "none";
+    $("cancelBtn").style.display = "";
+    $("log").textContent = "";
+    startPolling();
+  } catch (e) {
+    showErr(e.message || String(e));
+  } finally { setBusy(false); }
+});
+
+function setBusy(b) {
+  $("spin").style.display = b ? "" : "none";
+  $("goBtn").disabled = b;
+}
+function showErr(t) { const el = $("formErr"); el.textContent = "⚠ " + t;
+  el.classList.add("show"); }
+function hideErr() { $("formErr").classList.remove("show"); }
+
+/* =============================== polling ================================ */
+function startPolling() {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(poll, 1500);
+  poll();
+}
+async function poll() {
+  if (!activeJobId) return;
+  let j;
+  try { j = await api("GET", `/api/jobs/${activeJobId}`); }
+  catch (e) { return; /* transient; keep trying */ }
+  $("jobState").textContent = j.status;
+  $("stageName").textContent = j.stage || j.status;
+  const pct = Math.round((j.progress || 0) * 100);
+  $("barFill").style.width = pct + "%";
+  $("pct").textContent = pct + "%";
+  if (j.started_at) {
+    const end = j.finished_at || Date.now()/1000;
+    const mins = Math.max(0, (end - j.started_at) / 60);
+    $("elapsed").textContent =
+      j.finished_at ? `finished in ${mins.toFixed(1)} min` : `${mins.toFixed(1)} min elapsed`;
+  }
+  const logEl = $("log");
+  const prevScroll = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 4;
+  logEl.textContent = (j.log_tail || []).join("\n");
+  if (prevScroll) logEl.scrollTop = logEl.scrollHeight;
+
+  const done = ["success","failed","cancelled"].includes(j.status);
+  if (done) {
+    clearInterval(pollTimer); pollTimer = null;
+    $("cancelBtn").style.display = "none";
+    $("revealBtn").style.display = "";
+    if (j.status === "success") {
+      loadArtifacts();
+    } else {
+      $("results").classList.remove("show");
+      $("stageName").textContent =
+        j.status === "failed" ? "Failed — see log below" : "Cancelled";
+      if (j.error) showErr(j.error);
+    }
+  }
+}
+async function loadArtifacts() {
+  try {
+    const { files } = await api("GET", `/api/jobs/${activeJobId}/files`);
+    const box = $("artifactList"); box.innerHTML = "";
+    const prio = [".con", ".pkg", ".mid", "notes.chart", "song.ogg"];
+    files.sort((a, b) => {
+      const pa = prio.findIndex(p => a.name.endsWith(p));
+      const pb = prio.findIndex(p => b.name.endsWith(p));
+      return (pa === -1 ? 99 : pa) - (pb === -1 ? 99 : pb);
+    });
+    files.slice(0, 24).forEach(f => {
+      const d = document.createElement("div"); d.className = "artifact";
+      const a = document.createElement("a");
+      a.href = (ENGINE ? ENGINE : "") + f.url;
+      a.textContent = f.name;
+      a.setAttribute("download", "");
+      const sz = document.createElement("span"); sz.className = "sz";
+      sz.textContent = (f.size / 1048576).toFixed(1) + " MB";
+      d.appendChild(a); d.appendChild(sz); box.appendChild(d);
+    });
+    $("results").classList.add("show");
+  } catch (_) { $("results").classList.add("show"); }
+}
+
+/* ============================ buttons =================================== */
+$("cancelBtn").addEventListener("click", async () => {
+  if (!activeJobId) return;
+  try { await api("POST", `/api/jobs/${activeJobId}/cancel`); poll(); }
+  catch (e) { showErr(e.message); }
+});
+$("revealBtn").addEventListener("click", async () => {
+  if (!activeJobId) return;
+  try {
+    const r = await api("POST", `/api/jobs/${activeJobId}/reveal`);
+    if (!r.ok) showErr(r.message);
+  } catch (e) { showErr(e.message); }
+});
+
+/* ======================= connection / capabilities ====================== */
+async function connect() {
+  if (!ON_PAGES) { fetchCaps(); return; }   // engine serves this page directly
+  setEngineUrl($("engineUrl").value || DEFAULT_ENGINE);
+  $("engineUrl").value = ENGINE;
+  try {
+    const caps = await api("GET", "/api/capabilities");
+    $("connect").classList.remove("show");
+    $("banner").classList.remove("show");
+    $("formGrid").style.opacity = "1";
+    applyCaps(caps);
+  } catch (_) {
+    $("connect").classList.add("show");
+    $("banner").classList.remove("show");
+  }
+}
+async function fetchCaps() {
+  try { applyCaps(await api("GET", "/api/capabilities")); }
+  catch (_) { /* engine version older than capabilities: ignore */ }
+}
+function applyCaps(caps) {
+  $("capsLine").textContent =
+    ` Engine: v${caps.autorb_version}, ${caps.cpu_cores} cores, ` +
+    `${caps.mem_total_gb} GB RAM${caps.cuda ? ", GPU" : ""}`;
+  /* grey out options this engine can't actually run */
+  if (caps.spleeter === false) {
+    const opt = document.querySelector('#separator option[value="spleeter:5stems"]');
+    if (opt) { opt.disabled = true; opt.textContent += " — not installed"; }
+  }
+  if (caps.adtof === false) {
+    const note = document.getElementById("capsLine");
+    note.textContent += " (ADTOF neural drums unavailable; using fallback)";
+  }
+}
+$("engineUrl").addEventListener("change", connect);
+$("retryBtn").addEventListener("click", connect);
+
+/* on Pages, dim the form until the engine is reachable */
+if (ON_PAGES) {
+  $("formGrid").style.opacity = "0.5";
+  $("engineUrl").value = getEngineUrl();
+  connect();
+} else {
+  fetchCaps();
+}
+refreshGo();
+</script>
+</body>
+</html>

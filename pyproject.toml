@@ -31,11 +31,24 @@ dependencies = [
     "setuptools>=68.0.0,<82.0.0",
 ]
 
+[project.optional-dependencies]
+# Web UI engine (`autorb-webui` / python -m webui.server). Kept optional so
+# the core pipeline install stays lean; the server import degrades to a
+# friendly "pip install autorb[web]" hint when missing.
+web = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
+]
+
 [tool.setuptools.dynamic]
 version = {attr = "autorb.version.__version__"}
 
+[project.scripts]
+autorb-webui = "webui.server:main"
+
 [tool.setuptools]
-packages = ["autorb", "autorb.audio", "autorb.export", "autorb.pitch", "autorb.transcribe"]
+packages = ["autorb", "autorb.audio", "autorb.export", "autorb.pitch", "autorb.transcribe", "webui"]
 
 [tool.setuptools.package-data]
 autorb = ["export/data/*.con", "export/data/*.bin", "export/data/fonts/*.ttf"]

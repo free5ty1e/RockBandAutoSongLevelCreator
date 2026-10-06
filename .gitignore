@@ -45,3 +45,7 @@ tools/libforge/**/obj/
 RELEASE_NOTES.txt
 output_ab/
 .claude_persist
+
+# Web UI job workspaces (uploads + per-job pipeline output); each job is a
+# folder under webui_jobs/ holding its uploads, log, and output artifacts.
+webui_jobs/

@@ -51,22 +51,27 @@ def _is_assigned(fn, node):
 
 
 def test_guitar_transcription_failure_is_fatal():
-    """The guitar `except` must return 1 (abort), not fall through to a
-    placeholder chart export."""
+    """The guitar `except` must abort with a nonzero process exit, not fall
+    through to a placeholder chart export.
+
+    NOTE: since v0.1.23 the mechanism is `sys.exit(1)` — a bare `return 1`
+    inside a click callback exits the process with code 0, which the web
+    engine read as a successful build."""
     src = CLI_PATH.read_text()
-    m = re.search(r"except Exception as e:\n(.*?guitar transcription failed.*?)\n(.*?)return 1", src, re.S)
-    assert m, "guitar except block must abort with `return 1` (placeholder charts are never shippable)"
+    m = re.search(r"except Exception as e:\n(.*?guitar transcription failed.*?)\n(.*?)sys\.exit\(1\)", src, re.S)
+    assert m, "guitar except block must abort with `sys.exit(1)` (placeholder charts are never shippable)"
 
 
 def test_validation_fail_is_fatal():
-    """A failed tab validation must abort the pipeline (return 1), not
+    """A failed tab validation must abort the pipeline (nonzero exit), not
     continue and hand off a bad build."""
     src = CLI_PATH.read_text()
     assert "guitar validation FAILED" in src, "validation failure must print a loud error"
-    # the FAIL branch must return 1
+    # the FAIL branch must abort with a real nonzero exit (sys.exit, not a
+    # click-swallowed `return 1`)
     fail_pos = src.index("guitar validation FAILED")
     after = src[fail_pos:fail_pos + 1200]
-    assert "return 1" in after, "validation FAIL must abort the run"
+    assert "sys.exit(1)" in after, "validation FAIL must abort the run"
 
 
 def test_transcribe_guitar_accepts_solo_charting():

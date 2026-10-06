@@ -354,7 +354,7 @@ python3 -m autorb.cli \
 | `AUDIO_FILE` | Position | **Required.** Path to the source audio file. |
 | `-a, --artist` | String | **Required.** Artist name for game metadata. |
 | `-t, --title` | String | **Required.** Song title for game metadata. |
-| `-l, --lyrics` | Path | Optional. Path to Enhanced LRC file (`.lrc`). |
+| `-l, --lyrics` | Path | Optional. Path to Enhanced LRC file (`.lrc`). **When omitted, WhisperX transcribes the vocal stem automatically** — the words it hears become the lyric lines, then the same alignment/pitch machinery runs (so a song can be charted with no LRC at all). |
 | `-y, --year` | Integer | Release year (Default: Current Year). |
 | `-g, --genre` | String | Genre string (Default: `"Rock"`). |
 | `-o, --output-dir` | Path | Destination folder for the compiled CON file (Default: `./output`). |
@@ -377,6 +377,54 @@ python3 -m autorb.cli \
 | `--freestyle-drums` | Flag | Create drum freestyle mode: drum track gets only one placeholder note at the start, allowing free drum play throughout the song (the drum track is unmuted for freestyle play). |
 | `--package-con-dir` | Path | Batch packaging mode: package all `.con` files in this directory into a single PS4 PKG installer (multi-song pack). Does not require audio file or lyrics — skips the pipeline and goes straight to PS4 PKG creation. |
 | `--ps4-pkg-id` | String | Optional. 16-character PS4 Content ID for the PKG (format: `UP8802-CUSA02084_00-XXXXXXXXXXXXXXXX`). Auto-generated from artist + title (lowercase alphanumeric, padded/truncated to 16 chars) if omitted. Use to ensure unique PKG IDs per song and avoid overwriting previously installed customs on PS4. |
+
+---
+
+## 🌐 Web Interface
+
+Don't like typing CLI flags? AutoRB ships a web UI: the same pipeline behind a
+browser form — file pickers for your song / stems / LRC / album art,
+dropdowns + checkboxes for every option, a live progress log, download links
+for the finished CON/PKG/Clone Hero folder, and a **“Show in Explorer/Finder”**
+button that opens the output folder on your machine.
+
+The charting engine (Demucs separation, WhisperX alignment, transcription,
+packaging) runs **locally on your computer** — your audio never leaves your
+machine. The web page can be loaded from GitHub Pages while the engine runs
+locally; the two connect over `http://127.0.0.1:7860`.
+
+```bash
+# 1. Install (once)
+pip install -e ".[web]"
+
+# 2. Start the engine — Windows (PowerShell) and macOS/Linux (Terminal) alike:
+python -m webui.server          # or: autorb-webui
+# → http://127.0.0.1:7860
+
+# 3. Open the hosted control panel (or http://127.0.0.1:7860 directly):
+#    https://free5ty1e.github.io/RockBandAutoSongLevelCreator/
+```
+
+What the UI covers: MP3/WAV/FLAC/M4A upload (or pre-separated stems: the four
+core `.wav`s, optional `guitar.wav`/`piano.wav`, individually or as one `.zip`),
+optional LRC (with no LRC, WhisperX transcribes the vocals automatically),
+metadata fields (artist/title/year/genre), all separator options and FT knobs,
+Clone Hero / PS4 PKG export toggles, freestyle vocals/drums, guitar solo
+charting, live log + progress bar, cancel, artifact downloads, and
+show-in-explorer. `AUTORB_WEBUI_HOST`/`AUTORB_WEBUI_PORT` change the bind
+(default `127.0.0.1:7860`, local-only; set the host to `0.0.0.0` to open it to
+your LAN — no authentication, so only on networks you trust).
+
+> **Note — pip may print spleeter "dependency conflicts" during install.** If
+> spleeter is installed in the same environment (e.g. the devcontainer), pip's
+> resolver warns that spleeter 2.4.2 wants `typer<0.4.0` / `httpx<0.20.0`:
+> the install still succeeds, and the pipeline is unaffected — AutoRB uses
+> spleeter's **library API** (`spleeter.separator.Separator`), never its CLI.
+> The only casualty is the `spleeter` command itself, which AutoRB never
+> calls (this is the same pre-existing conflict the `--separator` table warns
+> about: spleeter ideally lives in its own venv). Verified post-upgrade:
+> whisperx alignment, spleeter 5-stem model loading, and the full test suite
+> all pass.
 
 ---
 

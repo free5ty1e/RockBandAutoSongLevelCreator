@@ -62,15 +62,26 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         click.echo(f"PS4 PKG installer successfully built: {pkg_path}")
         return
 
-    # Pipeline mode requires the core inputs
+    # Pipeline mode requires the core inputs. --lyrics/--year/--genre are
+    # optional now: without an LRC the vocals path transcribes the vocal stem
+    # with WhisperX (process_vocals), songs.dta defaults year to 1998, and an
+    # empty genre is written as-is. The AUDIO_FILE is also optional when
+    # --skip-separation is given (pre-separated stems): the mixed audio is
+    # only used as the drum-transcription fallback source, and transcribe_drums
+    # handles a missing one.
+    # NOTE the sentinel: when --skip-separation is set the audio is NOT
+    # required, so the tuple carries a non-None placeholder to keep it out of
+    # the missing list (val is None == "this is a problem").
     missing = [name for name, val in (
-        ("AUDIO_FILE", audio_file), ("--artist", artist), ("--title", title),
-        ("--year", year), ("--genre", genre), ("--lyrics", lyrics),
+        ("AUDIO_FILE", audio_file if not skip_separation else "(stems mode)"),
+        ("--artist", artist), ("--title", title),
     ) if val is None]
     if missing:
         click.echo(f"Error: missing required argument(s) for pipeline mode: {', '.join(missing)}", err=True)
         click.echo("Either supply the audio/metadata arguments, or use --package-con-dir for batch PS4 packaging.", err=True)
-        return
+        # Bare `return` exits 0 (click swallows callback returns) — the web
+        # engine would read this user error as a successful build.
+        sys.exit(1)
 
     click.echo(f"Starting AutoRB Pipeline for: {artist} - {title}")
     
@@ -98,7 +109,7 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         for name, path in stems.items():
             if not path.exists():
                 click.echo(f"Error: missing required stem: {path}", err=True)
-                return
+                sys.exit(1)  # bare `return` would exit 0 (click swallows it)
         # Optional dedicated stems (master-stems workflow, or a previous
         # --separator htdemucs_6s run): when present they are preferred for
         # charting — guitar.wav feeds the guitar chart and piano.wav the keys
@@ -153,7 +164,8 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             click.echo("Successfully loaded tempo map from cache.")
         except FileNotFoundError as e:
             click.echo(f"Error: {e}", err=True)
-            return
+            # bare `return` exits 0 — the web engine would call this a success
+            sys.exit(1)
     else:
         click.echo("\n[2/5] Extracting tempo and quantizing instruments...")
         from autorb.audio.tempo import extract_tempo_map
@@ -177,7 +189,8 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             click.echo("Successfully loaded vocals data from cache.")
         except FileNotFoundError as e:
             click.echo(f"Error: {e}", err=True)
-            return
+            # bare `return` exits 0 — the web engine would call this a success
+            sys.exit(1)
     else:
         click.echo("\n[3/5] Aligning vocals and parsing LRC...")
         from autorb.audio.vocals import process_vocals
@@ -214,7 +227,7 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         click.echo(f"Successfully generated synchronized track data at: {synced_output_json}")
     except Exception as e:
         click.echo(f"Error during step 4 synchronization: {e}", err=True)
-        return
+        sys.exit(1)  # bare `return` would exit 0 (click swallows it)
 
     # Transcribe instruments (guitar, bass, drums) for full-band charts
     click.echo("\n[4b/5] Transcribing instrument tracks (guitar, bass, drums)...")
@@ -272,7 +285,11 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
                    "guitar chart is never shippable):", err=True)
         traceback.print_exc()
         guitar_charts = None
-        return 1
+        # A bare `return 1` inside a click callback does NOT set the process
+        # exit code (click exits 0) — the web runner would read a failed build
+        # as a success. Use SystemExit so both `autorb` (click catches it and
+        # exits with the code) and subprocess callers see the failure.
+        sys.exit(1)
 
     click.echo("  Transcribing bass...")
     try:
@@ -291,7 +308,7 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             list(zip(beat_times, dynamic_bpms)), 
             song_end, 
             other_stem_path=stems.get("other"),
-            mixed_audio_path=Path(audio_file)
+            mixed_audio_path=Path(audio_file) if audio_file else None
         )
         drum_charts = create_all_difficulties(drum_expert, "drums")
         click.echo("  Drum transcription complete.")
@@ -363,8 +380,13 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
         metadata = {
             "title": title,
             "artist": artist,
-            "year": year,
-            "genre": genre,
+            # Optional fields: the web UI (and now the CLI) may omit year/genre.
+            # The dta writer's `.get(key, default)` only defaults when the key
+            # is ABSENT — an explicit None would write "year_released None" and
+            # crash the genre `.lower()`. Pass real values through, or leave
+            # the keys out entirely so the writer's own defaults apply.
+            "year": year if year is not None else 1998,
+            "genre": genre if genre not in (None, "") else "Rock",
             "song_id_num": abs(hash(song_id)) % 100000000,
             "album": title
         }
@@ -511,7 +533,7 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
                             "does not match the tab guide. Refusing to hand off this "
                             "build; see guitar_validation.json for the breakdown.",
                             err=True)
-                        return 1
+                        sys.exit(1)
                 else:
                     click.echo(f"  Validation did not produce a report "
                                f"(exit {res.returncode}); see guitar_validation.json", err=True)
@@ -528,7 +550,7 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
     except Exception as e:
 
         click.echo(f"Error during asset building or CON packaging: {e}", err=True)
-        return
+        sys.exit(1)
 
     click.echo(f"\nPipeline complete! All assets ready in: {out_path}")
 
