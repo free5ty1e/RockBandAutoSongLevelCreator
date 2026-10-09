@@ -49,6 +49,7 @@ except ImportError as _e:  # pragma: no cover - UX guard
 from .jobs import (
     ART_EXTS, AUDIO_EXTS, LRC_EXTS, SEPARATORS, STEM_NAMES, JobError, JobStore,
 )
+from .batch import BatchStore
 from .reveal import reveal_in_file_manager
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -82,6 +83,7 @@ app.add_middleware(
 )
 
 store = JobStore(JOBS_ROOT, repo_root=REPO_ROOT)
+batch_store = BatchStore(JOBS_ROOT)
 
 
 # --------------------------------------------------------------- uploads ---
@@ -343,6 +345,136 @@ async def job_files(job_id: str):
                     "url": f"/files/{job.id}/output/{rel.as_posix()}",
                 })
     return {"files": files[:300]}
+
+
+# ---------------------------------------------------------------- batch ---
+@app.post("/api/batch/songs")
+async def batch_stage_song(payload: dict = Body(...)):
+    """Stage one song (files already uploaded via /api/upload) into the
+    durable batch store, returning a song record for the browser's batch
+    list. Files are MOVED from the draft job's uploads into
+    batch_store/<song_id>/uploads/ so they survive independently."""
+    job_staging = payload.get("job_staging")
+    uploads_map = payload.get("uploads") or {}
+    options = payload.get("options") or {}
+    if not job_staging:
+        raise HTTPException(400, "Missing job_staging (upload first)")
+    up_dir = JOBS_ROOT / job_staging / "uploads"
+    if not up_dir.exists():
+        raise HTTPException(400, "Unknown job_staging")
+
+    # resolve + verify the client's upload map
+    resolved = {}
+    for role, rel in uploads_map.items():
+        if not rel:
+            continue
+        p = Path(rel)
+        if not p.is_absolute():
+            p = (JOBS_ROOT / job_staging / rel).resolve()
+        p = p.resolve()
+        if not str(p).startswith(str(up_dir.resolve())):
+            raise HTTPException(400, f"{role} path escapes staging dir")
+        if not p.exists():
+            raise HTTPException(400, f"{role} file missing: {rel}")
+        resolved[role] = str(p)
+    if not (resolved.get("audio") or resolved.get("stems")):
+        raise HTTPException(400, "Provide either an audio file or stems")
+
+    try:
+        opts = _normalize_options(options)
+    except JobError as e:
+        raise HTTPException(400, str(e))
+
+    # Copy the files into the durable batch store
+    song_dir = batch_store.new_song_dir()
+    moved = {}
+    for role, p in resolved.items():
+        if role == "stems":
+            stems_dest = song_dir / "stems"
+            stems_dest.mkdir(parents=True, exist_ok=True)
+            for f in sorted(Path(p).glob("*.wav")):
+                shutil.copy2(f, stems_dest / f.name)
+            moved["stems"] = str(stems_dest)
+        else:
+            dest = song_dir / f"{role}{Path(p).suffix}"
+            shutil.copy2(p, dest)
+            moved[role] = str(dest)
+
+    label = f"{opts['artist']} - {opts['title']}"
+    record = batch_store.song_record(song_dir.name, opts, moved)
+    return {"song": record, "label": label}
+
+
+@app.get("/api/batch/saved")
+async def batch_list_saved():
+    return {"batches": batch_store.list_saved()}
+
+
+@app.post("/api/batch/save")
+async def batch_save(payload: dict = Body(...)):
+    """Persist the browser's batch (list of song records) to a JSON file."""
+    name = (payload.get("name") or "").strip()
+    songs = payload.get("songs") or []
+    ps4_pkg_id = (payload.get("ps4_pkg_id") or "").strip() or None
+    try:
+        path = batch_store.save(name, songs, ps4_pkg_id)
+    except JobError as e:
+        raise HTTPException(400, str(e))
+    return {"saved": str(path), "name": name,
+            "batches": batch_store.list_saved()}
+
+
+@app.post("/api/batch/load")
+async def batch_load(payload: dict = Body(...)):
+    """Load a saved batch by filename (in batch_store/batches/) and return
+    the full song records with ABSOLUTE file paths, ready to run."""
+    fname = (payload.get("file") or "").strip()
+    if not fname or "/" in fname or "\\" in fname or ".." in fname:
+        raise HTTPException(400, "Missing or invalid batch file name")
+    path = batch_store.batches_dir / fname
+    if not path.exists():
+        raise HTTPException(404, f"Batch file not found: {fname}")
+    try:
+        doc = batch_store.load(path)
+    except JobError as e:
+        raise HTTPException(400, str(e))
+    # attach labels + absolute paths for the UI
+    out = []
+    for s in doc["songs"]:
+        opts = s.get("options") or {}
+        label = f"{opts.get('artist','?')} - {opts.get('title','?')}"
+        out.append({"label": label, **s})
+    return {"name": doc.get("name"), "ps4_pkg_id": doc.get("ps4_pkg_id"),
+            "songs": out}
+
+
+@app.post("/api/batch/run")
+async def batch_run(payload: dict = Body(...)):
+    """Queue a batch job: every song's pipeline, then package all CONs
+    into one multi-song CON + one PS4 PKG."""
+    songs = payload.get("songs") or []
+    name = (payload.get("name") or "batch").strip()
+    ps4_pkg_id = (payload.get("ps4_pkg_id") or "").strip()
+    if not ps4_pkg_id and name:
+        # Stable default: derive from the batch NAME (not the first song —
+        # a stable ID is what makes re-deploys overwrite the same PS4 slot)
+        import re as _re
+        ps4_pkg_id = _re.sub(r"[^a-zA-Z0-9]", "", name).upper()[:16].ljust(16, "0")
+    if not ps4_pkg_id:
+        ps4_pkg_id = None
+    if not songs:
+        raise HTTPException(400, "Batch has no songs")
+    job = store.create_draft()
+    job.begin_batch(name, songs, ps4_pkg_id)
+    # resolve + validate every song's files BEFORE queueing (all-or-nothing)
+    try:
+        for s in songs:
+            files = batch_store.resolve_song_files(s)
+            s["files"] = {k: str(v) for k, v in files.items() if v is not None}
+    except JobError as e:
+        raise HTTPException(400, str(e))
+    store.start_batch(job)
+    return {"job": job.to_dict()}
 
 
 # --------------------------------------------------------- capabilities ---

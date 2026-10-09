@@ -15,6 +15,8 @@ Design constraints from the pipeline itself:
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import subprocess
 import threading
 import time
@@ -68,6 +70,18 @@ class Job:
         self.uploads: dict[str, str] = {}   # role -> absolute path
         self.options: dict = {}
         self.log_lines: list[str] = []
+        # Batch mode: list of per-song dicts {label, options, files} that the
+        # worker runs sequentially, then packages all CONs into one multi-song
+        # CON + one PS4 PKG. None for normal single-song jobs.
+        self.batch_songs: list[dict] | None = None
+        self.batch_name: str | None = None
+        self.ps4_pkg_id: str | None = None
+        # Progress is rescaled in batch mode: songs occupy [0, 0.9] equally,
+        # packaging [0.9, 1.0]. Each song's stage markers are tracked on
+        # their OWN 0..1 scale (a marker like "[2/5]"=0.30 must register for
+        # song 2 even though the GLOBAL bar already sits at 0.45).
+        self._batch_total: int = 0
+        self._song_progress: float = 0.0
 
     # ---- serialization ----
     def to_dict(self, include_log: bool = True) -> dict:
@@ -123,6 +137,44 @@ class Job:
                 self.progress = new
             self.log_lines.append(line)
             self.stage = progress_mod.stage_label(self.progress)
+
+    # ---- batch progress scaling ----
+    def begin_batch(self, name: str, songs: list[dict],
+                    ps4_pkg_id: str | None) -> None:
+        self.batch_name = name
+        self.batch_songs = songs
+        self.ps4_pkg_id = ps4_pkg_id
+        self._batch_total = len(songs)
+
+    def batch_ingest(self, song_index: int, line: str) -> None:
+        """ingest_line for one batch song, rescaled to its bar slice.
+
+        The song's markers are parsed on their OWN 0..1 scale (tracked in
+        _song_progress) and mapped into [0.9*i/n, 0.9*(i+1)/n) of the
+        global bar — so song 2's early stages register even though the
+        global bar starts the song at ~0.45."""
+        with self.lock:
+            new = progress_mod.next_progress(line, self._song_progress)
+            if new is not None:
+                self._song_progress = new
+            self.log_lines.append(line)
+            lo = 0.9 * song_index / max(1, self._batch_total)
+            hi = 0.9 * (song_index + 1) / max(1, self._batch_total)
+            if new is not None:
+                self.progress = lo + (hi - lo) * new
+            label = (self.batch_songs[song_index].get("label")
+                     if self.batch_songs else None) or f"song {song_index+1}"
+            self.stage = f"[{label}] " + progress_mod.stage_label(
+                self._song_progress)
+
+    def batch_ingest_packaging(self, line: str) -> None:
+        """ingest for the final --package-con-dir run (0.9 -> 1.0)."""
+        new = progress_mod.next_progress(line, self.progress)
+        with self.lock:
+            self.log_lines.append(line)
+            if new is not None:
+                self.progress = 0.9 + 0.1 * new
+            self.stage = f"[packaging] " + progress_mod.stage_label(self.progress)
 
 
 def build_cli_command(job: Job, repo_root: Path) -> list[str]:
@@ -232,6 +284,17 @@ class JobStore:
             self._jobs[job_id] = job
         return job
 
+    def start_batch(self, job: Job) -> None:
+        """Queue a batch job (per-song commands are validated during run)."""
+        with job.lock:
+            if job.status != "draft":
+                raise JobError(f"Job already {job.status}")
+            job.status = "queued"
+            job.stage = "Queued (batch)"
+        with self._lock:
+            self._queue.append(job.id)
+        self._ensure_worker()
+
     def start(self, job: Job, options: dict) -> None:
         """Attach validated options and queue the job for the worker.
 
@@ -320,6 +383,9 @@ class JobStore:
                 job.set_status("failed", f"Internal runner error: {e!r}")
 
     def _execute(self, job: Job) -> None:
+        if job.batch_songs is not None:
+            self._execute_batch(job)
+            return
         cmd = build_cli_command(job, self.repo_root)
         job.set_running()
         if self.run_hook is not None:
@@ -333,7 +399,21 @@ class JobStore:
                                f"Pipeline exited with code {exit_code}")
             return
 
-        with open(job.log_path, "w", encoding="utf-8") as log_file:
+        exit_code = self._run_cli(job, cmd)
+        job.exit_code = exit_code
+        if exit_code == 0:
+            job.set_status("success")
+        else:
+            job.set_status("failed",
+                           f"Pipeline exited with code {exit_code}")
+
+    def _run_cli(self, job: Job, cmd: list[str],
+                 ingest=None) -> int:
+        """Run one CLI subprocess, streaming its output into the job's log.
+
+        ``ingest(job_line_handler)`` optionally overrides the per-line
+        progress ingestion (batch mode scales each song's output)."""
+        with open(job.log_path, "a", encoding="utf-8") as log_file:
             job.proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -348,12 +428,90 @@ class JobStore:
                 line = line.rstrip()
                 log_file.write(line + "\n")
                 log_file.flush()
-                job.ingest_line(line)
+                if ingest is not None:
+                    ingest(line)
+                else:
+                    job.ingest_line(line)
             exit_code = job.proc.wait()
         job.proc = None
+        return exit_code
+
+    def _execute_batch(self, job: Job) -> None:
+        """Run every song's pipeline in sequence, then package all CONs.
+
+        Each song runs in its own sub-output-dir so its CON is produced
+        independently (a song's failure aborts the whole batch — the user
+        re-runs the exact same batch after iterating; partial CON sets
+        silently missing from the pack would be a lie).
+        """
+        job.set_running()
+        songs = job.batch_songs
+        con_paths = []
+        for i, song in enumerate(songs):
+            label = song.get("label") or f"song {i+1}"
+            # filesystem-safe dir name (a label like "AC/DC - Back in Black"
+            # must not create nested dirs)
+            safe = re.sub(r"[^a-zA-Z0-9 _-]+", "", label).strip()[:60] or "song"
+            song_out = job.output_dir / f"song_{i+1:02d}_{safe}"
+            song_out.mkdir(parents=True, exist_ok=True)
+            job.ingest_line(f"=== batch song {i+1}/{len(songs)}: {label} ===")
+
+            # build a pseudo-Job whose options/uploads the command builder
+            # reads, but run it as this job (shared log + progress + proc)
+            sj = Job(f"{job.id}-s{i+1}", job.dir)
+            sj.options = song["options"]
+            sj.uploads = {k: str(v) for k, v in song["files"].items()
+                          if v is not None}
+            sj.output_dir = song_out
+            if "stems" in sj.uploads:
+                stems_src = Path(sj.uploads["stems"])
+                dest = song_out / "stems"
+                dest.mkdir(parents=True, exist_ok=True)
+                for f in sorted(stems_src.glob("*.wav")):
+                    shutil.copy2(f, dest / f.name)
+                sj.uploads["stems"] = str(dest)
+
+            try:
+                cmd = build_cli_command(sj, self.repo_root)
+            except JobError as e:
+                job.set_status("failed", f"[{label}] {e}")
+                return
+            if self.run_hook is not None:
+                exit_code = self.run_hook(job, cmd)
+            else:
+                exit_code = self._run_cli(
+                    job, cmd,
+                    ingest=lambda ln, i=i: job.batch_ingest(i, ln))
+            job.exit_code = exit_code
+            if exit_code != 0:
+                job.set_status("failed",
+                               f"[{label}] pipeline exited with code {exit_code}")
+                return
+            cons = sorted(song_out.glob("*.con"))
+            if not cons:
+                job.set_status("failed", f"[{label}] produced no CON file")
+                return
+            con_paths.append(cons[0])
+
+        # ---- package all CONs into one multi-song CON + one PS4 PKG ----
+        job.ingest_line(f"=== packaging {len(con_paths)} CONs into the "
+                        f"multi-song pack ===")
+        pkg_dir = job.output_dir / "con_pack"
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+        for p in con_paths:
+            shutil.copy2(p, pkg_dir / p.name)
+        args = ["python", "-m", "autorb.cli", "--package-con-dir",
+                str(pkg_dir)]
+        if job.ps4_pkg_id:
+            args += ["--ps4-pkg-id", job.ps4_pkg_id]
+        if self.run_hook is not None:
+            exit_code = self.run_hook(job, args)
+        else:
+            exit_code = self._run_cli(
+                job, args, ingest=job.batch_ingest_packaging)
         job.exit_code = exit_code
         if exit_code == 0:
             job.set_status("success")
         else:
             job.set_status("failed",
-                           f"Pipeline exited with code {exit_code}")
+                           f"packaging exited with code {exit_code}")

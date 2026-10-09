@@ -584,6 +584,18 @@ class TestCliContract:
 # (covered in TestRevealUnit above)
 
 
+
+def _free_port() -> int:
+    """Grab an OS-assigned free port (released immediately; uvicorn binds it
+    a moment later — the standard dodge for TIME_WAIT collisions between
+    back-to-back test servers)."""
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
 # ---------------------------------------------- real-browser interaction ----
 # Requires Playwright + headless Chromium (devcontainer has it; plain CI
 # skips). This is the regression test for the reported bug: "clicked on all
@@ -602,11 +614,23 @@ def _playwright_available() -> bool:
                     reason="playwright not installed (devcontainer test)")
 def test_clicking_every_drop_zone_opens_a_file_chooser():
     import webui.server as srv  # noqa: F401  (env docs)
+    port = _free_port()
     proc = subprocess.Popen(
         [sys.executable, "-m", "webui.server"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        env={**os.environ, "AUTORB_WEBUI_PORT": "7877",
+        env={**os.environ, "AUTORB_WEBUI_PORT": str(port),
              "AUTORB_WEBUI_JOBS": tempfile.mkdtemp(prefix="webui_pw_")})
+    import urllib.request
+    base = f"http://127.0.0.1:{port}"
+    ready = False
+    for _ in range(60):
+        try:
+            urllib.request.urlopen(base + "/api/capabilities", timeout=2)
+            ready = True
+            break
+        except Exception:
+            time.sleep(0.5)
+    assert ready, f"webui server did not come up on port {port}"
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
@@ -614,7 +638,7 @@ def test_clicking_every_drop_zone_opens_a_file_chooser():
             page = browser.new_page()
             errors = []
             page.on("pageerror", lambda e: errors.append(str(e)))
-            page.goto("http://127.0.0.1:7877/")
+            page.goto(base + "/")
             page.wait_for_selector("#dropAudio", timeout=10000)
             zones = [("dropAudio", "audio"), ("dropStems", "stemsFiles"),
                      ("dropLrc", "lrc"), ("dropArt", "albumArt")]
@@ -628,6 +652,164 @@ def test_clicking_every_drop_zone_opens_a_file_chooser():
                 page.keyboard.press("Enter")
             browser.close()
             assert not errors, f"page errors: {errors}"
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+
+
+@pytest.mark.devcontainer
+@pytest.mark.skipif(not _playwright_available(),
+                    reason="playwright not installed (devcontainer test)")
+def test_file_choice_feedback_and_batch_ui():
+    """The 'I chose a file and the UI didn't update at all' report: after a
+    chooser selection every zone must visibly show the chosen file (name +
+    size + remove link), and validation must gate both action buttons."""
+    import subprocess
+    import time as _time
+    import os
+
+    os.makedirs("/tmp/pw_files", exist_ok=True)
+    with open("/tmp/pw_files/song.mp3", "wb") as f:
+        f.write(b"ID3" + b"x" * 4096)
+    with open("/tmp/pw_files/lyrics.lrc", "w") as f:
+        f.write("[00:01.00]test line\n")
+
+    port = _free_port()
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "webui.server"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env={**os.environ, "AUTORB_WEBUI_PORT": str(port),
+             "AUTORB_WEBUI_JOBS": tempfile.mkdtemp(prefix="webui_pw2_")})
+    # wait for readiness (uvicorn can take a while under CPU load, e.g. when
+    # a real pipeline job is running concurrently)
+    import urllib.request
+    base = f"http://127.0.0.1:{port}"
+    ready = False
+    for _ in range(60):
+        try:
+            urllib.request.urlopen(base + "/api/capabilities", timeout=2)
+            ready = True
+            break
+        except Exception:
+            time.sleep(0.5)
+    assert ready, f"webui server did not come up on port {port}"
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            errors = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(base + "/")
+            page.wait_for_selector("#dropAudio", timeout=10000)
+
+            # choose an MP3: feedback must appear immediately
+            page.set_input_files("#audio", "/tmp/pw_files/song.mp3")
+            st = page.evaluate("""() => ({
+                chosen: document.getElementById('audioChosen').textContent,
+                visible: document.getElementById('audioChosen')
+                         .offsetParent !== null,
+                zoneHas: document.getElementById('dropAudio')
+                         .classList.contains('has'),
+            })""")
+            assert st["visible"], "audio zone shows no chosen-file feedback"
+            assert "song.mp3" in st["chosen"]
+            assert st["zoneHas"]
+
+            # LRC feedback
+            page.set_input_files("#lrc", "/tmp/pw_files/lyrics.lrc")
+            st2 = page.evaluate("""() => ({
+                chosen: document.getElementById('lrcChosen').textContent,
+                visible: document.getElementById('lrcChosen')
+                         .offsetParent !== null,
+            })""")
+            assert st2["visible"]
+            assert "lyrics.lrc" in st2["chosen"]
+
+            # remove link clears the choice
+            page.click("#lrcChosen .rm")
+            st3 = page.evaluate("""() => ({
+                picked: typeof pickedLrc !== 'undefined' && pickedLrc !== null,
+                zoneHas: document.getElementById('dropLrc')
+                         .classList.contains('has'),
+            })""")
+            assert not st3["picked"] and not st3["zoneHas"]
+
+            # validation gates the buttons before metadata is complete
+            page.set_input_files("#lrc", "/tmp/pw_files/lyrics.lrc")
+            assert page.eval_on_selector(
+                "#goBtn", "el => el.disabled") is True
+            assert page.eval_on_selector(
+                "#addToBatchBtn", "el => el.disabled") is True
+            page.fill("#artist", "Eve 6")
+            page.fill("#title", "Open Road Song")
+            assert page.eval_on_selector(
+                "#goBtn", "el => el.disabled") is False
+            assert page.eval_on_selector(
+                "#addToBatchBtn", "el => el.disabled") is False
+
+            # add-to-batch stages the song, CLEARS files+metadata, KEEPS
+            # checkboxes (user request: "selected files should clear;
+            # checkboxes should remain checked")
+            page.check("#buildPkg"); page.check("#guitarSoloCharting")
+            page.click("#addToBatchBtn")
+            page.wait_for_timeout(1500)
+            st4 = page.evaluate("""() => ({
+                count: batchSongs.length,
+                label: batchSongs[0] && batchSongs[0].label,
+                artist: document.getElementById('artist').value,
+                filesCleared: !pickedAudio && !pickedLrc && !pickedArt
+                              && !pickedStemsZip && !pickedStemFiles.length,
+                zoneHas: document.getElementById('dropAudio')
+                         .classList.contains('has'),
+                buildPkg: document.getElementById('buildPkg').checked,
+                solo: document.getElementById('guitarSoloCharting').checked,
+            })""")
+            assert st4["count"] == 1
+            assert st4["label"] == "Eve 6 - Open Road Song"
+            assert st4["artist"] == ""
+            assert st4["filesCleared"] is True, "files must clear after staging"
+            assert st4["zoneHas"] is False
+            assert st4["buildPkg"] is True, "checkboxes must persist"
+            assert st4["solo"] is True
+            assert page.eval_on_selector(
+                "#runBatchBtn", "el => el.disabled") is False
+
+            # busy state: while a start request is in flight, ALL action
+            # buttons grey out (user report: "shouldn't Run Batch be greyed?")
+            page.set_input_files("#audio", "/tmp/pw_files/song.mp3")
+            page.fill("#artist", "X"); page.fill("#title", "Y")
+            page.evaluate("""() => {
+                window.__origFetch = window.fetch;
+                window.fetch = (url, opts) => {
+                    if (String(url).includes('/api/upload'))
+                        return new Promise(() => {});  // hang: keep busy
+                    return window.__origFetch(url, opts);
+                };
+            }""")
+            page.click("#goBtn")
+            page.wait_for_timeout(500)
+            busy = page.evaluate("""() => ({
+                go: document.getElementById('goBtn').disabled,
+                add: document.getElementById('addToBatchBtn').disabled,
+                run: document.getElementById('runBatchBtn').disabled,
+                save: document.getElementById('saveBatchBtn').disabled,
+            })""")
+            assert all(busy.values()), f"buttons must grey while busy: {busy}"
+            page.evaluate("window.fetch = window.__origFetch")
+
+            # keyboard paste fallback: CMD/CTRL+V inserts clipboard text
+            page.evaluate(
+                "navigator.clipboard.readText = () => Promise.resolve('Eve 6')")
+            page.fill("#artist", "")
+            page.focus("#artist")
+            page.keyboard.press("ControlOrMeta+v")
+            page.wait_for_timeout(400)
+            assert page.eval_on_selector(
+                "#artist", "el => el.value") == "Eve 6", "keyboard paste"
+
+            assert not errors, f"page errors: {errors}"
+            browser.close()
     finally:
         proc.terminate()
         proc.wait(timeout=10)

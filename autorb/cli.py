@@ -508,11 +508,17 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
             if tab_guide is not None:
                 click.echo(f"\n[7/5] Validating guitar chart against tab guide: {tab_guide.name}")
                 import subprocess as _sp
-                res = _sp.run(
-                    [sys.executable, str(_tga / "validate_guitar_vs_tab.py"),
-                     "--chart-dir", str(out_path), "--tab-guide", str(tab_guide)],
-                    capture_output=True, text=True,
-                )
+                val_cmd = [sys.executable, str(_tga / "validate_guitar_vs_tab.py"),
+                           "--chart-dir", str(out_path), "--tab-guide", str(tab_guide)]
+                if guitar_solo_charting and solo_regions:
+                    # The tab guide documents the RHYTHM guitar; solo charting
+                    # intentionally replaces it with the lead inside the solo
+                    # regions, so the validator must not score those windows.
+                    val_cmd.append("--solo-regions=" + ",".join(
+                        f"{a:.1f}:{b:.1f}" for a, b in solo_regions))
+                    click.echo(f"  Solo charting ON — excluding solo regions "
+                               f"from tab scoring: {[(round(a,1), round(b,1)) for a, b in solo_regions]}")
+                res = _sp.run(val_cmd, capture_output=True, text=True)
                 report_file = out_path / "guitar_validation.json"
                 if report_file.exists():
                     rep = json.loads(report_file.read_text())

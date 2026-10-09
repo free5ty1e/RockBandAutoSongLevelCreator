@@ -411,9 +411,13 @@ optional LRC (with no LRC, WhisperX transcribes the vocals automatically),
 metadata fields (artist/title/year/genre), all separator options and FT knobs,
 Clone Hero / PS4 PKG export toggles, freestyle vocals/drums, guitar solo
 charting, live log + progress bar, cancel, artifact downloads, and
-show-in-explorer. `AUTORB_WEBUI_HOST`/`AUTORB_WEBUI_PORT` change the bind
-(default `127.0.0.1:7860`, local-only; set the host to `0.0.0.0` to open it to
-your LAN — no authentication, so only on networks you trust).
+show-in-explorer. **Batches:** stage songs with “Add to batch”, then package
+them all into ONE multi-song CON and ONE PS4 PKG (`--package-con-dir` under
+the hood) — and save the batch to a JSON file to load and re-run the exact
+same set (files + metadata) later; staged files live under the jobs root so a
+saved batch survives restarts. `AUTORB_WEBUI_HOST`/`AUTORB_WEBUI_PORT` change
+the bind (default `127.0.0.1:7860`, local-only; set the host to `0.0.0.0` to
+open it to your LAN — no authentication, so only on networks you trust).
 
 > **Note — pip may print spleeter "dependency conflicts" during install.** If
 > spleeter is installed in the same environment (e.g. the devcontainer), pip's

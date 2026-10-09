@@ -108,12 +108,24 @@ def process_vocals(vocal_stem_path, lrc_path, out_dir):
         # Transcription mode: let WhisperX listen and produce segments+words.
         # These become this song's "LRC" — each segment is one lyric line.
         click.echo("Loading WhisperX transcription model on %s..." % device)
-        # "small" is the CPU-friendly pick: the vocal stem is already isolated,
-        # and the wav2vec2 alignment pass below refines word timing anyway, so
-        # the model only needs to get the *words* right. (large-v2 is ~3 GB and
-        # would take many extra minutes per song on CPU.)
-        transcribe_model = whisperx.load_model("small", device=device,
-                                              compute_type="int8")
+        # torch>=2.6 defaults torch.load(weights_only=True), which rejects the
+        # pyannote VAD checkpoint whisperx loads internally (the checkpoint
+        # pickles omegaconf objects and typing state, and the rejected-globals
+        # list keeps growing: ListConfig -> ContainerMetadata -> typing.Any...).
+        # lightning_fabric passes weights_only=True EXPLICITLY, so the only
+        # scoped fix for this TRUSTED checkpoint (HuggingFace-hosted pyannote
+        # weights) is to force weights_only=False during the model load and
+        # restore the original function right after.
+        orig_load = torch.load
+        def _permissive_load(*args, **kwargs):
+            kwargs["weights_only"] = False
+            return orig_load(*args, **kwargs)
+        torch.load = _permissive_load
+        try:
+            transcribe_model = whisperx.load_model("small", device=device,
+                                                   compute_type="int8")
+        finally:
+            torch.load = orig_load
         click.echo("Transcribing vocal stem...")
         transcription = transcribe_model.transcribe(
             audio, batch_size=16, language="en")

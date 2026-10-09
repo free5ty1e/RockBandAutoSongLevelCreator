@@ -61,6 +61,15 @@
   .drop.has { border-style:solid; border-color:var(--ok); }
   .drop .big { font-size:15px; color:var(--text); font-weight:600; }
   .drop small { display:block; margin-top:4px; font-size:12px; }
+  /* Chosen-file display INSIDE each drop zone: name, size, remove link.
+     This is the user's "what did I choose?" answer, right where they
+     clicked. */
+  .drop .chosen { display:none; margin-top:10px; font-size:13px;
+    background:rgba(74,222,128,.12); border:1px solid var(--ok);
+    color:var(--ok); border-radius:7px; padding:6px 10px; word-break:break-all; }
+  .drop.has .chosen { display:inline-block; }
+  .drop .chosen .rm { margin-left:10px; color:var(--bad); cursor:pointer;
+    text-decoration:underline; font-weight:700; }
   /* Real file inputs live OUTSIDE the clickable zones (a hidden input inside
      a click-forwarding label is the classic no-chooser bug: the forwarded
      click bubbles back into the label and the browser suppresses it).
@@ -165,6 +174,17 @@
     border-radius:50%; animation:spin 1s linear infinite; vertical-align:-2px;
     margin-right:6px; }
   @keyframes spin { to { transform:rotate(360deg); } }
+
+  /* batch list */
+  .bsong { display:flex; align-items:center; gap:10px;
+    background:var(--panel2); border:1px solid var(--border);
+    border-radius:8px; padding:8px 12px; margin-bottom:8px; font-size:14px; }
+  .bsong .n { color:var(--accent); font-weight:700; min-width:22px; }
+  .bsong .t { flex:1; word-break:break-all; }
+  .bsong .t small { display:block; color:var(--dim); font-size:11px; }
+  .bsong .rm { color:var(--bad); cursor:pointer; font-weight:700;
+    text-decoration:underline; }
+  .batch-empty { color:var(--dim); font-size:13px; padding:6px 0; }
 </style>
 </head>
 <body>
@@ -221,6 +241,7 @@ python -m webui.server</code></div>
              aria-label="Choose audio file">
         <span class="big">🎵 Choose audio file</span>
         <small>MP3 · WAV · FLAC · M4A · OGG — up to 600 MB</small>
+        <span class="chosen" id="audioChosen"></span>
       </label>
       <input type="file" id="audio" class="fileinp" accept=".mp3,.wav,.flac,.m4a,.ogg,.aac,.wma">
       <ul class="filelist" id="audioList"></ul>
@@ -233,6 +254,7 @@ python -m webui.server</code></div>
         <small>drums / bass / other / vocals .wav (guitar / piano optional) —
           skips AI separation. Pick <a href="#" id="pickZip">a .zip</a> or
           <a href="#" id="pickWavs">individual .wav files</a>.</small>
+        <span class="chosen" id="stemsChosen"></span>
       </label>
       <input type="file" id="stemsZip" class="fileinp" accept=".zip">
       <input type="file" id="stemsFiles" class="fileinp" accept=".wav" multiple>
@@ -242,11 +264,13 @@ python -m webui.server</code></div>
         <label class="drop" id="dropLrc" for="lrc">
           <span class="big">📝 Lyrics <small>(optional)</small></span>
           <small>.lrc file — without it, AI transcribes the words</small>
+          <span class="chosen" id="lrcChosen"></span>
         </label>
         <input type="file" id="lrc" class="fileinp" accept=".lrc,.txt">
         <label class="drop" id="dropArt" for="albumArt">
           <span class="big">🖼️ Album art <small>(optional)</small></span>
           <small>PNG / JPG cover</small>
+          <span class="chosen" id="artChosen"></span>
         </label>
         <input type="file" id="albumArt" class="fileinp" accept=".png,.jpg,.jpeg">
       </div>
@@ -320,11 +344,46 @@ python -m webui.server</code></div>
 
   <div class="actions">
     <button class="btn primary" id="goBtn" disabled>🎸 Chart my song</button>
+    <button class="btn ghost" id="addToBatchBtn" disabled>➕ Add to batch</button>
     <span style="color:var(--dim);font-size:13px" id="goHint">
       Add an audio file (or stems) and fill in artist + title</span>
     <span class="spinner" id="spin" style="display:none"></span>
   </div>
   <div class="err" id="formErr"></div>
+
+  <!-- ============================== BATCH ================================= -->
+  <div class="card" id="batchCard" style="margin-top:18px">
+    <h2>3 · Batch — multi-song CON + PS4 PKG</h2>
+    <p class="hint">Stage songs above with “Add to batch”, then package them
+      all into ONE multi-song CON and ONE PS4 PKG — the way you re-deploy
+      your test pack while iterating. Save the batch to a JSON file to load
+      and re-run the exact same set later.</p>
+
+    <div id="batchList"></div>
+
+    <div class="actions" style="margin-top:10px" id="batchActions">
+      <button class="btn primary" id="runBatchBtn" disabled>📦 Run batch</button>
+      <input id="batchName" type="text" placeholder="Batch name (e.g. dev test pack)"
+             style="background:var(--panel2);color:var(--text);border:1px solid var(--border);
+                    border-radius:7px;padding:9px 11px;font-size:14px;width:220px">
+      <button class="btn ghost" id="saveBatchBtn" disabled>💾 Save batch</button>
+      <button class="btn ghost" id="loadBatchBtn">📂 Load batch…</button>
+      <select id="batchFileSelect" style="background:var(--panel2);color:var(--text);
+              border:1px solid var(--border);border-radius:7px;padding:9px 11px;font-size:14px">
+        <option value="">saved batches…</option>
+      </select>
+      <button class="btn ghost" id="clearBatchBtn" disabled>🧹 Clear</button>
+    </div>
+    <p class="hint" style="margin-top:8px">PS4 PKG ID for the pack
+      <input id="ps4PkgId" type="text" placeholder="auto (16 chars, from batch name)"
+             maxlength="16" style="background:var(--panel2);color:var(--text);
+             border:1px solid var(--border);border-radius:7px;padding:6px 10px;
+             font-size:13px;width:260px;margin-left:6px">
+      <span style="display:block;margin-top:4px">Keep the SAME ID to re-deploy
+        the pack over and over — the PS4 install overwrites the previous one
+        instead of piling up duplicates.</span></p>
+    <div class="err" id="batchErr"></div>
+  </div>
 
   <!-- ============================ PROGRESS ============================== -->
   <div class="card jobcard" id="jobCard" style="display:none">
@@ -347,7 +406,7 @@ python -m webui.server</code></div>
       <div class="artifacts" id="artifactList"></div>
       <h3>What happens next</h3>
       <ul class="steps">
-        <li><b>Clone Hero:</b> copy the <code>clone_hero/<artist> - <title></code>
+        <li><b>Clone Hero:</b> copy the <code>clone_hero/&lt;artist&gt; - &lt;title&gt;</code>
           folder into your Clone Hero <b>Songs</b> folder, then Settings →
           <b>Scan Songs</b>.</li>
         <li><b>Rock Band 3 (RPCS3/PS4):</b> copy the <code>.con</code> (or the
@@ -374,13 +433,18 @@ python -m webui.server</code></div>
 /* ===================== engine URL + connection handling ================= */
 const ON_PAGES = location.protocol === "https:";
 const DEFAULT_ENGINE = "http://127.0.0.1:7860";
-let ENGINE = DEFAULT_ENGINE;
+// Local mode (engine serves this page): same-origin calls (ENGINE = "").
+// Pages mode: the saved engine URL, or the default port.
+let ENGINE = getEngineUrlSafe();
 
 function getEngineUrl() {
   if (!ON_PAGES) return "";            // same-origin when engine serves us
   const saved = localStorage.getItem("autorb_engine");
   return saved || DEFAULT_ENGINE;
 }
+// hoisted initializer (getEngineUrl is defined below this line via function
+// hoisting, so this is safe)
+function getEngineUrlSafe() { return getEngineUrl(); }
 function setEngineUrl(u) {
   ENGINE = u.replace(/\/+$/, "");
   if (ON_PAGES) localStorage.setItem("autorb_engine", ENGINE);
@@ -426,8 +490,9 @@ function wireDrop(dropId, inputIds, onFiles) {
 wireDrop("dropAudio", ["audio"], fs => {
   pickedAudio = fs.find(f => /\.(mp3|wav|flac|m4a|ogg|aac|wma)$/i.test(f.name)) || null;
   if (pickedAudio) { pickedStemFiles = []; pickedStemsZip = null; }
-  showFiles("audioList", pickedAudio ? [pickedAudio] : [],
-            [pickedAudio && "Accepted: " + pickedAudio.name]);
+  if (fs.length && !pickedAudio)
+    showFiles("audioList", [], ["Rejected: not an audio file (mp3/wav/flac/m4a/ogg)"]);
+  else showFiles("audioList", [], []);
 });
 wireDrop("dropStems", ["stemsZip", "stemsFiles"], fs => {
   const zip = fs.find(f => /\.zip$/i.test(f.name));
@@ -436,18 +501,16 @@ wireDrop("dropStems", ["stemsZip", "stemsFiles"], fs => {
   else if (wavs.length) {
     pickedStemFiles = wavs; pickedStemsZip = null; pickedAudio = null;
   }
-  const names = [];
-  if (pickedStemsZip) names.push("ZIP: " + pickedStemsZip.name);
-  pickedStemFiles.forEach(f => names.push(f.name));
   const core = ["drums","bass","other","vocals"];
   const names_set = new Set(pickedStemFiles.map(f =>
     f.name.toLowerCase().replace(/\.wav$/,"")));
   const missing = core.filter(c => !names_set.has(c));
-  showFiles("stemsList", [], [
-    names.length ? "Stems: " + names.join(", ") : null,
-    (pickedStemFiles.length && missing.length)
-      ? ("Missing core stems: " + missing.join(", ") + ".wav") : null,
-  ]);
+  const notes = [];
+  if (pickedStemFiles.length && missing.length)
+    notes.push("Missing core stems: " + missing.join(", ") + ".wav");
+  if (fs.length && !zip && !wavs.length)
+    notes.push("Rejected: need a .zip or .wav stem files");
+  showFiles("stemsList", [], notes);
 });
 /* The .zip / .wav links inside the stems label route to the right input.
    They must stop the event before the enclosing <label for=stemsFiles>
@@ -458,40 +521,108 @@ $("pickWavs").addEventListener("click", e => { e.preventDefault();
   e.stopPropagation(); $("stemsFiles").click(); });
 wireDrop("dropLrc", ["lrc"], fs => {
   pickedLrc = fs.find(f => /\.(lrc|txt)$/i.test(f.name)) || null;
-  showFiles("miscList", [], [pickedLrc ? "Lyrics: " + pickedLrc.name : null]);
+  if (fs.length && !pickedLrc)
+    showFiles("miscList", [], ["Rejected: not a .lrc/.txt lyrics file"]);
+  else showFiles("miscList", [], []);
 });
 wireDrop("dropArt", ["albumArt"], fs => {
   pickedArt = fs.find(f => /\.(png|jpe?g)$/i.test(f.name)) || null;
-  showFiles("miscList2", [], [pickedArt ? "Album art: " + pickedArt.name : null]);
+  if (fs.length && !pickedArt)
+    showFiles("miscList2", [], ["Rejected: not a PNG/JPG image"]);
+  else showFiles("miscList2", [], []);
 });
 
+function fmtSize(b) { if (!b && b !== 0) return "";
+  if (b >= 1048576) return (b/1048576).toFixed(1) + " MB";
+  if (b >= 1024) return Math.round(b/1024) + " KB"; return b + " B"; }
+
+/* zone chosen-state ids: dropZone -> [chosen span id, filelist id] */
+const ZONES = {
+  dropAudio:  ["audioChosen", "audioList"],
+  dropStems:  ["stemsChosen", "stemsList"],
+  dropLrc:    ["lrcChosen",   "miscList"],
+  dropArt:    ["artChosen",   "miscList2"],
+};
+
+function zoneHas(id) {
+  return (id === "dropAudio" && pickedAudio) ||
+    (id === "dropStems" && (pickedStemsZip || pickedStemFiles.length)) ||
+    (id === "dropLrc" && pickedLrc) || (id === "dropArt" && pickedArt);
+}
+
+/* show chosen-file state INSIDE each zone: name(s) + size + a remove link */
+function updateZoneStates() {
+  const desc = {
+    dropAudio: pickedAudio ? [`${pickedAudio.name} (${fmtSize(pickedAudio.size)})`] : null,
+    dropStems: (pickedStemsZip
+        ? [`ZIP ${pickedStemsZip.name} (${fmtSize(pickedStemsZip.size)})`]
+        : pickedStemFiles.length
+          ? pickedStemFiles.map(f => `${f.name} (${fmtSize(f.size)})`) : null),
+    dropLrc: pickedLrc ? [`${pickedLrc.name} (${fmtSize(pickedLrc.size)})`] : null,
+    dropArt: pickedArt ? [`${pickedArt.name} (${fmtSize(pickedArt.size)})`] : null,
+  };
+  for (const [zid, [chosenId, listId]] of Object.entries(ZONES)) {
+    const zone = $(zid), has = zoneHas(zid);
+    zone.classList.toggle("has", !!has);
+    const ch = $(chosenId);
+    ch.innerHTML = "";
+    if (has) {
+      const names = desc[zid];
+      const label = document.createElement("span");
+      label.textContent = "✓ " + names.join(" · ");
+      const rm = document.createElement("span");
+      rm.className = "rm"; rm.textContent = "remove";
+      rm.title = "Clear this choice";
+      rm.addEventListener("click", e => { e.preventDefault();
+        e.stopPropagation(); clearZone(zid); });
+      ch.appendChild(label); ch.appendChild(rm);
+    }
+    // file lists below zones keep their detail role (stems validation etc.)
+    $(listId).innerHTML = "";
+    if (has) {
+      const li = document.createElement("li");
+      li.textContent = desc[zid].join(" · ");
+      $(listId).appendChild(li);
+    }
+  }
+  refreshGo();
+}
+
+function clearZone(zid) {
+  if (zid === "dropAudio") { pickedAudio = null; $("audio").value = ""; }
+  if (zid === "dropStems") { pickedStemsZip = null; pickedStemFiles = [];
+    $("stemsZip").value = ""; $("stemsFiles").value = ""; }
+  if (zid === "dropLrc") { pickedLrc = null; $("lrc").value = ""; }
+  if (zid === "dropArt") { pickedArt = null; $("albumArt").value = ""; }
+  updateZoneStates();
+}
+
 function showFiles(listId, files, notes) {
+  updateZoneStates();
   const ul = $(listId);
-  ul.innerHTML = "";
-  (files || []).forEach(f => {
-    const li = document.createElement("li"); li.textContent = "✓ " + f.name;
-    ul.appendChild(li); });
   (notes || []).forEach(n => {
     if (!n) return;
     const li = document.createElement("li"); li.textContent = n;
-    if (n.startsWith("Skipped") || n.startsWith("Rejected")) li.className = "rej";
+    if (n.startsWith("Missing") || n.startsWith("Skipped")) li.className = "rej";
     ul.appendChild(li); });
-  ["dropAudio","dropStems","dropLrc","dropArt"].forEach(id => {
-    const has = (id === "dropAudio" && pickedAudio) ||
-      (id === "dropStems" && (pickedStemsZip || pickedStemFiles.length)) ||
-      (id === "dropLrc" && pickedLrc) || (id === "dropArt" && pickedArt);
-    $(id).classList.toggle("has", !!has);
-  });
 }
 
-/* enable the Go button when we can run */
+/* enable the Go / Add-to-batch buttons when we can run */
+let busy = false;   // a run/batch/add is in flight: keep action buttons off
+
 function refreshGo() {
   const hasSong = pickedAudio || pickedStemsZip || pickedStemFiles.length;
-  const ok = hasSong && $("artist").value.trim() && $("title").value.trim();
+  const artist = $("artist").value.trim(), title = $("title").value.trim();
+  const ok = !!hasSong && artist && title && !busy;
   $("goBtn").disabled = !ok;
-  $("goHint").textContent = !hasSong
+  $("addToBatchBtn").disabled = !ok;
+  $("runBatchBtn").disabled = !ok || !batchSongs.length;
+  $("saveBatchBtn").disabled = busy || !batchSongs.length;
+  $("goHint").textContent = busy
+    ? "Processing… (buttons return when the job is done)"
+    : !hasSong
     ? "Add an audio file (or stems) and fill in artist + title"
-    : (!ok ? "Fill in artist + title" :
+    : (!artist || !title ? "Fill in artist + title" :
        "Ready — roughly 10–40 min on a typical laptop");
 }
 $("artist").addEventListener("input", refreshGo);
@@ -513,22 +644,7 @@ $("goBtn").addEventListener("click", async () => {
     const up = await api("POST", "/api/upload", fd);
 
     // 2. start the job with options
-    const opts = {
-      artist: $("artist").value.trim(),
-      title: $("title").value.trim(),
-      year: $("year").value || null,
-      genre: $("genre").value || null,
-      separator: $("separator").value,
-      build_clone_hero: $("buildCloneHero").checked,
-      build_pkg: $("buildPkg").checked,
-      generate_freestyle_vocals: $("freestyleVocals").checked,
-      freestyle_drums: $("freestyleDrums").checked,
-      guitar_solo_charting: $("guitarSoloCharting").checked,
-    };
-    if ($("ftShifts").value) opts.ft_shifts = +$("ftShifts").value;
-    if ($("ftStripSeconds").value) opts.ft_strip_seconds = +$("ftStripSeconds").value;
-    if ($("ftSegment").value) opts.ft_segment = +$("ftSegment").value;
-    if ($("ftOverlap").value) opts.ft_overlap = +$("ftOverlap").value;
+    const opts = collectOptions();
 
     await api("POST", `/api/jobs/${up.job_id}/start`, { options: opts });
     activeJobId = up.job_id;
@@ -538,14 +654,41 @@ $("goBtn").addEventListener("click", async () => {
     $("cancelBtn").style.display = "";
     $("log").textContent = "";
     startPolling();
+    // NOTE: setBusy stays TRUE until the job finishes (poll() calls
+    // setBusy(false) on success/failed/cancelled) — the whole pipeline run
+    // is "processing", not just the HTTP round-trips.
   } catch (e) {
     showErr(e.message || String(e));
-  } finally { setBusy(false); }
+    setBusy(false);
+  }
 });
 
+/* collect the form's options (shared by single-song run + add-to-batch) */
+function collectOptions() {
+  const opts = {
+    artist: $("artist").value.trim(),
+    title: $("title").value.trim(),
+    year: $("year").value || null,
+    genre: $("genre").value || null,
+    separator: $("separator").value,
+    build_clone_hero: $("buildCloneHero").checked,
+    build_pkg: $("buildPkg").checked,
+    generate_freestyle_vocals: $("freestyleVocals").checked,
+    freestyle_drums: $("freestyleDrums").checked,
+    guitar_solo_charting: $("guitarSoloCharting").checked,
+  };
+  if ($("ftShifts").value) opts.ft_shifts = +$("ftShifts").value;
+  if ($("ftStripSeconds").value) opts.ft_strip_seconds = +$("ftStripSeconds").value;
+  if ($("ftSegment").value) opts.ft_segment = +$("ftSegment").value;
+  if ($("ftOverlap").value) opts.ft_overlap = +$("ftOverlap").value;
+  return opts;
+}
+
 function setBusy(b) {
+  busy = b;
   $("spin").style.display = b ? "" : "none";
-  $("goBtn").disabled = b;
+  refreshGo();
+  renderBatch();   // batch buttons read `busy` too
 }
 function showErr(t) { const el = $("formErr"); el.textContent = "⚠ " + t;
   el.classList.add("show"); }
@@ -581,6 +724,7 @@ async function poll() {
   const done = ["success","failed","cancelled"].includes(j.status);
   if (done) {
     clearInterval(pollTimer); pollTimer = null;
+    setBusy(false);   // the run is over — re-enable the action buttons
     $("cancelBtn").style.display = "none";
     $("revealBtn").style.display = "";
     if (j.status === "success") {
@@ -631,6 +775,171 @@ $("revealBtn").addEventListener("click", async () => {
   } catch (e) { showErr(e.message); }
 });
 
+/* ================================= batch ================================= */
+let batchSongs = [];   // [{song_id, label, options, files}]
+
+function renderBatch() {
+  const box = $("batchList");
+  box.innerHTML = "";
+  if (!batchSongs.length) {
+    const d = document.createElement("div");
+    d.className = "batch-empty";
+    d.textContent = "No songs staged for the batch yet — fill the form above "
+      + "and press “Add to batch”.";
+    box.appendChild(d);
+  }
+  batchSongs.forEach((s, i) => {
+    const d = document.createElement("div"); d.className = "bsong";
+    const n = document.createElement("span"); n.className = "n";
+    n.textContent = (i + 1) + ".";
+    const t = document.createElement("span"); t.className = "t";
+    t.textContent = s.label;
+    const sub = document.createElement("small");
+    const files = Object.entries(s.files || {})
+      .filter(([, v]) => v).map(([k]) => k).join(", ") || "no files";
+    sub.textContent = `staged: ${files}`;
+    t.appendChild(sub);
+    const rm = document.createElement("span"); rm.className = "rm";
+    rm.textContent = "remove";
+    rm.addEventListener("click", () => { batchSongs.splice(i, 1);
+      renderBatch(); });
+    d.append(n, t, rm);
+    box.appendChild(d);
+  });
+  $("runBatchBtn").disabled = busy || !batchSongs.length;
+  $("saveBatchBtn").disabled = busy || !batchSongs.length;
+  $("clearBatchBtn").disabled = busy || !batchSongs.length;
+}
+
+$("addToBatchBtn").addEventListener("click", async () => {
+  hideErr(); setBusy(true);
+  try {
+    // upload the staged files, then move them into the durable batch store
+    const fd = new FormData();
+    if (pickedAudio) fd.append("audio", pickedAudio);
+    if (pickedLrc) fd.append("lrc", pickedLrc);
+    if (pickedArt) fd.append("album_art", pickedArt);
+    if (pickedStemsZip) fd.append("stems_zip", pickedStemsZip);
+    pickedStemFiles.forEach(f => fd.append("stems_files", f));
+    const up = await api("POST", "/api/upload", fd);
+    const r = await api("POST", "/api/batch/songs", {
+      job_staging: up.job_id,
+      uploads: up.uploads,
+      options: collectOptions(),
+    });
+    batchSongs.push({ label: r.label, ...r.song });
+    renderBatch();
+    // The song is staged server-side — clear ALL file choices and the
+    // metadata so the form is fresh for the next song. Checkboxes stay
+    // checked (user request): the batch's export toggles carry over.
+    clearZone("dropAudio"); clearZone("dropStems");
+    clearZone("dropLrc"); clearZone("dropArt");
+    $("artist").value = ""; $("title").value = ""; $("year").value = "";
+    refreshGo();
+  } catch (e) {
+    showErr(e.message || String(e));
+  } finally { setBusy(false); }
+});
+
+$("saveBatchBtn").addEventListener("click", async () => {
+  const name = $("batchName").value.trim() || "batch";
+  try {
+    const r = await api("POST", "/api/batch/save",
+                       { name, songs: batchSongs,
+                         ps4_pkg_id: $("ps4PkgId").value.trim() || null });
+    fillBatchSelect(r.batches);
+    $("batchName").value = "";
+  } catch (e) { showBatchErr(e.message); }
+});
+
+function showBatchErr(t) { const el = $("batchErr");
+  el.textContent = "⚠ " + t; el.classList.add("show"); }
+
+async function fillBatchSelect(batches) {
+  const sel = $("batchFileSelect");
+  sel.innerHTML = "";
+  const optNone = document.createElement("option");
+  optNone.value = ""; optNone.textContent = "saved batches…";
+  sel.appendChild(optNone);
+  (batches || []).forEach(b => {
+    const o = document.createElement("option");
+    o.value = b.file; o.textContent = `${b.name} (${b.songs} songs)`;
+    sel.appendChild(o);
+  });
+}
+
+$("loadBatchBtn").addEventListener("click", async () => {
+  if (busy) { showBatchErr("wait for the current run to finish"); return; }
+  const f = $("batchFileSelect").value;
+  if (!f) { showBatchErr("pick a saved batch in the dropdown first"); return; }
+  try {
+    const r = await api("POST", "/api/batch/load", { file: f });
+    batchSongs = r.songs;
+    $("batchName").value = r.name || "";
+    $("ps4PkgId").value = r.ps4_pkg_id || "";
+    renderBatch();
+  } catch (e) { showBatchErr(e.message); }
+});
+
+$("clearBatchBtn").addEventListener("click", () => {
+  if (busy) return;
+  batchSongs = []; renderBatch();
+});
+
+$("runBatchBtn").addEventListener("click", async () => {
+  hideErr(); setBusy(true);
+  try {
+    const r = await api("POST", "/api/batch/run", {
+      name: $("batchName").value.trim() || "batch",
+      songs: batchSongs,
+      ps4_pkg_id: $("ps4PkgId").value.trim() || null,
+    });
+    activeJobId = r.job.id;
+    $("jobCard").style.display = "";
+    $("results").classList.remove("show");
+    $("revealBtn").style.display = "none";
+    $("cancelBtn").style.display = "";
+    $("log").textContent = "";
+    startPolling();
+    // busy stays TRUE until poll() sees the job finish
+  } catch (e) {
+    showErr(e.message || String(e));
+    setBusy(false);
+  }
+});
+
+/* ===================== keyboard paste fallback (CMD+V) ==================
+   In some host environments (e.g. VS Code's Simple Browser webview, or
+   remote-desktop wrappers) the OS paste shortcut is swallowed before the
+   page ever sees a native paste event. Right-click paste still works.
+   Detect CMD/CTRL+V ourselves, read the clipboard, and insert the text —
+   but ONLY as a fallback: if a native paste event arrives (the normal
+   browser case), it wins and we do nothing. */
+let __kbPasteArmed = false;
+document.addEventListener("paste", () => { __kbPasteArmed = false; }, true);
+document.addEventListener("keydown", e => {
+  if ((e.key !== "v" && e.key !== "V") || !(e.metaKey || e.ctrlKey)) return;
+  if (e.shiftKey || e.altKey) return;
+  const el = document.activeElement;
+  if (!el || !el.matches("input[type=text], input[type=number], textarea")) return;
+  const valueBefore = el.value;
+  const read = (navigator.clipboard && navigator.clipboard.readText)
+    ? navigator.clipboard.readText() : Promise.reject(new Error("no api"));
+  read.then(text => {
+    // native paste already handled it (its event cleared the arm), or the
+    // field changed some other way — never double-insert
+    if (!__kbPasteArmed || el.value !== valueBefore || !text) return;
+    __kbPasteArmed = false;
+    const s = el.selectionStart ?? el.value.length;
+    const epos = el.selectionEnd ?? s;
+    el.value = el.value.slice(0, s) + text + el.value.slice(epos);
+    const c = s + text.length;
+    el.setSelectionRange(c, c);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }).catch(() => { /* clipboard blocked — right-click paste still works */ });
+  __kbPasteArmed = true;
+}, true);
+
 /* ======================= connection / capabilities ====================== */
 async function connect() {
   if (!ON_PAGES) { fetchCaps(); return; }   // engine serves this page directly
@@ -675,8 +984,11 @@ if (ON_PAGES) {
   connect();
 } else {
   fetchCaps();
+  api("GET", "/api/batch/saved").then(
+    r => fillBatchSelect(r && r.batches), () => {});
 }
 refreshGo();
+renderBatch();
 </script>
 </body>
 </html>
