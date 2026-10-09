@@ -1,0 +1,70 @@
+# Guitar tab guide — "Open Road Song" by Eve 6
+# Sources (retrieved 2026-09-18 via web search; cross-source consensus):
+#   - Ultimate Guitar Archive "Open Road Song" tab (multiple versions)
+#   - TabCrawler eve6/open-road-song ("Intro: distorted power chords, palm muted")
+#   - Songsterr "Eve 6 - Open Road Song" interactive tab
+#   - GuitareTab / guitartabs.cc mirror
+# All sources agree on the transcription below. Standard tuning, no capo.
+
+song: "Open Road Song"
+artist: "Eve 6"
+tuning: standard   # E A D G B e
+technique: "distorted, palm-muted power chords, eighth-note chugging"
+
+# ---------------------------------------------------------------------------
+# INTRO + VERSE RIFF (the section under validation)
+# Consensus ASCII tab (frets on D/A/E strings):
+#   A5 power chord = D7-A7-E5,  B5 = D9-A9-E7
+#
+#    e|-----------------------------------|
+#    B|-----------------------------------|
+#    G|-----------------------------------|
+#    D|---7-7-7-7---9-9-9-9---7-7-7-7----|
+#    A|---7-7-7-7---9-9-9-9---7-7-7-7----|
+#    E|---5-5-5-5---7-7-7-7---5-5-5-5----|
+#
+# Rhythm (user-verified by ear, matches Songsterr playback):
+#   a repeating 5-strum cell: 3 eighth notes + 2 quarter notes,
+#   transposed across changing chord roots.
+# ---------------------------------------------------------------------------
+
+parts:
+  - name: intro_riff
+    chords:
+      - name: A5
+        frets: {D: 7, A: 7, E: 5}
+        root_midi: 45      # A2
+        root_hz: 110.0
+      - name: B5
+        frets: {D: 9, A: 9, E: 7}
+        root_midi: 47      # B2
+        root_hz: 123.47
+      - name: D5
+        frets: {D: 0, A: 5, E: 5}
+        root_midi: 50      # D3
+        root_hz: 146.83
+      - name: E5
+        frets: {D: 2, A: 7, E: 7}
+        root_midi: 52      # E3
+        root_hz: 164.81
+    rhythm:
+      # The user-verified rhythmic cell. 'e' = eighth, 'q' = quarter.
+      pattern: [e, e, e, q, q]
+      description: "3 eighth notes followed by 2 quarter notes, repeated across changing chord pitches"
+    progression:
+      intro: "A5 -> B5 (alternating), palm muted"
+      verse: "A5 - B5 - D5 movement"
+      chorus: "A - E - B - D (power chords, muting released)"
+
+# ---------------------------------------------------------------------------
+# Validation contract (used by tools/guitar_tab_alignment/validate_guitar_vs_tab.py)
+# ---------------------------------------------------------------------------
+validation:
+  # Rhythm: every charted strum in rhythm-guitar sections must sit on the
+  # 1/16 tempo grid, and the repeating cell (3 eighths + 2 quarters) must be
+  # detectable in the chart's inter-onset intervals.
+  grid_divisions: 4          # 16th-note grid
+  cell_pattern_beats: [0.5, 0.5, 0.5, 1.0, 1.0]   # e e e q q
+  # Pitch: chart lane must move UP when the chord root moves up (A5->B5),
+  # and DOWN when it moves down. Lane is monotonic in pitch.
+  monotonic_lane: true

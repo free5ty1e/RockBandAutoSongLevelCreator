@@ -1,0 +1,1 @@
+"""Guitar tab alignment and chart validation tools."""
