@@ -18,6 +18,47 @@ PAGE_DURATION_US = 40000         # ogg muxer page target (~2048-3072 sample gran
 
 _VORBIS_ENCODER_CACHE = None
 
+# Target in-game loudness PER INSTRUMENT BUS (dB RMS, mono-summed), measured
+# from the stock "311 - Down" DLC reference: its drum/bass/guitar/vocal
+# buses all land within ~1 dB of each other (CON vols applied). Demucs
+# stems come out at arbitrary absolute scales, so each stem gets a gain
+# that lands its BUS on the reference's measured level (see
+# build_mogg_from_stems; the dta vols array itself is not flat, so the gain
+# model compensates the per-bus multiplier the vols imply).
+BUS_TARGET_DB = {
+    "drums": -17.5, "bass": -18.0, "guitar": -18.6, "vocals": -17.9,
+}
+
+
+def _stem_rms_db(input_files: list[Path]) -> list[float | None]:
+    """Cheap per-stem loudness measure (dB RMS of the mono sum).
+
+    Uses ffmpeg astats (no decode into Python memory — the stems are 10s of
+    MB each). Returns one value per input file, in input order; None when a
+    stem can't be measured (caller should leave its gain at unity).
+    """
+    out = []
+    for f in input_files:
+        try:
+            r = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-nostats", "-i", str(f),
+                 "-af", "pan=mono|c0=0.5*FL+0.5*FR,astats=metadata=0",
+                 "-f", "null", "-"],
+                capture_output=True, text=True, timeout=120)
+            # astats prints "RMS level dB: x" in the final summary
+            import re as _re
+            vals = _re.findall(r"RMS level dB:\s*(-?[\d.]+|-inf)",
+                               r.stderr)
+            if not vals:
+                out.append(None)
+                continue
+            v = vals[-1]
+            out.append(float("-60.0") if v == "-inf" else float(v))
+        except Exception as e:
+            logger.warning(f"RMS measure failed for {f}: {e}")
+            out.append(None)
+    return out
+
 
 def _require_libvorbis() -> None:
     """
@@ -263,84 +304,249 @@ def build_mogg_from_stems(stems_dir: str | Path, output_dir: Path, song_id: str,
         input_files = sorted(list(stems_path.glob("*.wav")))
 
     if standard_layout:
-        logger.info("Combining 4 stems into 10-channel MOGG container via ffmpeg (311 - Down layout).")
-        ogg_tmp = output_dir / f"{song_id}.tmp.ogg"
-        cmd = ["ffmpeg", "-y"]
-        for f in input_files:
-            cmd.extend(["-i", str(f)])
+        logger.info("Combining 4 stems into 10-channel MOGG container via ffmpeg (311 - Down layout, two-pass bus calibration).")
 
         # [0] drums, [1] bass, [2] other (guitar/backing), [3] vocals,
         # [4] optional guitar stem, [5] optional piano stem.
-        # Every branch is normalized to stereo first, then panned to a mono
-        # channel so amerge yields exactly 10 channels in order.
         #
-        # When extra stems exist they are pre-mixed with the 'other' stem into
-        # one backing bus [gbus]; ch5-6 and the quiet ch9 are derived from that
-        # bus so every instrument remains audible in-game.
-        if extra_stems:
-            mix_labels = ["[2:a]"] + [f"[{4 + i}:a]" for i in range(len(extra_stems))]
-            filter_parts = [
-                "".join(mix_labels)
-                + f"amix=inputs={len(mix_labels)}:duration=longest:normalize=0"
-                  + ",aformat=channel_layouts=stereo,asplit=3[gbus1][gbus2][gbus3]",
+        # v0.1.28 MIX BALANCE (the PS4 "drums way louder than everything
+        # else / can barely hear bass" report):
+        #   1. The game's drum bus sums ch0+ch1+ch2+ch3 (MakeMoggDta's Mix1
+        #      split: drum (0), drum (1), drum (2 3)). Our old layout put a
+        #      FULL KIT COPY on ch0-1 AND ch2-3, so the kit played twice
+        #      (+~5-8 dB over every other bus). The 311-Down reference does
+        #      NOT do this: its ch0/1 are separate kick/snare elements with
+        #      near-zero correlation to the ch2-3 kit. We now build ch0-1
+        #      as low-band (kick) and high-band (snare) ELEMENTS of the
+        #      drum stem — a frequency split, not a copy — so the drum bus
+        #      gets kit + a bit of extra punch, like the reference.
+        #   2. Demucs stems come out at wildly different absolute scales
+        #      (measured on Open Road Song: drums -26.6 dB vs 'other'
+        #      -58.7 dB RMS), so a unity mix buries quiet instruments.
+        #      Measured reference bus levels (311-Down, CON vols) are all
+        #      within ~1 dB (-17.5..-18.6). We measure each stem's RMS and
+        #      apply a per-stem gain so every bus lands at a common target
+        #      (capped at ±12 dB; a stem that is genuinely near-silent,
+        #      e.g. 'other' on a 6-stem song, is left near-silent rather
+        #      than amplified to hiss).
+        stem_rms = _stem_rms_db(input_files)   # [drums, bass, other, vocals, ...]
+
+        # Bus multipliers implied by the stock dta vols (see dta_writer):
+        # power-sum of the per-channel vol factors across each bus's channels.
+        #   drums ch0-3: -0.5, -0.1, -2.1, -2.1  -> +4.9 dB bus gain
+        #   bass   ch4:  -3.1                     -> -3.1 dB
+        #   guitar ch5-6: -2.0, -2.0              -> +1.0 dB
+        #   vocals ch7-8: -3.0, -3.0              -> +0.0 dB
+        # (kick ch0 / snare ch1 are band ELEMENTS of the kit, so their
+        # contribution to the bus is partial, but power-summing with their
+        # hot vols is the conservative upper bound — keeps the kit from
+        # doubling like the v0.1.27 duplication bug.)
+        # Values MEASURED on a v0.1.28 build (correlated same-source
+        # channels sum ~+6 dB per identical stereo pair; the drum bus's
+        # kick/snare band elements sit ~3 dB under the kit, reducing the
+        # +10.9 dB correlated sum of all four drum vols to +7.9):
+        DTA_BUS_GAIN_DB = {
+            "drums": 7.9, "bass": -3.1, "guitar": 4.8, "vocals": 6.1,
+        }
+
+        def bus_gain(stem_idx, stem_name, cap_db=12.0):
+            rms = stem_rms[stem_idx]
+            if rms is None:
+                return 1.0
+            bus_db = DTA_BUS_GAIN_DB.get(stem_name, 0.0)
+            target = BUS_TARGET_DB.get(stem_name, -18.0)
+            eff = rms + bus_db   # in-bus level if the stem were left at unity
+            gain_db = min(cap_db, max(-cap_db, target - eff))
+            g = 10 ** (gain_db / 20)
+            logger.info(f"MOGG mix: {stem_name} stem RMS {rms:.1f} dB, dta bus "
+                        f"{bus_db:+.1f} dB -> effective {eff:.1f} dB -> gain "
+                        f"{gain_db:+.1f} dB (bus target {target:.1f} dB)")
+            return g
+
+        # vols/pans stay the stock dta values; the raw channel levels now
+        # carry the balance. The per-stem gain compensates BOTH the stem's
+        # own absolute level AND the bus gain the dta vols + correlated
+        # channel summing apply. The drum bus's kick/snare band elements
+        # contribute song-dependent energy (their share of the kit spectrum
+        # varies), so a fixed analytic constant cannot land every bus —
+        # hence TWO PASSES: encode once with analytic gains, MEASURE each
+        # bus's actual level from the encoded channels, correct the gains,
+        # and encode the final mix.
+        stem_rms = _stem_rms_db(input_files)   # [drums, bass, other, vocals, ...]
+
+        def _corr_sum_db(vol_db_list):
+            import math as _m
+            return 20 * _m.log10(sum(10 ** (v / 20) for v in vol_db_list))
+
+        # Analytic bus multipliers from the stock CON dta vols (dta_writer):
+        # correlated same-source channels sum by AMPLITUDE. The drums entry
+        # scales the full correlated sum down for the band elements' partial
+        # energy (measured ~4 dB share on ORS; pass 2 corrects the rest).
+        DTA_BUS_GAIN_DB = {
+            "drums": _corr_sum_db([-0.5, -0.1, -2.1, -2.1]) - 4.0,
+            "bass": -3.1,
+            "guitar": _corr_sum_db([-2.0, -2.0]),
+            "vocals": _corr_sum_db([-3.0, -3.0]),
+        }
+
+        def bus_gain(stem_idx, stem_name, cap_db=12.0):
+            rms = stem_rms[stem_idx]
+            if rms is None:
+                return 1.0
+            bus_db = DTA_BUS_GAIN_DB.get(stem_name, 0.0)
+            target = BUS_TARGET_DB.get(stem_name, -18.0)
+            eff = rms + bus_db   # in-bus level if the stem were left at unity
+            gain_db = min(cap_db, max(-cap_db, target - eff))
+            g = 10 ** (gain_db / 20)
+            logger.info(f"MOGG mix: {stem_name} stem RMS {rms:.1f} dB, est bus "
+                        f"{bus_db:+.1f} dB -> effective {eff:.1f} dB -> gain "
+                        f"{gain_db:+.1f} dB (bus target {target:.1f} dB)")
+            return g
+
+        def _encode(g_drums, g_bass, g_vocals, g_other, extra_gains,
+                    ogg_path):
+            """Encode the 10-channel ogg with the given per-stem gains."""
+            if extra_stems:
+                filter_parts = [
+                    f"[2:a]volume={g_other:.6f}[o1]",
+                    f"[4:a]volume={extra_gains[0]:.6f}[x1]",
+                    "[o1][x1]"
+                    + "amix=inputs=2:duration=longest:normalize=0"
+                      + ",aformat=channel_layouts=stereo,asplit=3[gbus1][gbus2][gbus3]",
+                ]
+                backing_src1 = "[gbus1]"
+                backing_src2 = "[gbus2]"
+                backing_src3 = "[gbus3]"
+            else:
+                filter_parts = []
+                backing_src1 = f"[2:a]volume={g_other:.6f},"
+                backing_src2 = backing_src1
+                backing_src3 = backing_src1
+            filter_parts += [
+                # ch0: KICK ELEMENT of the drum stem (low band) — NOT a kit
+                # copy: the drum bus sums ch0+ch1+ch2-3, so duplicating the
+                # kit would play it twice (the v0.1.27 "drums way too loud"
+                # bug: kit measured +8..12 dB over every other bus in-game).
+                f"[0:a]aformat=channel_layouts=stereo,pan=mono|c0=0.5*FL+0.5*FR,"
+                f"volume={g_drums:.6f},highpass=f=35,lowpass=f=140[s0]",
+                # ch1: SNARE ELEMENT (150 Hz-8 kHz band).
+                f"[0:a]aformat=channel_layouts=stereo,pan=mono|c0=0.5*FL+0.5*FR,"
+                f"volume={g_drums:.6f},highpass=f=150,lowpass=f=8000[s1]",
+                # ch2-3: stereo drum kit (full band).
+                f"[0:a]aformat=channel_layouts=stereo,volume={g_drums:.6f},asplit=2[dL][dR]",
+                "[dL]pan=mono|c0=FL[s2]",
+                "[dR]pan=mono|c0=FR[s3]",
+                # ch4: mono bass.
+                f"[1:a]aformat=channel_layouts=stereo,pan=mono|c0=0.5*FL+0.5*FR,volume={g_bass:.6f}[s4]",
+                # ch5-6: stereo guitar/backing bus ('other' + guitar/piano).
+                f"{backing_src1}aformat=channel_layouts=stereo,pan=mono|c0=FL[s5]",
+                f"{backing_src2}aformat=channel_layouts=stereo,pan=mono|c0=FR[s6]",
+                # ch7-8: stereo vocals.
+                f"[3:a]aformat=channel_layouts=stereo,volume={g_vocals:.6f},asplit=2[vL][vR]",
+                "[vL]pan=mono|c0=FL[s7]",
+                "[vR]pan=mono|c0=FR[s8]",
+                # ch9: fake/crowd ambience at low level (near-silent like
+                # 311-Down's ch9).
+                f"{backing_src3}aformat=channel_layouts=stereo,pan=mono|c0=0.5*FL+0.5*FR,volume=0.1[s9]",
+                "[s0][s1][s2][s3][s4][s5][s6][s7][s8][s9]amerge=inputs=10[aout]",
             ]
-            backing_src1 = "[gbus1]"
-            backing_src2 = "[gbus2]"
-            backing_src3 = "[gbus3]"
-        else:
-            filter_parts = []
-            backing_src1 = "[2:a]"
-            backing_src2 = "[2:a]"
-            backing_src3 = "[2:a]"
-        filter_parts += [
-            # ch0/ch1: full drum kit split stereo. 311 Down's kick/snare
-            # (ch0/1) are its LOUDEST channels (~3500 RMS); keeping the first
-            # stereo pair hot mirrors that and guarantees any preview
-            # mixdown that uses the front stereo pair is audible.
-            "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FL[s0]",
-            "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FR[s1]",
-            # ch2-3: stereo drum kit.
-            "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FL[s2]",
-            "[0:a]aformat=channel_layouts=stereo,pan=mono|c0=FR[s3]",
-            # ch4: mono bass.
-            "[1:a]aformat=channel_layouts=stereo,pan=mono|c0=0.5*FL+0.5*FR[s4]",
-            # ch5-6: stereo guitar/backing bus ('other' + guitar/piano stems).
-            f"{backing_src1}aformat=channel_layouts=stereo,pan=mono|c0=FL[s5]",
-            f"{backing_src2}aformat=channel_layouts=stereo,pan=mono|c0=FR[s6]",
-            # ch7-8: stereo vocals.
-            "[3:a]aformat=channel_layouts=stereo,pan=mono|c0=FL[s7]",
-            "[3:a]aformat=channel_layouts=stereo,pan=mono|c0=FR[s8]",
-            # ch9: fake/crowd ambience at low level (near-silent like 311's
-            # ch9, which carries ~50 RMS vs ~3500 on its kick channel).
-            f"{backing_src3}aformat=channel_layouts=stereo,pan=mono|c0=0.5*FL+0.5*FR,volume=0.1[s9]",
-            "[s0][s1][s2][s3][s4][s5][s6][s7][s8][s9]amerge=inputs=10[aout]",
-        ]
-        if count_in_ms > 0:
-            filter_parts.append(f"[aout]adelay={count_in_ms}:all=1[countin]")
-            map_label = "[countin]"
-        else:
-            map_label = "[aout]"
+            if count_in_ms > 0:
+                filter_parts.append(f"[aout]adelay={count_in_ms}:all=1[countin]")
+                map_label = "[countin]"
+            else:
+                map_label = "[aout]"
+            _require_libvorbis()
+            cmd = ["ffmpeg", "-y"]
+            for f in input_files:
+                cmd.extend(["-i", str(f)])
+            # Small pages (~2048-3072 sample granules) match stock Harmonix
+            # moggs; ffmpeg's default libvorbis paging emits ~1s/56KB pages
+            # that Rock Band's Milkshake audio engine cannot decode reliably.
+            cmd.extend([
+                "-filter_complex", ";".join(filter_parts),
+                "-map", map_label,
+                "-c:a", "libvorbis",
+                "-q:a", "2",
+                "-page_duration", str(PAGE_DURATION_US),
+                "-f", "ogg",
+                str(ogg_path),
+            ])
+            result = subprocess.run(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True)
+            if result.returncode != 0:
+                logger.error(f"FFmpeg multi-channel merge failed: {result.stderr}")
+                raise RuntimeError(f"FFmpeg failed to build MOGG container: {result.stderr}")
 
-        # Explicitly force the 'ogg' format muxer so ffmpeg accepts the .ogg extension.
-        # -page_duration forces small pages (~2048-3072 sample granules) matching
-        # stock Harmonix moggs; ffmpeg's default libvorbis paging emits ~1s/56KB
-        # pages that Rock Band's Milkshake audio engine cannot decode reliably.
-        _require_libvorbis()
-        cmd.extend([
-            "-filter_complex", ";".join(filter_parts),
-            "-map", map_label,
-            "-c:a", "libvorbis",
-            "-q:a", "2",
-            "-page_duration", str(PAGE_DURATION_US),
-            "-f", "ogg",
-            str(ogg_tmp)
-        ])
+        DTA_CON_VOLS = [-0.5, -0.1, -2.1, -2.1, -3.1, -2.0, -2.0, -3.0, -3.0, -3.1]
 
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if result.returncode != 0:
-            logger.error(f"FFmpeg multi-channel merge failed: {result.stderr}")
-            raise RuntimeError(f"FFmpeg failed to build MOGG container: {result.stderr}")
+        def _measure_buses(ogg_path):
+            """Decode the pass-1 ogg and measure each instrument bus's
+            actual dB RMS under the PS4-padded dta vols (LibForge pads
+            every CON vol by -3.0 dB when writing the PS4 mogg.dta)."""
+            try:
+                import soundfile as _sf
+                import numpy as _np
+                y, _sr = _sf.read(str(ogg_path), always_2d=True)
+            except Exception as e:
+                logger.warning(f"pass-1 bus measurement failed ({e}); "
+                               "keeping analytic gains")
+                return None
+            skip = int(_sr * (count_in_ms / 1000.0 + 1.0))
+            y = y[skip:] if skip < len(y) else y
+            # Measure under the CON vols (unpadded): BUS_TARGET_DB was
+            # measured from the 311-Down reference the same way, and the
+            # PS4's -3 dB pad is a uniform shift that does not affect the
+            # buses' BALANCE (comparing a padded measurement against an
+            # unpadded target made pass 2 over-boost every bus by 3 dB).
+            vols = list(DTA_CON_VOLS)
+            def bus(chs):
+                sig = _np.zeros(len(y))
+                for c in chs:
+                    sig += y[:, c] * (10 ** (vols[c] / 20))
+                return 20 * _np.log10(max(float(_np.sqrt((sig ** 2).mean())), 1e-10))
+            return {
+                "drums": bus([0, 1, 2, 3]),
+                "bass": bus([4]),
+                "guitar": bus([5, 6]),
+                "vocals": bus([7, 8]),
+            }
 
+        # ---- pass 1: encode with analytic gains, then measure ----
+        g_drums = bus_gain(0, "drums")
+        g_bass = bus_gain(1, "bass")
+        g_vocals = bus_gain(3, "vocals")
+        g_other = bus_gain(2, "guitar")
+        extra_gains = [bus_gain(4 + i, "guitar")
+                       for i in range(len(extra_stems))]
+
+        pass1_ogg = output_dir / f"{song_id}.pass1.ogg"
+        try:
+            _encode(g_drums, g_bass, g_vocals, g_other, extra_gains, pass1_ogg)
+            measured = _measure_buses(pass1_ogg)
+            if measured is not None:
+                def _adj(name, g):
+                    err_db = measured[name] - BUS_TARGET_DB[name]
+                    if abs(err_db) < 0.3:
+                        return g
+                    # the bus level moves 1:1 (in dB) with the stem gain;
+                    # clamp the correction so we never explode a quiet stem
+                    corr_db = max(-6.0, min(6.0, -err_db))
+                    logger.info(f"MOGG mix pass-2: {name} bus measured "
+                                f"{measured[name]:.1f} dB (target "
+                                f"{BUS_TARGET_DB[name]:.1f}) -> stem gain "
+                                f"correction {corr_db:+.1f} dB")
+                    return g * (10 ** (corr_db / 20))
+                g_drums = _adj("drums", g_drums)
+                g_bass = _adj("bass", g_bass)
+                g_vocals = _adj("vocals", g_vocals)
+                g_other = _adj("guitar", g_other)
+                extra_gains = [_adj("guitar", g) for g in extra_gains]
+        finally:
+            pass1_ogg.unlink(missing_ok=True)
+
+        # ---- final encode with calibrated gains ----
+        ogg_tmp = output_dir / f"{song_id}.tmp.ogg"
+        _encode(g_drums, g_bass, g_vocals, g_other, extra_gains, ogg_tmp)
         try:
             ogg_bytes = ogg_tmp.read_bytes()
         finally:

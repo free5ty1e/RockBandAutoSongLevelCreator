@@ -38,10 +38,17 @@ def reveal_in_file_manager(path: str | Path) -> tuple[bool, str]:
             subprocess.run(["open", target], check=False, timeout=10)
             return True, f"Opened in Finder: {target}"
         # Linux / everything else: xdg-open; fall back to known DE openers.
-        for opener in ("xdg-open", "gio", "nautilus", "dolphin"):
-            if shutil.which(opener):
-                subprocess.run([opener, target], check=False, timeout=10)
-                return True, f"Opened with {opener}: {target}"
+        # `gio` needs a SUBCOMMAND (`gio open <path>`) — calling it bare
+        # just prints its usage text and opens nothing (observed live in the
+        # user's console during the v0.1.27 playtest).
+        for opener in ("xdg-open", ("gio", "open"), ("nautilus",), ("dolphin",)):
+            exe = opener[0] if isinstance(opener, tuple) else opener
+            if not shutil.which(exe):
+                continue
+            argv = list(opener) + [target] if isinstance(opener, tuple) \
+                else [opener, target]
+            subprocess.run(argv, check=False, timeout=10)
+            return True, f"Opened with {' '.join(argv[:-1])}: {target}"
         return False, ("No file manager found (xdg-open/gio/nautilus/dolphin). "
                        "The job folder is at: " + target)
     except Exception as e:  # never fail the API over a UX nicety

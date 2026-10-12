@@ -89,3 +89,41 @@ ch9  quiet fake/crowd ambience (backing at 0.1 gain; was digital silence)
 - Format: https://milo.ipg.pw/index.php/MOGG_File_Format
 - `ogg2mogg` (reference builder, public domain): https://github.com/mtolly/ogg2mogg
 - `moggulator` (Python port + decryption): https://github.com/LocalH/moggulator
+
+
+## In-game mix balance (v0.1.28): the drum-duplication + loudness bug
+
+PS4 playtest of the DevTestPack: "drums WAY louder than everything else,
+barely hear the bass even on the bass track." Two root causes, both fixed
+and measured:
+
+1. **Drum kit duplication.** The game's drum bus sums ch0+ch1+ch2-3
+   (LibForge `MakeMoggDta`'s Mix1 split of `drum (0 1 2 3)` into
+   `drum (0)`, `drum (1)`, `drum (2 3)` — intended as kick / snare / kit).
+   AutoRB put a FULL-KIT COPY on ch0-1 *and* the kit on ch2-3, so the kit
+   played twice: measured in-game drums -18.7 dB vs bass -30.2 (11.5 dB
+   spread; the stock 311-Down reference is 1.1 dB). The reference's ch0/1
+   are independent kick/snare ELEMENTS — corr(ch0, ch2) ≈ 0, and ch0 is
+   its LOUDEST channel. Fix: ch0-1 are now BAND ELEMENTS of the drum stem
+   (kick 35-140 Hz, snare 150 Hz-8 kHz) — a frequency split, not a copy.
+2. **No loudness matching.** Demucs stems come out at arbitrary absolute
+   scales (ORS: drums -26.6 dB vs 'other' -58.7 dB RMS) so a unity mix
+   buries quiet instruments. Reference bus levels (311-Down, CON vols):
+   drums -17.5 / bass -18.0 / guitar -18.6 / vocals -17.9 dB. Fix:
+   `build_mogg_from_stems` measures each stem's RMS (ffmpeg astats),
+   computes per-stem gains landing every BUS on those targets — including
+   the per-bus multiplier the dta vols themselves apply (correlated
+   channels sum by amplitude) — then does a SECOND PASS: decode the pass-1
+   ogg, measure each bus's actual level, correct the gains, re-encode
+   (the drum bus's band elements carry song-dependent energy, so a fixed
+   analytic constant cannot land it exactly; measurement closes the gap).
+   Gains are capped ±12 dB (near-silent stems stay near-silent instead of
+   becoming hiss).
+
+Validated on the user's two songs: every bus within 0.1 dB of target
+(whole-song spread 1.08 dB ORS / 1.14 dB BN). The naive unity mixdown of
+both the fix and the stock reference peak >0 dBFS (+5.6 vs +5.3) — the
+game does not naive-sum channels; bus BALANCE is the contract. Note for
+6-stem songs: `other` is often near-silent (htdemucs_6s routes guitar to
+the dedicated stem); the guitar/backing bus ch5-6 then effectively IS
+the guitar stem, with nothing audible missing.
