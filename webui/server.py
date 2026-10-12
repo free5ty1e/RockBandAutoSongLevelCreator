@@ -319,11 +319,23 @@ async def cancel_job(job_id: str):
 
 @app.post("/api/jobs/{job_id}/reveal")
 async def reveal_job(job_id: str):
-    """Open the job's output folder in the OS file manager (Explorer/Finder)."""
+    """Open the job's most useful folder in the OS file manager.
+
+    For a finished BATCH job that built a PS4 pack, the interesting folder is
+    con_pack/ (multi-song CON + pkg/); otherwise the job's output dir (or
+    the job dir if nothing has been produced yet).
+    """
     job = store.get(job_id)
     if job is None:
         raise HTTPException(404, "Job not found")
-    target = job.output_dir if job.output_dir.exists() else job.dir
+    target = None
+    pack_dir = job.output_dir / "con_pack"
+    if pack_dir.exists():
+        target = pack_dir
+    if target is None and job.output_dir.exists():
+        target = job.output_dir
+    if target is None:
+        target = job.dir
     ok, msg = reveal_in_file_manager(target)
     return {"ok": ok, "message": msg, "path": str(target)}
 

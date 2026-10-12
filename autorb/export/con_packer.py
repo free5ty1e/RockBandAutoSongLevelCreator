@@ -9,6 +9,8 @@ import sys
 import tempfile
 
 BLOCK_SIZE = 0x1000
+# Physical offset of the STFS file table (and the base for all data blocks).
+FT_OFF = 0xC000
 MILO_A_MAGIC = 0xCABEDEAF
 ADDE_PADDING = b'\xad\xde\xad\xde'
 
@@ -205,14 +207,46 @@ def read_con_payloads(con_path: Path) -> tuple[str | None, dict]:
             if name not in ("songs", "gen") and song_id is None:
                 song_id = name
             continue
-        off = FT + logical_to_physical(start) * BLOCK_SIZE
-        files[name] = data[off:off + size]
+        files[name] = _read_payload_blocks(data, start, size)
     if song_id is None:
         for k in files:
             if k.endswith(".mid"):
                 song_id = k[:-4]
                 break
     return song_id, files
+
+
+def _read_payload_blocks(data: bytes, start: int, size: int) -> bytes:
+    """Read a payload BLOCK BY BLOCK, following logical_to_physical.
+
+    A payload's blocks are scattered through the STFS image with hash-table
+    blocks interleaved every 0xAA data blocks — a contiguous byte slice
+    would read THROUGH the table gaps (pulling in hash-table/zero bytes and
+    shifting everything after). This is the same layout the writer produces
+    (write_payload), read back correctly: each logical block maps to its own
+    physical block via logical_to_physical().
+
+    Bug this fixes (found via a GameArchives probe on the DevTestPack):
+    read_con_payloads sliced contiguously, so every file spanning a 170-block
+    boundary corrupted at the gap — e.g. the Open Road Song mogg read back
+    with 2 zero blocks inserted at byte 557056 (exactly the phys 170/171
+    hash-table slots), and the multi-song pack baked that corruption in,
+    producing a PS4 PKG whose audio/chart data was garbage (the PS4 silently
+    dropped the songs).
+    """
+    if size == 0:
+        return b""
+    import io
+    out = io.BytesIO()
+    remaining = size
+    block = 0
+    while remaining > 0:
+        off = FT_OFF + logical_to_physical(start + block) * BLOCK_SIZE
+        chunk = data[off:off + min(BLOCK_SIZE, remaining)]
+        out.write(chunk)
+        remaining -= len(chunk)
+        block += 1
+    return out.getvalue()
 
 
 def combine_songs_dta(dta_list: list[bytes]) -> bytes:

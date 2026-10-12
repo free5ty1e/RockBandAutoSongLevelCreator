@@ -768,11 +768,21 @@ $("cancelBtn").addEventListener("click", async () => {
   catch (e) { showErr(e.message); }
 });
 $("revealBtn").addEventListener("click", async () => {
-  if (!activeJobId) return;
+  // recover the last job id if the page was reloaded after finishing
+  if (!activeJobId) {
+    try {
+      const { jobs } = await api("GET", "/api/jobs");
+      if (jobs && jobs.length) activeJobId = jobs[0].id;
+    } catch (_) { /* same fallthrough as below */ }
+  }
+  if (!activeJobId) { showErr("No job to reveal yet — chart a song first."); return; }
   try {
     const r = await api("POST", `/api/jobs/${activeJobId}/reveal`);
-    if (!r.ok) showErr(r.message);
-  } catch (e) { showErr(e.message); }
+    if (!r.ok) showErr("Reveal failed: " + r.message);
+    else showErr("");  // clear any stale error
+  } catch (e) { showErr("Reveal failed: " + e.message +
+    " (if this is the GitHub-Pages page, the engine must be running locally)");
+  }
 });
 
 /* ================================= batch ================================= */
