@@ -4,7 +4,7 @@ Captured at **v0.1.13** — research into separating piano/keyboard from the mai
 
 ## Current situation
 
-The default `htdemucs_ft` model separates into 4 stems: `drums, bass, other, vocals`. The `other` stem contains **everything that's not drums, bass, or vocals** — including piano/keyboard, rhythm guitar, and any other non-drum/bass/vocal instruments. For Rock Band keys charting, the piano parts need to be isolated from the `other` stem.
+The default separator is **`htdemucs_6s`** (since v0.1.24 — the configuration the pipeline has been validated against; it splits guitar out of `other` and adds a piano stem). With the 4-stem models (`htdemucs_ft` — the pre-v0.1.24 default — and stock `htdemucs`), `other` contains **everything that's not drums, bass, or vocals** — including piano/keyboard, rhythm guitar, and any other non-drum/bass/vocal instruments, so keys/guitar charting re-detects both from the shared `other` stem. For Rock Band keys charting, the piano parts need to be isolated from the `other` stem.
 
 ## Available options
 
@@ -62,7 +62,7 @@ For the immediate need (finding a song with keys to experiment with):
 
 1. **Start with `htdemucs_6s`** — already installed, fast (single model, no ensemble), 6 stems including `piano`, zero new dependencies. The `guitar` stem alone is valuable — it splits guitar out of `other`, making the remaining `other` stem much cleaner.
 2. **If the piano stem quality proves too poor**, evaluate Spleeter `5stems` in an **isolated venv only** (see the conflict warning above) — never pip-install it into the main environment.
-3. The `--separator` CLI option switches between all of these (`htdemucs_ft` default / `htdemucs` fast / `htdemucs_6s` piano+guitar / `spleeter:5stems`).
+3. The `--separator` CLI option switches between all of these (`htdemucs_6s` DEFAULT since v0.1.24 / `htdemucs_ft` best 4-stem quality / `htdemucs` fast / `spleeter:5stems`).
 
 ## Integration status (v0.1.14 — Phases 1 & 2 done, Phase 3 pending)
 
@@ -70,7 +70,7 @@ For the immediate need (finding a song with keys to experiment with):
 ```
 --separator [htdemucs|htdemucs_ft|htdemucs_6s|spleeter:5stems]
 ```
-Default: `htdemucs_ft` (best quality). Users who need piano/guitar separation use `htdemucs_6s`. The legacy `--use-ft-stems/--no-use-ft-stems` flags still work as aliases; `--separator` wins if both are given.
+Default: `htdemucs_6s` (since v0.1.24 — validated configuration; dedicated guitar stem drives the guitar chart, piano stem available for keys). Users wanting maximum separation quality on 4 stems use `htdemucs_ft`. The legacy `--use-ft-stems/--no-use-ft-stems` flags still work as aliases; `--separator` wins if both are given.
 
 ### ✅ Done: separation backends
 - `htdemucs_6s` runs through the existing `separate_stems()` unchanged — it's a single-model BagOfModels, so it takes the single-model branch (auto-chunked via the 10 s COLA chunker for tracks > 2 min) and saves all 6 stems from `model.sources`.

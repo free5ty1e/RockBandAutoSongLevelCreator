@@ -408,10 +408,17 @@ python -m webui.server          # or: autorb-webui
 What the UI covers: MP3/WAV/FLAC/M4A upload (or pre-separated stems: the four
 core `.wav`s, optional `guitar.wav`/`piano.wav`, individually or as one `.zip`),
 optional LRC (with no LRC, WhisperX transcribes the vocals automatically),
-metadata fields (artist/title/year/genre), all separator options and FT knobs,
+metadata fields (artist/title/year/genre), an **optional output folder** (leave
+blank for the automatic per-job folder, or type a path on the engine machine
+and every job lands there), all separator options and FT knobs,
 Clone Hero / PS4 PKG export toggles, freestyle vocals/drums, guitar solo
-charting, live log + progress bar, cancel, artifact downloads, and
-show-in-explorer. **Batches:** stage songs with “Add to batch”, then package
+charting, live log + progress bar, cancel, and artifact downloads. When a job
+finishes, its output path appears as a **click-to-copy chip** — and the
+“Show in Explorer/Finder” button opens that folder in your file manager.
+On a machine with a desktop that just works; if the engine runs somewhere
+without one (a container/remote server), the button honestly reports that
+and the copyable path chip is the answer. **Batches:** stage songs with “Add
+to batch”, then package
 them all into ONE multi-song CON and ONE PS4 PKG (`--package-con-dir` under
 the hood) — and save the batch to a JSON file to load and re-run the exact
 same set (files + metadata) later; staged files live under the jobs root so a

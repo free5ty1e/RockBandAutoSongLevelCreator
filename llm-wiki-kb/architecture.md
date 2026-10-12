@@ -5,6 +5,28 @@ The AutoRB pipeline is an end-to-end automation system for converting raw audio 
 ## Fresh-User Wheel Install (v0.0066)
 Fresh users install only the wheel (no git clone). Known macOS/Linux pitfall: `python3 -m venv venv` can fail with `ensurepip ... non-zero exit status 1` — see the "Troubleshooting `python3 -m venv venv` failures" section in README.md and the GitHub release body (run `python3.12 -m ensurepip --upgrade` to see the real error; fixes: `unset PYTHONPATH PYTHONHOME`, verify `which python3.12`, or bootstrap pip with `--without-pip` + `get-pip.py`). The wheel enforces `Requires-Python >=3.11,<3.14` (Python 3.14 unsupported — WhisperX caps at `<3.14`).
 
+## Web Interface (v0.1.23+, `webui/`)
+
+A FastAPI engine (`python -m webui.server` / `autorb-webui`, default
+`127.0.0.1:7860`) wraps the REAL CLI as a subprocess — never re-implementing
+pipeline logic: uploads (audio/stems/LRC/art) stage into
+`webui_jobs/<id>/uploads/`, jobs run one-at-a-time through a single worker
+queue, and progress is parsed from the CLI's own stage markers + Demucs strip
+counters (`webui/progress.py`). Batches (`webui/batch.py`) stage songs into a
+durable `batch_store/`, save/load to `batch_store/batches/<name>.json`
+(format `autorb-batch/1`), run each song's pipeline, then package all CONs via
+`--package-con-dir`. The same single-file UI (`webui/static/index.html`)
+deploys to GitHub Pages via `docs/` — kept byte-identical by a test and a
+workflow guard; on Pages it shows a connect panel and posts to the local
+engine (Pages is static-only; the engine always runs on the user's machine).
+An optional **output folder** (per-job or per-batch) relocates just the
+user-facing output (`<root>/<job_id>/`); uploads and logs always stay under
+the jobs root. Contract notes: CLI failure paths MUST `sys.exit(1)` (a bare
+`return` in a click callback exits 0 and the engine reads failures as
+successes), and the reveal endpoint reports `ok: False` + the path on
+headless machines so the UI can show a copyable chip instead of silently
+doing nothing.
+
 ## Pipeline Components
 
 1.  **Audio Processing (`autorb.audio`)**:

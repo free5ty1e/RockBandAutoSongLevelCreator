@@ -294,6 +294,15 @@ python -m webui.server</code></div>
           <input id="genre" type="text" placeholder="Rock">
         </label>
       </div>
+      <label class="field">Output folder <small>(optional)</small>
+        <input id="outputDir" type="text"
+               placeholder="Auto: a new folder per job (default)">
+        <small style="font-weight:400;color:var(--dim)">Leave blank for the
+          automatic per-job folder. Type/paste a folder path on the machine
+          running the engine (e.g. <code>/home/me/RB songs</code> or
+          <code>C:\Users\me\RB songs</code>) and every job's output lands
+          there under its own subfolder.</small>
+      </label>
 
       <label class="field">Stem separator
         <select id="separator">
@@ -400,6 +409,10 @@ python -m webui.server</code></div>
     <div class="actions" style="margin-top:14px">
       <button class="btn danger" id="cancelBtn">Cancel</button>
       <button class="btn ghost" id="revealBtn" style="display:none">📂 Show in Explorer</button>
+      <span id="outPathChip" style="display:none;font-size:12px;color:var(--dim);
+            border:1px solid var(--border);border-radius:7px;padding:6px 10px;
+            cursor:pointer" title="Click to copy the output folder path"
+            onclick="navigator.clipboard.writeText(this.textContent).then(()=>{this.style.color='var(--ok)'})"></span>
     </div>
     <div class="results" id="results">
       <h3>Your chart is ready</h3>
@@ -637,6 +650,8 @@ $("goBtn").addEventListener("click", async () => {
     // 1. upload files
     const fd = new FormData();
     if (pickedAudio) fd.append("audio", pickedAudio);
+    const outDirVal = $("outputDir").value.trim();
+    if (outDirVal) fd.append("output_dir", outDirVal);
     if (pickedLrc) fd.append("lrc", pickedLrc);
     if (pickedArt) fd.append("album_art", pickedArt);
     if (pickedStemsZip) fd.append("stems_zip", pickedStemsZip);
@@ -727,6 +742,12 @@ async function poll() {
     setBusy(false);   // the run is over — re-enable the action buttons
     $("cancelBtn").style.display = "none";
     $("revealBtn").style.display = "";
+    if (j.output_dir) {
+      const chip = $("outPathChip");
+      chip.textContent = j.output_dir;
+      chip.style.display = "";
+      chip.title = "Click to copy: " + j.output_dir;
+    }
     if (j.status === "success") {
       loadArtifacts();
     } else {
@@ -778,8 +799,19 @@ $("revealBtn").addEventListener("click", async () => {
   if (!activeJobId) { showErr("No job to reveal yet — chart a song first."); return; }
   try {
     const r = await api("POST", `/api/jobs/${activeJobId}/reveal`);
-    if (!r.ok) showErr("Reveal failed: " + r.message);
-    else showErr("");  // clear any stale error
+    const chip = $("outPathChip");
+    if (r.path) {
+      chip.textContent = r.path;
+      chip.style.display = "";
+      chip.title = "Click to copy: " + r.path;
+    }
+    if (!r.ok) {
+      // No window opened (e.g. the engine runs in a container with no
+      // desktop). The path chip is the answer — show it, no scary error.
+      showErr(""); // clear stale errors
+    } else {
+      showErr("");
+    }
   } catch (e) { showErr("Reveal failed: " + e.message +
     " (if this is the GitHub-Pages page, the engine must be running locally)");
   }
@@ -827,6 +859,8 @@ $("addToBatchBtn").addEventListener("click", async () => {
     // upload the staged files, then move them into the durable batch store
     const fd = new FormData();
     if (pickedAudio) fd.append("audio", pickedAudio);
+    const outDirVal = $("outputDir").value.trim();
+    if (outDirVal) fd.append("output_dir", outDirVal);
     if (pickedLrc) fd.append("lrc", pickedLrc);
     if (pickedArt) fd.append("album_art", pickedArt);
     if (pickedStemsZip) fd.append("stems_zip", pickedStemsZip);
@@ -903,6 +937,7 @@ $("runBatchBtn").addEventListener("click", async () => {
       name: $("batchName").value.trim() || "batch",
       songs: batchSongs,
       ps4_pkg_id: $("ps4PkgId").value.trim() || null,
+      output_dir: $("outputDir").value.trim() || null,
     });
     activeJobId = r.job.id;
     $("jobCard").style.display = "";

@@ -42,3 +42,6 @@ If you are new, read in this order:
 - Root README: `../README.md` (user-facing install/usage docs).
 - Roadmap: `../ROADMAP.md`. Spec/task tracking: `../AGENT_PLAN.md`.
 - Changelog: `../CHANGELOG.md`. Version: `autorb/version.py`.
+
+## Web interface
+- `webui/` package: FastAPI engine + static UI (GitHub Pages deploy via `docs/`) — batches, output-folder option, copyable output path, headless-safe reveal. Details in `[[architecture]]` § Web Interface and `[[log]]` 2026-10-05 → 2026-10-09.

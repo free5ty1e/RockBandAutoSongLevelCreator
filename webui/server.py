@@ -34,7 +34,7 @@ import zipfile
 from pathlib import Path
 
 try:
-    from fastapi import Body, FastAPI, File, HTTPException, UploadFile
+    from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
@@ -122,6 +122,7 @@ async def upload(
     album_art: UploadFile | None = File(None),
     stems_zip: UploadFile | None = File(None),
     stems_files: list[UploadFile] | None = File(None),
+    output_dir: str | None = Form(None),
 ):
     """Create a draft job and save its uploaded files.
 
@@ -137,7 +138,24 @@ async def upload(
         raise HTTPException(400, "Upload an audio file, individual stems, "
                                  "or a stems .zip")
 
-    job = store.create_draft()
+    # Optional user-chosen output folder (the browser can't pick a server
+    # directory with a file chooser — it's a TEXT path the user types or
+    # pastes, e.g. /home/me/Songs or C:\Users\me\Songs). Falls back to
+    # the per-job default under the jobs root when omitted.
+    chosen_root = None
+    if output_dir and str(output_dir).strip():
+        candidate = Path(str(output_dir).strip()).expanduser()
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".autorb_write_test"
+            probe.write_text("ok")
+            probe.unlink()
+            chosen_root = candidate
+        except OSError as e:
+            raise HTTPException(
+                400, f"Output folder is not writable: {candidate} ({e})")
+
+    job = store.create_draft(output_root=chosen_root)
     up = job.uploads_dir
 
     if has_audio:
@@ -337,7 +355,8 @@ async def reveal_job(job_id: str):
     if target is None:
         target = job.dir
     ok, msg = reveal_in_file_manager(target)
-    return {"ok": ok, "message": msg, "path": str(target)}
+    return {"ok": ok, "message": msg, "path": str(target),
+            "headless": not ok}
 
 
 @app.get("/api/jobs/{job_id}/files")
@@ -476,7 +495,22 @@ async def batch_run(payload: dict = Body(...)):
         ps4_pkg_id = None
     if not songs:
         raise HTTPException(400, "Batch has no songs")
-    job = store.create_draft()
+    # Optional user-chosen output folder for the batch run (same semantics
+    # as the single-song upload path: a text path on the engine machine).
+    chosen_root = None
+    out_dir_raw = (payload.get("output_dir") or "").strip()
+    if out_dir_raw:
+        candidate = Path(out_dir_raw).expanduser()
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".autorb_write_test"
+            probe.write_text("ok")
+            probe.unlink()
+            chosen_root = candidate
+        except OSError as e:
+            raise HTTPException(
+                400, f"Output folder is not writable: {candidate} ({e})")
+    job = store.create_draft(output_root=chosen_root)
     job.begin_batch(name, songs, ps4_pkg_id)
     # resolve + validate every song's files BEFORE queueing (all-or-nothing)
     try:

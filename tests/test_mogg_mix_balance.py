@@ -192,22 +192,87 @@ class TestRevealGioSubcommand:
         nothing (user-observed). The reveal chain must pass `gio open`."""
         import re
         src = Path("webui/reveal.py").read_text()
-        assert re.search(r'\("gio",\s*"open"\)', src), \
+        assert re.search(r'"gio",\s*"open"', src), \
             "reveal must call `gio open <path>`, not bare `gio <path>`"
 
     def test_gio_argv_includes_subcommand(self, tmp_path, monkeypatch):
         from webui import reveal
         calls = []
         monkeypatch.setattr(reveal.sys, "platform", "linux")
+        monkeypatch.setenv("DISPLAY", ":0")
         monkeypatch.setattr(reveal.shutil, "which",
                             lambda x: "/usr/bin/gio" if x == "gio" else None)
-        import subprocess as sp
-        real_run = sp.run
+        class FakeResult:
+            returncode = 0
+            stderr = ""
         def fake_run(argv, *a, **k):
-            calls.append(argv)
-            return real_run(["true"], *a, **{**k, "check": False})
+            calls.append(list(argv))
+            return FakeResult()
         monkeypatch.setattr(reveal.subprocess, "run", fake_run)
         ok, msg = reveal.reveal_in_file_manager(tmp_path)
         assert ok
         assert calls and calls[0][:2] == ["gio", "open"], \
             f"expected ['gio','open',path], got {calls}"
+
+
+class TestRevealHeadlessHonesty:
+    def test_headless_reports_failure_with_path(self, tmp_path, monkeypatch):
+        """No DISPLAY/WAYLAND_DISPLAY -> ok MUST be False with the path in
+        the message (the devcontainer case: a window can never open, and
+        reporting success made the UI show nothing)."""
+        import os
+        from webui import reveal
+        monkeypatch.setattr(reveal.sys, "platform", "linux")
+        monkeypatch.delenv("DISPLAY", raising=False)
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        ok, msg = reveal.reveal_in_file_manager(tmp_path)
+        assert ok is False
+        assert str(tmp_path) in msg
+
+    def test_gui_session_check(self, monkeypatch):
+        import os
+        from webui.reveal import _has_gui_session
+        import webui.reveal as reveal
+        monkeypatch.setattr(reveal.sys, "platform", "linux")
+        monkeypatch.delenv("DISPLAY", raising=False)
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        assert _has_gui_session() is False
+        monkeypatch.setenv("DISPLAY", ":0")
+        assert _has_gui_session() is True
+
+    def test_gio_exit_zero_with_stderr_is_failure(self, tmp_path, monkeypatch):
+        """gio exits 0 while printing 'Failed to find default application'
+        on desktop-less boxes — stderr must be treated as failure."""
+        from webui import reveal
+        monkeypatch.setattr(reveal.sys, "platform", "linux")
+        monkeypatch.setenv("DISPLAY", ":99")  # pretend GUI exists
+        monkeypatch.setattr(reveal.shutil, "which",
+                            lambda x: "/usr/bin/gio" if x == "gio" else None)
+        class FakeResult:
+            returncode = 0
+            stderr = "gio: Failed to find default application for content type"
+        monkeypatch.setattr(reveal.subprocess, "run",
+                            lambda *a, **k: FakeResult())
+        ok, msg = reveal.reveal_in_file_manager(tmp_path)
+        assert ok is False
+
+
+class TestCustomOutputRoot:
+    def test_jobstore_output_root_honored(self, tmp_path):
+        from webui.jobs import JobStore
+        custom = tmp_path / "my_songs"
+        store = JobStore(tmp_path / "jobs", repo_root=tmp_path)
+        job = store.create_draft(output_root=custom)
+        assert str(job.output_dir).startswith(str(custom.resolve()))
+        assert job.output_dir.exists()
+        # default (no override) stays under the jobs root
+        job2 = store.create_draft()
+        assert str(job2.output_dir).startswith(str(tmp_path / "jobs"))
+
+    def test_store_level_output_root(self, tmp_path):
+        from webui.jobs import JobStore
+        custom = tmp_path / "all_outputs"
+        store = JobStore(tmp_path / "jobs", repo_root=tmp_path,
+                         output_root=custom)
+        job = store.create_draft()
+        assert str(job.output_dir).startswith(str(custom.resolve()))

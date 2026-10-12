@@ -259,11 +259,19 @@ def build_cli_command(job: Job, repo_root: Path) -> list[str]:
 
 
 class JobStore:
-    """Thread-safe registry of jobs + the single background worker."""
+    """Thread-safe registry of jobs + the single background worker.
 
-    def __init__(self, jobs_root: Path, repo_root: Path | None = None):
+    ``output_root`` (optional): when set, job OUTPUT folders live under it
+    as <output_root>/<job_id>/ instead of <jobs_root>/<job_id>/output/ —
+    the web UI's "choose output folder" option (uploads/logs always stay
+    under jobs_root; only the user-facing output moves).
+    """
+
+    def __init__(self, jobs_root: Path, repo_root: Path | None = None,
+                 output_root: Path | None = None):
         self.jobs_root = Path(jobs_root)
         self.jobs_root.mkdir(parents=True, exist_ok=True)
+        self.output_root = Path(output_root) if output_root else None
         self.repo_root = Path(repo_root) if repo_root else \
             Path(__file__).resolve().parents[1]
         self._jobs: dict[str, Job] = {}
@@ -274,11 +282,17 @@ class JobStore:
         self.run_hook = None
 
     # ---- public API (called from FastAPI handlers) ----
-    def create_draft(self) -> Job:
-        """Register a job whose files are being uploaded (no options yet)."""
+    def create_draft(self, output_root: Path | None = None) -> Job:
+        """Register a job whose files are being uploaded (no options yet).
+
+        ``output_root``: per-job override of the store-level output root
+        (the user's chosen output folder)."""
         job_id = uuid.uuid4().hex[:8]
         job = Job(job_id, self.jobs_root)
         job.uploads_dir.mkdir(parents=True, exist_ok=True)
+        out_root = Path(output_root) if output_root else self.output_root
+        if out_root is not None:
+            job.output_dir = (out_root / job_id).resolve()
         job.output_dir.mkdir(parents=True, exist_ok=True)
         with self._lock:
             self._jobs[job_id] = job
