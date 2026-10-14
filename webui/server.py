@@ -455,6 +455,53 @@ async def batch_save(payload: dict = Body(...)):
             "batches": batch_store.list_saved()}
 
 
+# ------------------------------------------------------------- fs browse ---
+# The "browse for output folder" dialog navigates the ENGINE's filesystem (a
+# browser-native folder picker can't return a real server-side path — the
+# browser deliberately hides absolute paths). Only directories are listed,
+# path components are validated, and no file contents are ever exposed.
+@app.get("/api/browse")
+async def browse_fs(path: str = "", roots: bool = False):
+    """List directories on the engine machine for the folder picker.
+
+    ``path`` empty (or the sentinel "..root") lists plausible roots: the jobs
+    root, the user's home, and filesystem roots. Otherwise one entry per
+    subdirectory of ``path`` (validated to be an existing directory; ``..``
+    when the parent exists). Errors return 400 so the dialog can stay put.
+    """
+    from fastapi.responses import JSONResponse
+    if roots or path in ("", "..root"):
+        home = Path.home()
+        candidates = [
+            ("Jobs root (default)", str(JOBS_ROOT)),
+            ("Home", str(home)),
+        ]
+        if sys.platform == "win32":
+            import string
+            for d in string.ascii_uppercase:
+                if Path(f"{d}:").exists():
+                    candidates.append((f"{d}: drive", f"{d}:\\"))
+        else:
+            candidates.append(("Filesystem root", "/"))
+        return {"path": "", "entries": candidates, "is_root": True}
+    p = Path(path).expanduser()
+    try:
+        p = p.resolve()
+    except OSError as e:
+        raise HTTPException(400, f"Bad path: {e}")
+    if not p.is_dir():
+        raise HTTPException(400, f"Not a folder: {p}")
+    entries = []
+    try:
+        for child in sorted(p.iterdir(), key=lambda c: c.name.lower()):
+            if child.is_dir():
+                entries.append((child.name, str(child)))
+    except PermissionError:
+        raise HTTPException(400, f"Permission denied: {p}")
+    return {"path": str(p), "parent": str(p.parent) if p.parent != p else None,
+            "entries": entries, "is_root": False}
+
+
 @app.post("/api/batch/load")
 async def batch_load(payload: dict = Body(...)):
     """Load a saved batch by filename (in batch_store/batches/) and return

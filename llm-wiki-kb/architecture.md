@@ -21,7 +21,10 @@ workflow guard; on Pages it shows a connect panel and posts to the local
 engine (Pages is static-only; the engine always runs on the user's machine).
 An optional **output folder** (per-job or per-batch) relocates just the
 user-facing output (`<root>/<job_id>/`); uploads and logs always stay under
-the jobs root. Contract notes: CLI failure paths MUST `sys.exit(1)` (a bare
+the jobs root. UI section 0 shows the resolved output path (`<folder>/<job>`)
+with a Browse dialog served by `GET /api/browse` (directories-only listings
+of the engine's filesystem — a native browser picker can't return a
+server-side path; never list file names/contents) and a reset-to-auto. Contract notes: CLI failure paths MUST `sys.exit(1)` (a bare
 `return` in a click callback exits 0 and the engine reads failures as
 successes), and the reveal endpoint reports `ok: False` + the path on
 headless machines so the UI can show a copyable chip instead of silently

@@ -175,6 +175,24 @@
     margin-right:6px; }
   @keyframes spin { to { transform:rotate(360deg); } }
 
+  /* folder-picker dialog */
+  .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.55);
+    display:flex; align-items:center; justify-content:center; z-index:50; }
+  .modal { background:var(--panel); border:1px solid var(--border);
+    border-radius:var(--radius); width:min(640px, 92vw); max-height:70vh;
+    display:flex; flex-direction:column; padding:16px; }
+  .modal h3 { margin:0 0 8px; font-size:15px; }
+  .modal .pathline { font-size:12px; color:var(--dim); word-break:break-all;
+    border:1px solid var(--border); border-radius:7px; padding:6px 9px;
+    background:var(--panel2); margin-bottom:8px; }
+  .modal .flist { flex:1; overflow-y:auto; border:1px solid var(--border);
+    border-radius:7px; margin-bottom:10px; }
+  .modal .fitem { padding:8px 12px; font-size:14px; cursor:pointer;
+    border-bottom:1px solid var(--border); }
+  .modal .fitem:hover { background:rgba(249,115,22,.12); }
+  .modal .actions { display:flex; gap:10px; }
+  .modal .err { color:var(--bad); font-size:12px; margin-top:6px; min-height:1em; }
+
   /* batch list */
   .bsong { display:flex; align-items:center; gap:10px;
     background:var(--panel2); border:1px solid var(--border);
@@ -228,6 +246,22 @@ python -m webui.server</code></div>
         <b>Retry connection</b>.</li>
     </ol>
     <div class="actions"><button class="btn primary" id="retryBtn">Retry connection</button></div>
+  </div>
+
+  <!-- ========================= OUTPUT FOLDER ============================ -->
+  <div class="card" id="outputCard" style="margin-bottom:18px">
+    <h2>0 · Output folder</h2>
+    <p class="hint">Where this run's files will be written. Each job gets its
+      own subfolder.</p>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <span id="outputDirDisplay"
+            style="flex:1;min-width:240px;font-size:14px;color:var(--text);
+            background:var(--panel2);border:1px solid var(--border);
+            border-radius:7px;padding:9px 11px;word-break:break-all">…</span>
+      <button class="btn ghost" id="outputBrowseBtn">📁 Browse…</button>
+      <button class="btn ghost" id="outputResetBtn" style="display:none">↺ Auto</button>
+    </div>
+    <input type="hidden" id="outputDir">
   </div>
 
   <!-- ============================== FORM ================================ -->
@@ -294,16 +328,6 @@ python -m webui.server</code></div>
           <input id="genre" type="text" placeholder="Rock">
         </label>
       </div>
-      <label class="field">Output folder <small>(optional)</small>
-        <input id="outputDir" type="text"
-               placeholder="Auto: a new folder per job (default)">
-        <small style="font-weight:400;color:var(--dim)">Leave blank for the
-          automatic per-job folder. Type/paste a folder path on the machine
-          running the engine (e.g. <code>/home/me/RB songs</code> or
-          <code>C:\Users\me\RB songs</code>) and every job's output lands
-          there under its own subfolder.</small>
-      </label>
-
       <label class="field">Stem separator
         <select id="separator">
           <option value="htdemucs_6s" selected>Demucs 6-stem — separates guitar & piano (validated default)</option>
@@ -428,6 +452,24 @@ python -m webui.server</code></div>
           the whole output folder — MOGG audio, MIDI chart, lyrics preview,
           validation report and more.</li>
       </ul>
+    </div>
+  </div>
+
+  <!-- folder picker dialog -->
+  <div class="modal-bg" id="folderModal" style="display:none">
+    <div class="modal">
+      <h3>Choose a folder on the engine machine</h3>
+      <div class="pathline" id="folderPath"></div>
+      <div class="flist" id="folderList"></div>
+      <div class="actions">
+        <button class="btn primary" id="folderPickBtn" disabled>Select this folder</button>
+        <button class="btn ghost" id="folderUpBtn">↑ Up</button>
+        <button class="btn ghost" id="folderCancelBtn">Cancel</button>
+      </div>
+      <div class="err" id="folderHint" style="color:var(--dim)">
+        Double-click a folder to open it; single-click to pre-select it.
+        “Select this folder” uses the folder you are currently viewing.</div>
+      <div class="err" id="folderErr"></div>
     </div>
   </div>
 
@@ -817,6 +859,101 @@ $("revealBtn").addEventListener("click", async () => {
   }
 });
 
+/* ============================ output folder ============================== */
+let chosenOutputDir = "";   // "" = auto (per-job default under the jobs root)
+
+function renderOutputDir() {
+  const disp = $("outputDirDisplay");
+  if (chosenOutputDir) {
+    disp.textContent = chosenOutputDir + "/<job>";
+    $("outputResetBtn").style.display = "";
+  } else {
+    disp.textContent = "Automatic — " + defaultOutputRoot + "/<job>";
+    $("outputResetBtn").style.display = "none";
+  }
+  $("outputDir").value = chosenOutputDir;   // hidden field = what gets sent
+}
+
+/* resolve + show the engine's default output root on load */
+let defaultOutputRoot = "…";
+async function loadDefaultOutputRoot() {
+  try {
+    const r = await api("GET", "/api/browse");
+    // the Jobs root entry IS the default output root
+    const jobs = (r.entries || []).find(e => e[0].startsWith("Jobs root"));
+    defaultOutputRoot = jobs ? jobs[1] : (r.entries && r.entries[1] && r.entries[1][1]) || "engine default";
+  } catch (_) { defaultOutputRoot = "engine default"; }
+  renderOutputDir();
+}
+
+/* ---- folder picker dialog ---- */
+let folderState = { path: "", isRoot: true, selected: null };
+
+async function openFolderModal() {
+  $("folderModal").style.display = "";
+  $("folderErr").textContent = "";
+  await loadFolderListing("");
+}
+async function loadFolderListing(path) {
+  try {
+    const r = await api("GET", `/api/browse?path=${encodeURIComponent(path)}&roots=${path === ""}`);
+    folderState.path = r.path;
+    folderState.isRoot = r.is_root;
+    folderState.selected = null;
+    $("folderPickBtn").disabled = !!r.is_root;
+    $("folderPickBtn").textContent = r.is_root ? "Select this folder"
+      : "Select this folder (" + r.path + ")";
+    $("folderPath").textContent = r.is_root ? "(choose a starting point)" : r.path;
+    const list = $("folderList");
+    list.innerHTML = "";
+    const entries = r.entries || [];
+    if (!entries.length) {
+      const d = document.createElement("div");
+      d.className = "fitem"; d.style.color = "var(--dim)";
+      d.textContent = "(no subfolders here)";
+      list.appendChild(d);
+    }
+    entries.forEach(([name, full]) => {
+      const d = document.createElement("div");
+      d.className = "fitem";
+      d.textContent = (r.is_root ? "" : "📁 ") + name;
+      d.addEventListener("click", () => {
+        Array.from(list.children).forEach(c => c.style.background = "");
+        d.style.background = "rgba(249,115,22,.2)";
+        folderState.selected = full;
+        $("folderPickBtn").disabled = false;
+      });
+      d.addEventListener("dblclick", () => loadFolderListing(full));
+      list.appendChild(d);
+    });
+  } catch (e) {
+    $("folderErr").textContent = e.message || String(e);
+  }
+}
+$("outputBrowseBtn").addEventListener("click", openFolderModal);
+$("folderCancelBtn").addEventListener("click", () =>
+  $("folderModal").style.display = "none");
+$("folderUpBtn").addEventListener("click", () => {
+  // from a root listing, "up" does nothing; from a folder, go to its parent
+  if (folderState.isRoot || !folderState.path) return;
+  const parent = folderState.path.replace(/[/\\][^/\\]+$/, "");
+  loadFolderListing(parent || (folderState.path.startsWith("/") ? "/" : folderState.path));
+});
+$("folderPickBtn").addEventListener("click", () => {
+  // The current listing IS a valid choice (its own path); a clicked
+  // subfolder only pre-selects for the next double-click. Selecting the
+  // folder you are standing in is the common case ("put it in /tmp").
+  const target = folderState.selected || (!folderState.isRoot ? folderState.path : null);
+  if (!target) return;
+  chosenOutputDir = target;
+  $("folderModal").style.display = "none";
+  renderOutputDir();
+});
+$("outputResetBtn").addEventListener("click", () => {
+  chosenOutputDir = "";
+  renderOutputDir();
+});
+
 /* ================================= batch ================================= */
 let batchSongs = [];   // [{song_id, label, options, files}]
 
@@ -1032,6 +1169,7 @@ if (ON_PAGES) {
   api("GET", "/api/batch/saved").then(
     r => fillBatchSelect(r && r.batches), () => {});
 }
+loadDefaultOutputRoot();
 refreshGo();
 renderBatch();
 </script>

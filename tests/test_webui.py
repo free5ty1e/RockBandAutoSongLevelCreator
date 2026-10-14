@@ -838,3 +838,150 @@ def test_docs_dir_in_sync_with_webui_static():
     assert not cmp.left_only and not cmp.right_only and not cmp.funny_files, (
         f"docs/ and webui/static/ differ: only-in-static={cmp.left_only} "
         f"only-in-docs={cmp.right_only}")
+
+
+class TestFsBrowse:
+    """The output-folder browser (v0.1.30): a native file picker can't
+    return a server-side path (browsers hide absolute paths), so Browse…
+    opens a dialog that navigates the ENGINE's filesystem via /api/browse
+    — directories only, validated paths, no file contents exposed."""
+
+    def test_roots_listing(self, client):
+        c, _ = client
+        r = c.get("/api/browse")
+        assert r.status_code == 200
+        d = r.json()
+        assert d["is_root"] is True
+        names = [e[0] for e in d["entries"]]
+        assert any(n.startswith("Jobs root") for n in names)
+        assert any(n == "Home" for n in names)
+
+    def test_dir_listing_parent(self, client):
+        c, _ = client
+        r = c.get("/api/browse", params={"path": "/tmp"})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["path"] == "/tmp"
+        assert d["parent"] == "/"
+        assert all(Path(e[1]).is_dir() for e in d["entries"])
+
+    def test_not_a_dir_400(self, client):
+        c, _ = client
+        r = c.get("/api/browse", params={"path": "/etc/hostname"})
+        assert r.status_code == 400
+
+    def test_no_file_contents_listed(self, client, tmp_path):
+        """Only DIRECTORIES are ever listed — the dialog must not expose
+        file names or contents."""
+        c, srv = client
+        (srv.JOBS_ROOT / "somejob").mkdir(exist_ok=True)
+        (srv.JOBS_ROOT / "somejob" / "secret.txt").write_text("x")
+        r = c.get("/api/browse", params={"path": str(srv.JOBS_ROOT / "somejob")})
+        d = r.json()
+        assert d["entries"] == []
+        import json as _json
+        assert "secret" not in _json.dumps(d)
+
+    def test_ui_has_section0_and_dialog(self, client):
+        c, _ = client
+        html = c.get("/").text
+        for frag in ('id="outputCard"', '0 · Output folder',
+                     'id="outputDirDisplay"', 'id="outputBrowseBtn"',
+                     'id="folderModal"', 'id="folderPickBtn"',
+                     'id="outputResetBtn"'):
+            assert frag in html, frag
+
+
+@pytest.mark.devcontainer
+@pytest.mark.skipif(not _playwright_available(),
+                    reason="playwright not installed (devcontainer test)")
+def test_output_folder_browse_flow():
+    """End-to-end in a real browser: the section-0 display shows the
+    engine's default output root; Browse… navigates the engine filesystem;
+    standing inside a folder and clicking Select makes the chosen root the
+    displayed output folder; a batch run then lands under it."""
+    import os
+    import subprocess
+    import tempfile
+    import time as _time
+    import urllib.request
+
+    jobs = tempfile.mkdtemp(prefix="outbrowse_e2e_")
+    custom = "/tmp/outbrowse_e2e_custom"
+    os.makedirs(custom, exist_ok=True)
+    port = _free_port()
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "webui.server"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env={**os.environ, "AUTORB_WEBUI_PORT": str(port),
+             "AUTORB_WEBUI_JOBS": jobs})
+    ready = False
+    for _ in range(60):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/capabilities",
+                                   timeout=2)
+            ready = True
+            break
+        except Exception:
+            _time.sleep(0.5)
+    assert ready
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            errors = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(f"http://127.0.0.1:{port}/")
+            page.wait_for_selector("#outputCard", timeout=10000)
+            page.wait_for_timeout(600)
+            disp = page.eval_on_selector(
+                "#outputDirDisplay", "el => el.textContent")
+            assert jobs in disp and "<job>" in disp, disp
+
+            page.click("#outputBrowseBtn")
+            page.wait_for_timeout(400)
+            assert page.eval_on_selector(
+                "#folderModal", "el => el.style.display") != "none"
+            # navigate: Filesystem root -> tmp
+            page.evaluate("""() => {
+                const items = Array.from(document.querySelectorAll('#folderList .fitem'));
+                items.find(d => d.textContent.includes('Filesystem'))
+                  .dispatchEvent(new MouseEvent('dblclick', {bubbles: true}));
+            }""")
+            page.wait_for_timeout(400)
+            page.evaluate("""() => {
+                const items = Array.from(document.querySelectorAll('#folderList .fitem'));
+                items.find(d => d.textContent.trim() === '📁 tmp')
+                  .dispatchEvent(new MouseEvent('dblclick', {bubbles: true}));
+            }""")
+            page.wait_for_timeout(400)
+            assert page.eval_on_selector(
+                "#folderPickBtn", "el => !el.disabled")
+            page.click("#folderPickBtn")
+            page.wait_for_timeout(200)
+            disp2 = page.eval_on_selector(
+                "#outputDirDisplay", "el => el.textContent")
+            assert disp2.startswith("/tmp/<job>"), disp2
+
+            # run a batch into it
+            os.makedirs("/tmp/pw_files", exist_ok=True)
+            with open("/tmp/pw_files/song.mp3", "wb") as f:
+                f.write(b"ID3" + b"x" * 500)
+            page.set_input_files("#audio", "/tmp/pw_files/song.mp3")
+            page.fill("#artist", "T")
+            page.fill("#title", "B")
+            page.click("#addToBatchBtn")
+            page.wait_for_timeout(1200)
+            page.click("#runBatchBtn")
+            page.wait_for_timeout(600)
+            import json as _json
+            r = _json.loads(urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/api/jobs").read())
+            assert r["jobs"][0]["output_dir"].startswith("/tmp/"), \
+                r["jobs"][0]["output_dir"]
+            assert not errors, errors
+            browser.close()
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)

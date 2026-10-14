@@ -405,12 +405,13 @@ python -m webui.server          # or: autorb-webui
 #    https://free5ty1e.github.io/RockBandAutoSongLevelCreator/
 ```
 
-What the UI covers: MP3/WAV/FLAC/M4A upload (or pre-separated stems: the four
+What the UI covers: a top **Output folder** section showing exactly where
+this run's files will go (`<folder>/<job>`) with a **Browse…** dialog that
+navigates the engine's filesystem (directories only) and a reset to the
+automatic default; MP3/WAV/FLAC/M4A upload (or pre-separated stems: the four
 core `.wav`s, optional `guitar.wav`/`piano.wav`, individually or as one `.zip`),
 optional LRC (with no LRC, WhisperX transcribes the vocals automatically),
-metadata fields (artist/title/year/genre), an **optional output folder** (leave
-blank for the automatic per-job folder, or type a path on the engine machine
-and every job lands there), all separator options and FT knobs,
+metadata fields (artist/title/year/genre), all separator options and FT knobs,
 Clone Hero / PS4 PKG export toggles, freestyle vocals/drums, guitar solo
 charting, live log + progress bar, cancel, and artifact downloads. When a job
 finishes, its output path appears as a **click-to-copy chip** — and the
