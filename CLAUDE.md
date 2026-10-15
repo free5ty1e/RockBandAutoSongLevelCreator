@@ -1,6 +1,61 @@
 # Project Instructions
 
 
+## Release Rules (read before any release/tagging work)
+
+Releases are validated by two automated gates — respect both:
+
+1. **The CI pipeline builds it** (`.github/workflows/ci-cd.yml`): test →
+   build (wheel-content check) → release → **audit**. The `audit` job runs
+   `tools/audit_release.py --strict` on every `v*` tag and uploads
+   `AUDIT_REPORT.txt`. A red audit job means the release is NOT valid,
+   even if a GitHub Release was published.
+2. **The audit tool is the source of truth for "is this release good"**:
+   `python tools/audit_release.py --tag vX.Y.Z --strict`. It checks CI
+   state, release assets, wheel contents (source parity: every repo module
+   must ship in the wheel), data assets, release-notes contract, a
+   fresh-venv install+import smoke of the downloaded wheel, and tag
+   hygiene. Full stage table + rationale: `llm-wiki-kb/release_process.md`.
+
+**When a release build fails or a release is reported broken:**
+- Get the failing run first: `gh run list --limit 5`, then
+  `gh run view <id> --log-failed`. Diagnose from the actual error — do not
+  guess from the working tree (the v0.1.30-alpha01 failure was a
+  dependency's build-time `pkg_resources` use that the devcontainer masked).
+- After diagnosing, run the audit against the tag to enumerate every
+  missing piece (it reports CI state → assets → contents → notes → smoke
+  in order).
+
+**Pre-tag checklist — complete EVERY item before suggesting the user tag:**
+1. `autorb/version.py` = the version being released.
+2. `CHANGELOG.md` has a `## [X.Y.Z] — date` entry for it (the notes
+   generator hard-fails without it; the release body embeds it verbatim).
+3. NEW PACKAGE this release? It must be added to
+   `[tool.setuptools].packages` AND the CI wheel-content check AND
+   `tools/audit_release.py`'s `EXPECTED_IMPORTS`. **The devcontainer's
+   editable install masks a missing entry indefinitely** — this is how
+   v0.1.30 nearly shipped wheels with NO instrument charting package.
+4. NEW DATA FILE? Same: `[tool.setuptools.package-data]` + CI check +
+   `REQUIRED_WHEEL_DATA`.
+5. NEW DEPENDENCY? It must (a) actually be imported by the code,
+   (b) install cleanly on a FRESH environment — never anything whose
+   build needs `pkg_resources` (the crepe failure class), (c) if optional,
+   keep it out of core deps with a guarded import (adtof, spleeter).
+6. Console scripts (`[project.scripts]`) must have ALL their deps in CORE
+   dependencies — a plain `pip install autorb` has to run them.
+7. Full suite green locally, then cheap wheel smoke:
+   `python -m pip wheel --no-deps -w /tmp/wheelcheck .` and verify the
+   new modules/files are IN the wheel zip.
+
+Tag rule: `v` + exact `autorb/version.py` version, optional suffix that
+must NOT start with a digit (`v0.1.31-alpha01` ✓). Never tag yourself —
+git tag is in the FORBIDDEN list; the user tags.
+
+**Never claim a release is good without either (a) a green CI audit job
+on that tag, or (b) a passing local `audit_release.py --strict` run
+against it.**
+
+
 ## Mandatory End-of-Cycle Workflow (hook-enforced)
 
 After every development cycle, BEFORE writing your final response message to
@@ -71,13 +126,17 @@ Only the following **Staging & Read** operations are allowed:
 ## MANDATORY RESTRICTIONS — gh (GitHub CLI)
 
 Only read operations and updating PR descriptions via `gh edit` are permitted.
+Release auditing requires exactly these READ operations — they are allowed
+and expected during release work: `gh run list`, `gh run view`,
+`gh release view`, `gh release download` (used by
+`tools/audit_release.py`). All still read-only.
 
 ### FORBIDDEN gh Operations
 | Operation | Reason |
 |-----------|--------|
 | `gh pr create` / `gh pr merge` / `gh pr close` | Would create or modify pull requests |
 | `gh issue create` / `gh issue close` | Would modify issues |
-| `gh release create` | Would create releases |
+| `gh release create` / `gh release delete` / `gh release edit` | Would create or modify releases |
 | `gh repo fork` / `gh repo create` / `gh repo delete` | Would create or delete repositories |
 
 # --- DANGER GUARDRAILS END ---

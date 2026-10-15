@@ -62,6 +62,10 @@ The sparse tempo map (v0.0071) was necessary but not sufficient — the in-game 
 The wheel declares `requires-python = ">=3.11,<3.14"`. Python 3.14 is NOT supported: current WhisperX releases cap at `<3.14`, and the only whisperx release without an upper bound (3.2.0) pins `ctranslate2==4.4.0`, which ships no Python 3.14 wheel. Without the upper bound, pip on 3.14 backtracked to whisperx 3.2.0 and failed with the cryptic `No matching distribution found for ctranslate2==4.4.0`; with it, pip refuses immediately and clearly. macOS's default `python3` is 3.9.6 (too old) — use `brew install python@3.12` and `python3.12`.
 
 ## Release Packaging: PEP 440 Wheel Filenames
+
+(Full release pipeline, pre-tag checklist, and the automated release audit:
+see **[[release_process]]**.)
+
 The CI release job renames the built artifacts to carry the git tag. The old code appended the tag **after** the platform tag (`autorb-0.62-py3-none-any-v0.005xTest17.whl`), which pip rejects with `ERROR: Invalid build number` — macOS users could not install release wheels. The fix inserts the sanitized tag as a **PEP 440 local version** before the platform tag: `autorb-0.62+v0.005xTest17-py3-none-any.whl` (and `autorb-0.62+v0.005xTest17.tar.gz` for the sdist). Tag characters are sanitized with `${TAG//[^a-zA-Z0-9._-]/-}`. pip install instructions must use `python3`/`pip3` (macOS's default `python3` is 3.9.6, below the `>=3.11` requirement).
 
 ## Default Album Art Legibility + CP Logo (v0.0075)

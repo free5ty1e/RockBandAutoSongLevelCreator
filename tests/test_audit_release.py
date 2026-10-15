@@ -126,3 +126,38 @@ class TestRequirementsSanity:
 
 
 import re  # noqa: E402  (used by TestRequirementsSanity)
+
+
+class TestReleaseDocsConsistency:
+    """The KB page + CLAUDE.md rules must stay true to the code they
+    describe (added when they were written, v0.1.31): if the release
+    machinery changes shape, these docs must change with it."""
+
+    def test_kb_release_process_page_exists_and_matches_tool(self):
+        kb = (REPO_ROOT / "llm-wiki-kb" / "release_process.md").read_text()
+        tool = (REPO_ROOT / "tools" / "audit_release.py").read_text()
+        # the KB describes the audit's stages and key lists
+        for needle in ("audit_release.py", "EXPECTED_IMPORTS",
+                       "REQUIRED_WHEEL_DATA", "fresh-venv",
+                       "setuptools].packages", "package-data"):
+            assert needle in kb, f"KB release_process.md lost mention of {needle}"
+        # and the tool still HAS the things the KB says it has
+        assert "EXPECTED_IMPORTS" in tool and "REQUIRED_WHEEL_DATA" in tool
+
+    def test_kb_index_lists_release_process(self):
+        idx = (REPO_ROOT / "llm-wiki-kb" / "index.md").read_text()
+        assert "[[release_process]]" in idx, \
+            "KB index must list the release_process page"
+
+    def test_agent_rules_have_release_section(self):
+        cm = (REPO_ROOT / "CLAUDE.md").read_text()
+        assert "## Release Rules" in cm, \
+            "CLAUDE.md must keep the Release Rules section"
+        assert "audit_release.py" in cm, "rules must point at the audit tool"
+        assert "Never claim a release is good" in cm, \
+            "the never-claim rule is the core contract"
+
+    def test_workflow_has_audit_job(self):
+        wf = (REPO_ROOT / ".github" / "workflows" / "ci-cd.yml").read_text()
+        assert "tools/audit_release.py" in wf and "audit:" in wf, \
+            "the CI audit job must run the audit on every tag"
