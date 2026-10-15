@@ -380,6 +380,20 @@ python3 -m autorb.cli \
 
 ---
 
+## 🔍 Release Auditing
+
+Every tag build is audited automatically by the `audit` CI job (and can be
+run by hand): `python tools/audit_release.py --tag vX.Y.Z-... --strict`. It
+verifies the CI run succeeded, the GitHub release and its wheel/sdist exist
+and download, the wheel ships every source module + data asset (a missing
+`packages` entry once shipped a wheel that couldn't chart instruments), the
+release notes embed the version's CHANGELOG entry, the tag matches
+`autorb/version.py`, and — the gate that catches "works in the devcontainer,
+broken for users" failures — it installs the **downloaded wheel into a
+fresh venv** and imports every runtime module (this is the check that would
+have caught the v0.1.30-alpha01 `crepe`/`pkg_resources` build failure). The
+report is uploaded as a CI artifact on every release.
+
 ## 🌐 Web Interface
 
 Don't like typing CLI flags? AutoRB ships a web UI: the same pipeline behind a

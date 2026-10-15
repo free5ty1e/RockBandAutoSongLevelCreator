@@ -87,7 +87,17 @@ jobs:
                              'autorb/export/alignment_report.py',
                              'autorb/audio/preview.py',
                              'autorb/audio/mix_preview.py',
-                             'autorb/export/data/fonts/DejaVuSans.ttf']:
+                             'autorb/export/data/fonts/DejaVuSans.ttf',
+                             # v0.1.30 release audit: instruments was missing
+                             # from [tool.setuptools].packages — released
+                             # wheels could not chart instruments at all.
+                             'autorb/transcribe/instruments/__init__.py',
+                             'autorb/transcribe/instruments/guitar.py',
+                             'autorb/transcribe/instruments/drums.py',
+                             'autorb/transcribe/instruments/difficulty.py',
+                             # the web UI ships as a core package + script
+                             'webui/server.py',
+                             'webui/static/index.html']:
                 if required not in names:
                     print(f'FAIL: {required} not found in wheel', file=sys.stderr)
                     sys.exit(1)
@@ -109,6 +119,37 @@ jobs:
       with:
         name: dist
         path: dist/*
+
+  audit:
+    # Release audit (v0.1.30): run tools/audit_release.py against the tag we
+    # just built — CI state, release assets, wheel contents (every source
+    # module + data asset ships), release-notes contract, tag hygiene, and a
+    # FRESH-VENV install/import smoke of the downloaded wheel (the check
+    # that would have caught the v0.1.30-alpha01 crepe/pkg_resources failure
+    # and the missing instruments package).
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+    - uses: actions/checkout@v4
+    - name: Wait for release assets to settle
+      run: sleep 20
+    - name: Run the release audit
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        python tools/audit_release.py --tag "${{ github.ref_name }}" \
+          --work-dir "$RUNNER_TEMP/audit" --strict
+    - name: Upload audit report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-audit-report
+        path: ${{ runner.temp }}/audit/AUDIT_REPORT.txt
+        if-no-files-found: ignore
 
   release:
     needs: build

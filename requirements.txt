@@ -27,7 +27,12 @@ pydub
 pyphen>=0.10
 
 # Instrument transcription (new)
-crepe>=0.0.12          # High-quality pitch detection
+# NOTE: `crepe` was removed (v0.1.30): never imported anywhere in autorb/
+# (an early-experiment leftover), and its build uses pkg_resources at
+# requirements-parse time, which broke every fresh CI install under
+# setuptools>=82 (ModuleNotFoundError: No module named 'pkg_resources'
+# during `pip install -r requirements.txt` — observed on the
+# v0.1.30-alpha01 tag build).
 madmom>=0.16.1         # Drum onset detection, tempo
 scikit-learn>=1.3.0    # For drum classification
 
