@@ -16,8 +16,13 @@ from pathlib import Path
 import numpy as np
 from scipy.signal import butter, sosfiltfilt
 
-import basic_pitch.inference as bp
-from basic_pitch import ICASSP_2022_MODEL_PATH
+# Basic Pitch is VENDORED as autorb.pitch (ONNX Runtime only — no
+# TensorFlow; see autorb/pitch/__init__.py). Importing the external
+# `basic_pitch` package here was masked by the devcontainer having it
+# pip-installed: on fresh CI runners the module didn't exist and every
+# guitar/bass test failed at collection (v0.1.31-alpha02 CI run).
+import autorb.pitch.inference as bp
+from autorb.pitch import ICASSP_2022_MODEL_PATH
 
 from .pitch_to_lane import (
     detect_tuning_from_pitches,

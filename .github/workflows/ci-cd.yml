@@ -27,6 +27,10 @@ jobs:
         pip install -r requirements.txt
         pip install -e .
         pip install pytest pytest-cov
+        # starlette's TestClient needs httpx2 on current releases (the
+        # devcontainer's older starlette uses httpx) — the webui tests
+        # failed at collection on fresh runners without it.
+        pip install httpx2 || pip install httpx
     - name: Run Tests with Coverage
       run: |
         pytest tests/ --cov=autorb --cov-report=term-missing --cov-report=xml:coverage.xml
