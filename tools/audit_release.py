@@ -243,14 +243,21 @@ def download_assets(rel: dict | None, work_dir: Path,
     if not rel:
         return None, None
     assets = rel.get("assets", [])
-    wheel_url = next((a["url"] for a in assets if a["name"].endswith(".whl")), None)
-    sdist_url = next((a["url"] for a in assets if a["name"].endswith(".tar.gz")), None)
+    # Match gh's --pattern against the asset NAME, never a URL segment: the
+    # PEP 440 local-version filenames carry '+', which the release URL
+    # encodes as '%2B' — pattern-matching the URL form finds no assets (the
+    # v0.1.31-alpha03 audit failure).
+    def _asset_name(suffix: str) -> str | None:
+        return next((a["name"] for a in assets if a["name"].endswith(suffix)),
+                    None)
+    wheel_name = _asset_name(".whl")
+    sdist_name = _asset_name(".tar.gz")
     wheel_path = sdist_path = None
-    for url, kind in ((wheel_url, "wheel"), (sdist_url, "sdist")):
-        if not url:
+    for name, kind in ((wheel_name, "wheel"), (sdist_name, "sdist")):
+        if not name:
             continue
         r = _gh(["release", "download", rel["tagName"], f"--repo",
-                 _repo_slug(), "--pattern", url.rsplit("/", 1)[-1].split("?")[0],
+                 _repo_slug(), "--pattern", name,
                  "--dir", str(work_dir)], audit)
         if r is None:
             audit.fail(f"could not download the {kind}")

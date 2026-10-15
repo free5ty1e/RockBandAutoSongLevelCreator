@@ -161,3 +161,55 @@ class TestReleaseDocsConsistency:
         wf = (REPO_ROOT / ".github" / "workflows" / "ci-cd.yml").read_text()
         assert "tools/audit_release.py" in wf and "audit:" in wf, \
             "the CI audit job must run the audit on every tag"
+
+
+class TestPep427WheelFilenames:
+    """v0.1.31-alpha03 audit finding: the tag-renamed wheel filename
+    carried a DASH inside the PEP 440 local-version segment
+    (autorb-0.1.31+v0.1.31-alpha03-py3-none-any.whl) and pip rejects it —
+    "Invalid build number: alpha03". Users literally cannot install the
+    release wheel. Pin the workflow's sanitizer so dashes can never reach
+    the local segment again."""
+
+    def test_workflow_local_version_has_no_dashes(self):
+        wf = (REPO_ROOT / ".github" / "workflows" / "ci-cd.yml").read_text()
+        m = re.search(r'LOCAL="\$\{TAG//\[\^a-zA-Z0-9\._\]/(\S+)\}"', wf)
+        assert m, "workflow must sanitize the tag into LOCAL=..."
+        excluded = m.group(1)
+        assert "-" not in excluded, \
+            ("dashes are allowed into the local-version label — pip rejects "
+             "the resulting wheel filename with 'Invalid build number' "
+             "(v0.1.31-alpha03 audit finding)")
+
+    def test_pip_accepts_dash_free_local_version(self):
+        """End-to-end proof: rename the actual released wheel per the fixed
+        sanitizer and pip --dry-run must accept it. Skips when pip or the
+        packaging example is unavailable."""
+        import subprocess
+        import sys as _sys
+        import tempfile
+        import shutil as _sh
+        whl = None
+        for base in (REPO_ROOT / "dist", Path(tempfile.gettempdir()) / "audit_alpha03"):
+            if base.exists():
+                cands = list(base.glob("*.whl"))
+                if cands:
+                    whl = cands[0]
+                    break
+        if whl is None:
+            import pytest
+            pytest.skip("no release wheel on disk to rename")
+        with tempfile.TemporaryDirectory() as td:
+            # rename per the FIXED sanitizer: non-alnum(keep . _) -> '.'
+            stem = whl.name[:-len("-py3-none-any.whl")] if whl.name.endswith("py3-none-any.whl") else whl.name[:-4]
+            local = re.sub(r"[^a-zA-Z0-9._]", ".", stem.split("+")[-1])
+            base_ver = stem.split("+")[0]
+            fixed = f"{base_ver}+{local}-py3-none-any.whl"
+            dst = Path(td) / fixed
+            _sh.copy2(whl, dst)
+            r = subprocess.run([_sys.executable, "-m", "pip", "install",
+                                "--dry-run", "--no-deps", str(dst)],
+                               capture_output=True, text=True, timeout=180)
+            assert r.returncode == 0, \
+                f"pip rejected the dash-free rename {fixed}: " \
+                f"{(r.stderr or '').strip()[-200:]}"

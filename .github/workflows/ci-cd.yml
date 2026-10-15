@@ -171,11 +171,15 @@ jobs:
     - name: Tag wheel/sdist filenames as PEP 440 local versions
       run: |
         TAG="${{ github.ref_name }}"
-        # Sanitize the git tag into a PEP 440 local-version label (alnum, dot, underscore, hyphen).
-        # Appending to the VERSION (e.g. autorb-0.62+v0.005xTest17-py3-none-any.whl) keeps the
-        # wheel filename valid for pip; appending after the platform tag (the old behavior) made
-        # pip reject the file with "Invalid build number".
-        LOCAL="${TAG//[^a-zA-Z0-9._-]/-}"
+        # Sanitize the git tag into a PEP 440 local-version label. CRITICAL
+        # (v0.1.31-alpha03 audit finding): the local segment must contain NO
+        # dashes — pip's wheel-filename parser treats the text after a dash
+        # in the local segment as a build number and rejects non-numeric
+        # values ("Invalid build number: alpha03"). Dashes become DOTS
+        # (underscores work too); everything else non-alnum also becomes a
+        # dot. v0.1.31-alpha03 -> v0.1.31.alpha03 -> a pip-accepted
+        # autorb-0.1.31+v0.1.31.alpha03-py3-none-any.whl.
+        LOCAL="${TAG//[^a-zA-Z0-9._]/.}"
         for f in dist/*; do
           if [[ "$f" == *.whl ]]; then
             newname="${f%-py3-none-any.whl}+${LOCAL}-py3-none-any.whl"
