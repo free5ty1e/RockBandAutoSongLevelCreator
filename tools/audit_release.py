@@ -189,7 +189,11 @@ def stage_ci_and_release(tag: str, audit: Audit) -> dict | None:
         audit.fail(f"no CI workflow run found for tag {tag} (runs list "
                    f"covers the latest 50 — is the tag pushed?)")
         return None
-    run = tag_runs[0]
+    # Prefer a COMPLETED run: when the audit runs INSIDE the CI pipeline
+    # (its own job), the current run is still in_progress and would
+    # otherwise warn spuriously (observed on the alpha04 CI audit).
+    completed = [r for r in tag_runs if r.get("status") == "completed"]
+    run = completed[0] if completed else tag_runs[0]
     if run["status"] != "completed":
         audit.warn(f"run for {tag} is still {run['status']} — audit what "
                    "exists so far; re-run the audit once it completes")
