@@ -193,3 +193,32 @@ class TestSegmentAllWordsToSyllables:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+class TestCharsInRangeSkipsTimingless:
+    """Regression (v0.1.25): WhisperX can emit chars with NO start/end
+    (punctuation/space chars on the no-LRC transcription path). Those chars
+    must be skipped, not crash the syllable timing derivation."""
+
+    def test_timingless_char_skipped(self):
+        from autorb.transcribe.syllables import _chars_in_range
+        chars = [
+            {"char": "h", "start": 1.0, "end": 1.1},
+            {"char": ","},                       # timing-less punctuation
+            {"char": "i", "start": 1.2, "end": 1.3},
+        ]
+        out = _chars_in_range(chars, 0.9, 1.4)
+        assert [c["char"] for c in out] == ["h", "i"]
+
+    def test_all_timingless_returns_empty(self):
+        from autorb.transcribe.syllables import _chars_in_range
+        assert _chars_in_range([{"char": "."}], 0.0, 5.0) == []
+
+    def test_syllable_timing_survives_punctuation_words(self):
+        """A punctuation-only raw word (e.g. ",") with timing-less chars
+        must fall back to pyphen timing, not raise KeyError."""
+        from autorb.transcribe.syllables import segment_word_to_syllables
+        syls = segment_word_to_syllables(
+            word_text=",", word_start=1.0, word_end=1.2,
+            whisperx_chars=[{"char": ","}],
+            word_segments=[{"word": ",", "start": 1.0, "end": 1.2}])
+        assert syls  # fallback produced something

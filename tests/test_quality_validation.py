@@ -132,6 +132,14 @@ class TestSyncedTrackQuality:
         
         assert not mismatches, f"Syllable reconstruction mismatches: {mismatches}"
 
+    @pytest.mark.xfail(strict=True, reason=(
+        "v0.1.9 deliberately clips word ends to the last voiced/RMS frame of each "
+        "word's own region (_audio_word_end, README 'Audio-derived note ends'), not "
+        "to the next LRC line timestamp -- so a line's last word legitimately ends "
+        "before the next line begins (gaps up to ~5.9s for 'forgotten'). This test "
+        "asserts the pre-v0.1.9 line-sustain behavior. strict=True: flip when the "
+        "roadmap phrase-aware sustain is implemented."
+    ))
     def test_sustain_last_word_of_lrc_line(self, synced_track, lrc_lines):
         """
         The last word of each LRC line should extend to (or near) the next LRC line's timestamp.
@@ -345,6 +353,13 @@ class TestLyricTimingAccuracy:
         with open(path) as f:
             return json.load(f)
 
+    @pytest.mark.xfail(strict=True, reason=(
+        "v0.1.9 deliberately snaps the first word's start to the vocal-stem audio "
+        "onset (README: 'LRC timestamps are suggestions only -- WhisperX decides'), "
+        "not to the LRC timestamp. 'Tonight' snaps to an onset at 0.255s vs the LRC "
+        "0.610s. This test asserts the pre-v0.1.9 LRC-proximity assumption. strict=True: "
+        "flip once onset-snapping regresses toward LRC-gating."
+    ))
     def test_first_word_timing_close_to_lrc(self, synced_track):
         """First word should start close to first LRC timestamp (within 200ms)."""
         synced_lyrics = synced_track.get('synced_lyrics', [])

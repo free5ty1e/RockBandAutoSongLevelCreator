@@ -1,0 +1,33 @@
+# Guitar tab guide — "Brian Wilson" by Barenaked Ladies
+# Sources (retrieved 2026-09-18 via web search):
+#   - Ultimate Guitar "Brian Wilson" chords/tab listings
+#   - E-Chords Barenaked Ladies chords
+# Acoustic strummed verses; standard tuning. (This song's guitar part is
+# strummed acoustic chords rather than the punk power-chord chugging of
+# Open Road Song; used as the SECOND generalization check.)
+
+song: "Brian Wilson"
+artist: "Barenaked Ladies"
+tuning: standard
+technique: "strummed acoustic chords, verses; fuller strums in choruses"
+
+parts:
+  - name: verse
+    description: >
+      Strummed acoustic chords. Chord roots move through the song's
+      progression; validation focuses on strum density and lane movement
+      following the chord changes (as with the Eve 6 guide, the repeating
+      rhythmic cell is measured from the audio rather than hand-authored).
+    chords:
+      - name: A
+        root_midi: 45
+      - name: D
+        root_midi: 50
+      - name: E
+        root_midi: 52
+      - name: F#m
+        root_midi: 54
+
+validation:
+  grid_divisions: 4
+  monotonic_lane: true

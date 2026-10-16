@@ -205,11 +205,21 @@ def _match_raw_word(raw_words: List[dict], word_text: str, anchor: float):
 
 
 def _chars_in_range(chars: List[dict], raw_start: float, raw_end: float) -> List[dict]:
-    """Chars whose midpoint falls inside the raw word's time range."""
+    """Chars whose midpoint falls inside the raw word's time range.
+
+    Chars WITHOUT start/end are skipped: a char with no timing has no
+    midpoint, so it cannot fall in any range. (WhisperX emits timing-less
+    entries for some punctuation/space chars — first seen on the no-LRC
+    transcription path, where a punctuation-only "word" reached the syllable
+    timing derivation and crashed on chars[si]["start"]. Skipping them lets
+    that word fall through to the pyphen proportional-timing fallback.)
+    """
     out = []
     for ch in chars:
-        c_start = ch.get("start", 0.0)
-        c_end = ch.get("end", c_start)
+        if "start" not in ch or "end" not in ch:
+            continue
+        c_start = ch["start"]
+        c_end = ch["end"]
         c_mid = (c_start + c_end) / 2
         if raw_start - 0.05 <= c_mid <= raw_end + 0.05:
             out.append(ch)

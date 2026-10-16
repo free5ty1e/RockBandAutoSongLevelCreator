@@ -1,0 +1,19 @@
+{
+  "theme": "dark-daltonized",
+  "effortLevel": "high",
+  "skipDangerousModePermissionPrompt": false,
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/dev-cycle-verification.sh",
+            "timeout": 30,
+            "statusMessage": "Verifying dev cycle: tests + staging..."
+          }
+        ]
+      }
+    ]
+  }
+}
