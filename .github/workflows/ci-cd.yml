@@ -127,18 +127,27 @@ jobs:
   audit:
     # Release audit (v0.1.30): run tools/audit_release.py against the tag we
     # just built — CI state, release assets, wheel contents (every source
-    # module + data asset ships), release-notes contract, tag hygiene, and a
+    # module + data asset ships), release-notes contract, tag hygiene, a
     # FRESH-VENV install/import smoke of the downloaded wheel (the check
     # that would have caught the v0.1.30-alpha01 crepe/pkg_resources failure
-    # and the missing instruments package).
+    # and the missing instruments package), and (v0.1.31) a FUNCTIONAL
+    # CONVERSION: the wheel-installed CLI runs the committed 60s Open Road
+    # Song test clip (tools/test_data/) through the full pipeline and the
+    # artifacts are validated (CON/MOGG/MID/Clone Hero folder present and
+    # substantial, instrument tracks carry real note counts — the
+    # placeholder-class failure catcher). CPU Demucs on 60s adds ~5-10 min;
+    # the job carries its own generous timeout.
     needs: release
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     permissions:
       contents: read
       actions: read
     steps:
     - uses: actions/checkout@v4
+    - name: Install FFmpeg (pipeline requirement)
+      run: sudo apt-get update && sudo apt-get install -y ffmpeg libsndfile1
     - name: Wait for release assets to settle
       run: sleep 20
     - name: Run the release audit
@@ -147,6 +156,13 @@ jobs:
       run: |
         python tools/audit_release.py --tag "${{ github.ref_name }}" \
           --work-dir "$RUNNER_TEMP/audit" --strict
+    - name: Upload conversion output
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-conversion-output
+        path: ${{ runner.temp }}/audit/conversion_out
+        if-no-files-found: ignore
     - name: Upload audit report
       if: always()
       uses: actions/upload-artifact@v4

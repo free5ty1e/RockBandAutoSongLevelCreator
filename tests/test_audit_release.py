@@ -213,3 +213,47 @@ class TestPep427WheelFilenames:
             assert r.returncode == 0, \
                 f"pip rejected the dash-free rename {fixed}: " \
                 f"{(r.stderr or '').strip()[-200:]}"
+
+
+class TestFunctionalConversionStage:
+    """Stage 5b (functional conversion): the release wheel must convert
+    the committed 60s test song and produce substantial artifacts — an
+    install/import pass alone cannot catch runtime-only failures. These
+    tests pin the stage's existence and its inputs."""
+
+    def test_stage_5b_exists_in_audit_tool(self):
+        tool = (REPO_ROOT / "tools" / "audit_release.py").read_text()
+        assert "stage_functional_conversion" in tool, \
+            "the functional-conversion stage must stay in the audit tool"
+        assert "STAGE 5b" in tool
+
+    def test_test_clip_committed(self):
+        clip = REPO_ROOT / "tools" / "test_data" / "ors_60s.mp3"
+        lrc = REPO_ROOT / "tools" / "test_data" / "ors_60s.lrc"
+        assert clip.exists() and clip.stat().st_size > 100_000, \
+            "the committed 60s conversion test clip is missing"
+        assert lrc.exists() and lrc.stat().st_size > 50, \
+            "the committed 60s LRC slice is missing"
+
+    def test_clip_is_60s_of_ors(self):
+        """The clip must be a real 60s slice of Open Road Song (not a
+        synthetic tone) so the conversion exercises guitar/drums/vocals."""
+        import wave
+        clip = REPO_ROOT / "tools" / "test_data" / "ors_60s.mp3"
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                            "format=duration", "-of", "csv=p=0", str(clip)],
+                           capture_output=True, text=True)
+        assert r.returncode == 0 and 55 <= float(r.stdout) <= 65, \
+            f"test clip should be ~60s, got {r.stdout.strip()}"
+
+    def test_ci_audit_runs_conversion_with_ffmpeg(self):
+        wf = (REPO_ROOT / ".github" / "ci" / "workflows" / "ci-cd.yml"
+              ).read_text() if False else \
+             (REPO_ROOT / ".github" / "workflows" / "ci-cd.yml").read_text()
+        assert "timeout-minutes: 75" in wf, \
+            "the audit job needs a generous timeout for the conversion"
+        assert "ffmpeg libsndfile1" in wf, \
+            "the audit job must install ffmpeg for the conversion"
+
+
+import subprocess  # noqa: E402  (used by TestFunctionalConversionStage)

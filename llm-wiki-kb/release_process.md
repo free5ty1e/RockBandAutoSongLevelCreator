@@ -57,6 +57,10 @@ the audit will fail it for anything else. Run through this first:
 4. **New data asset?** Add it to `[tool.setuptools.package-data]` and the
    CI check (the `webui/static/index.html` miss: the wheel's engine had no
    UI page to serve).
+   4b. **Does the functional-conversion test clip still exercise it?** New
+   runtime inputs (models, fonts, anything read mid-pipeline) must be used
+   by the 60s conversion in stage 5b — a data file that ships but is never
+   touched by the conversion is unaudited.
 5. **New dependency?** It must be importable in a FRESH environment:
    - never add anything whose *build* requires `pkg_resources`
      (setuptools≥82 removed it — the crepe failure class);
@@ -91,6 +95,7 @@ Run: `python tools/audit_release.py --tag v0.1.31 --strict`
 | 3 Wheel | version matches the tag prefix; **source parity** — every `.py` under the packaged trees ships in the wheel (the instruments-package catcher); all data assets (CON/milo/png templates, fonts, `nmp.onnx`, web UI static); `RELEASE_NOTES.txt` present and mentions the version. |
 | 4 Notes | CHANGELOG has the entry; the release body embeds it verbatim; the body carries the user-facing README sections (Key Features / Known Limitations / Quick Start...). |
 | 5 Fresh-venv smoke | creates a brand-new venv, `pip install` the **downloaded wheel** (resolving deps from PyPI — the crepe catcher), `pip check`, imports **all** `EXPECTED_IMPORTS` modules, checks `autorb.version.__version__`, runs `python -m autorb.cli --help`. |
+| 5b Functional conversion | **the release wheel actually converts a song.** Runs the wheel-installed CLI on the committed 60s Open Road Song test clip (`tools/test_data/ors_60s.mp3` + matching LRC slice) through the full pipeline (Demucs separation included, `--build-clone-hero`), then validates the artifacts: the Clone Hero folder (song.ogg / notes.mid / notes.chart / song.ini / album.png, all over minimum sizes), the `.con` (>100 KB), the `.mogg` (>200 KB), and — via mido — that `PART GUITAR` / `PART BASS` / `PART DRUMS` each carry ≥10 notes (the placeholder-chart failure class). A wheel can install cleanly and still fail at runtime (lazy imports, data files only read mid-pipeline, optional-dep fallbacks — adtof/madmom/basic_pitch are absent in wheel-only installs, exercising the librosa fallback paths the devcontainer never runs). Install/import smoke cannot catch any of that; converting a real song can. |
 | 6 Tag hygiene | tag prefix == `autorb/version.py`; CHANGELOG entry exists for the working-tree version. |
 
 Exit code: 0 always unless `--strict` and something failed (CI uses

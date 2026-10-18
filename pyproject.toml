@@ -29,6 +29,12 @@ dependencies = [
     # (the wheel's own deps previously shipped no setuptools at all, so
     # --skip-vocals crashed with ModuleNotFoundError: No module named 'pkg_resources').
     "setuptools>=68.0.0,<82.0.0",
+    # Syllable segmentation (guarded imports in syllables.py /
+    # midi_generator.py fall back to simpler splits without it, but the
+    # fallback degrades vocal charting silently — pyphen is a tiny pure-Py
+    # package and belongs in the core deps like every actually-imported
+    # module; found while building the functional conversion smoke).
+    "pyphen>=0.10",
     # Web UI engine — CORE deps as of v0.1.30 (was an optional [web] extra):
     # the wheel ships the `autorb-webui` console script and the webui
     # package, so a plain `pip install autorb` must be able to run it

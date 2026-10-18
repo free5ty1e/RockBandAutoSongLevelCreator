@@ -261,7 +261,7 @@ def download_assets(rel: dict | None, work_dir: Path,
         if not name:
             continue
         r = _gh(["release", "download", rel["tagName"], f"--repo",
-                 _repo_slug(), "--pattern", name,
+                 _repo_slug(), "--pattern", name, "--clobber",
                  "--dir", str(work_dir)], audit)
         if r is None:
             audit.fail(f"could not download the {kind}")
@@ -439,6 +439,143 @@ def stage_fresh_venv_smoke(wheel_path: Path | None, version: str,
         "`python -m autorb.cli --help` exits 0 in the fresh venv"
         if r.returncode == 0 else
         f"CLI smoke failed: {(r.stderr or '').strip()[:300]}")
+
+    # STAGE 5b — functional conversion: run the wheel-installed pipeline on
+    # the committed 60s Open Road Song test clip and validate the artifacts.
+    # Install/import/--help cannot catch a lazy import that only fires mid-
+    # pipeline, a data file only read at runtime, or the optional-dep
+    # fallback paths (adtof/madmom/basic_pitch are absent in a wheel-only
+    # install — exactly what users get).
+    stage_functional_conversion(work, audit, skip)
+
+
+def stage_functional_conversion(venv: Path, audit: Audit, skip: bool) -> None:
+    print("\n=== STAGE 5b — functional conversion (60s test song) ===")
+    if skip:
+        audit.warn("skipped (--skip-smoke skips the conversion too)")
+        return
+    py = str(venv / "bin" / "python")
+    clip = REPO_ROOT / "tools" / "test_data" / "ors_60s.mp3"
+    lrc = REPO_ROOT / "tools" / "test_data" / "ors_60s.lrc"
+    if not clip.exists():
+        audit.fail("committed test clip tools/test_data/ors_60s.mp3 missing")
+        return
+    out = venv.parent / "conversion_out"
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+
+    # Pre-fetch the Demucs model ONCE into the venv user's HF cache so a
+    # flaky network mid-run doesn't read as a broken wheel (models are
+    # cached by huggingface_hub; the run below then uses the cache).
+    model = "htdemucs_6s"
+    # NOTE: just get_model() — a BagOfModels has no .name attribute (the
+    # first version of this probe crashed on m.name and mis-read a
+    # successful fetch as a failure).
+    r = _run([py, "-c", f"""
+from demucs.pretrained import get_model
+get_model('{model}')
+"""], timeout=900)
+    if r.returncode != 0:
+        audit.warn(f"demucs model pre-fetch failed ({(r.stderr or '')[-150:]}); "
+                   "attempting the conversion anyway")
+    else:
+        audit.ok(f"demucs '{model}' model fetches (HF cache warm)")
+
+    cmd = [py, "-m", "autorb.cli", str(clip),
+           "--artist", "Eve 6", "--title", "Open Road Song (60s test)",
+           "--year", "1998", "--genre", "Alternative",
+           "--lyrics", str(lrc),
+           "--separator", model,
+           "--output-dir", str(out),
+           "--build-clone-hero"]
+    print("  running:", " ".join(cmd[:8]), "...")
+    r = _run(cmd, timeout=3600)   # CPU Demucs on 60s ≈ a few minutes
+    if r.returncode != 0:
+        tail = (r.stderr or r.stdout)[-800:]
+        audit.fail(f"conversion FAILED (the release wheel cannot chart a "
+                   f"song!): ...{tail}")
+        return
+    audit.ok("wheel-installed CLI converts the 60s test song end-to-end")
+
+    # ---- artifact validation -------------------------------------------
+    problems = []
+    found = {}
+
+    # Clone Hero folder + files
+    ch = list(out.glob("clone_hero/*/"))
+    if not ch:
+        problems.append("no clone_hero/<song>/ output folder")
+    else:
+        folder = ch[0]
+        for name, min_bytes in (("song.ogg", 50_000),
+                                ("notes.mid", 500),
+                                ("notes.chart", 1_000),
+                                ("song.ini", 100),
+                                ("album.png", 1_000)):
+            f = folder / name
+            if not f.exists():
+                problems.append(f"clone_hero output missing {name}")
+            elif f.stat().st_size < min_bytes:
+                problems.append(f"clone_hero {name} suspiciously small "
+                                 f"({f.stat().st_size} B)")
+            else:
+                found[name] = f.stat().st_size
+
+    # CON
+    con = list(out.glob("*.con"))
+    if not con:
+        problems.append("no .con package produced")
+    elif con[0].stat().st_size < 100_000:
+        problems.append(f".con suspiciously small ({con[0].stat().st_size} B)")
+    else:
+        found["con"] = con[0].stat().st_size
+
+    # MOGG
+    mogg = list(out.glob("*.mogg"))
+    if not mogg:
+        problems.append("no .mogg produced")
+    elif mogg[0].stat().st_size < 200_000:
+        problems.append(f".mogg suspiciously small ({mogg[0].stat().st_size} B)")
+    else:
+        found["mogg"] = mogg[0].stat().st_size
+
+    # MIDI chart must contain instrument tracks with notes (the placeholder-
+    # failure class): parse the count-in-free validation mid for substance.
+    mid = out / "validation" / "notes.mid"
+    if not mid.exists():
+        mid = next(iter(out.glob("*.mid")), None)
+    if mid is None:
+        problems.append("no .mid chart produced")
+    else:
+        try:
+            import mido
+            mf = mido.MidiFile(str(mid))
+            per_track: dict[str, int] = {}
+            for tr in mf.tracks:
+                if tr.name and any(m.type == "note_on" and m.velocity > 0
+                                   for m in tr if hasattr(m, "note")):
+                    per_track[tr.name] = sum(
+                        1 for m in tr
+                        if getattr(m, "type", "") == "note_on" and m.velocity > 0)
+            for want in ("PART GUITAR", "PART BASS", "PART DRUMS"):
+                if per_track.get(want, 0) < 10:
+                    problems.append(f"{want} has <10 notes "
+                                    f"({per_track.get(want, 0)}) — placeholder-class chart")
+                else:
+                    found[want] = per_track[want]
+        except ImportError:
+            audit.warn("mido not importable in the audit env; skipped "
+                       "chart-substance check")
+
+    if problems:
+        for p in problems:
+            audit.fail(f"artifact validation: {p}")
+    else:
+        audit.ok(f"artifacts complete and substantial: "
+                 + ", ".join(f"{k}={v:,}B" if isinstance(v, int) and v > 10_000
+                              else f"{k}={v}"
+                              for k, v in sorted(found.items())))
 
 
 # --------------------------------------------------------------- stage 6 ---
