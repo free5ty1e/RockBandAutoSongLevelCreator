@@ -6,6 +6,14 @@ date: 2026-08-07
 
 Append-only ledger of changes to this knowledge base. Newest first. Each entry records: timestamp, what was added, and why (the reasoning that future agents should not have to re-derive).
 
+## 2026-10-18 — v0.1.32: free-licensed benchmark song + git-ignored local songs (copyrighted material never committed)
+
+**What:** The user rightly rejected committing the 60s Open Road Song clip (copyrighted) minutes before it would have shipped. Stage 5b redesigned as two tiers: (1) the committed benchmark is now **"Tisk Tisk Sadness" by Trans Atlantic Rage** (52s punk rock, CC BY-NC-ND 3.0), chosen from the Free Music Archive's Internet Archive mirror — curl-able without an API key (`tools/test_data/fetch_benchmark.sh`; provenance/license in `BENCHMARK_SONG.md`). Deliberately a DIFFERENT profile from ORS (81% voiced vs 59%, sparser onsets) so the two benchmarks exercise different transcription paths. (2) `tools/test_data/local/` is git-ignored: any mp3+lrc pair dropped there (e.g. Open Road Song) is additionally converted and validated when present — local validations get both songs; CI only ever sees the free benchmark. Enforcement: `.gitignore` + `test_no_copyrighted_material_in_committed_tree` (scans the committed tree for copyrighted audio forever).
+
+**The functional conversion immediately caught a REAL wheel bug:** the benchmark's screamed punk vocals are rejected by WhisperX's VAD ("No active speech found") → 0 lyric lines → `step4_sync._clip_and_extend_word_ends` crashed with IndexError (`sorted_words[-1]` on an empty list). Root: the pipeline handled a MISSING LRC but not a song whose vocals yield no detectable speech — i.e. **instrumentals crashed every release wheel**. Fixed with an empty guard (empty vocal chart is a valid outcome); regression tests for step 4 + vocal MIDI with empty words. Also fixed `_run_conversion` passing `--year ''` (click rejects empty ints) — omit optional flags when empty.
+
+**Lesson:** the first real end-to-end conversion through the WHEEL found a bug in ~10 minutes that install/import smoke could never see — validating the stage's whole purpose.
+
 ## 2026-10-16 — v0.1.31: functional conversion joins the release audit (stage 5b)
 
 **What:** The user asked the pointed question: "you've downloaded the wheel, installed it per our release notes, converted Open Road Song, and validated the output?" The honest answer was no — stage 5 verified installability, imports, and --help, never a conversion. New stage 5b: a committed 60s Open Road Song test clip (`tools/test_data/ors_60s.mp3` + a matching LRC slice) runs through the wheel-installed CLI — full pipeline including Demucs separation — and the artifacts are validated: Clone Hero folder files over minimum sizes, CON >100KB, MOGG >200KB, and PART GUITAR/BASS/DRUMS each ≥10 notes via mido (placeholder-chart catcher). The CI audit job now installs ffmpeg, runs the conversion, uploads `release-conversion-output`, timeout 75m.

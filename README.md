@@ -390,9 +390,14 @@ and download, the wheel ships every source module + data asset (a missing
 release notes embed the version's CHANGELOG entry, the tag matches
 `autorb/version.py`, and — the gate that catches "works in the devcontainer,
 broken for users" failures — it installs the **downloaded wheel into a
-fresh venv** and imports every runtime module (this is the check that would
-have caught the v0.1.30-alpha01 `crepe`/`pkg_resources` build failure). The
-report is uploaded as a CI artifact on every release.
+fresh venv**, imports every runtime module, and **converts a real song
+end-to-end**: the committed free-licensed benchmark "Tisk Tisk Sadness"
+(CC BY-NC-ND) runs through the full pipeline and its artifacts are
+validated (CON/MOGG/Clone Hero folder, instrument charts with real note
+counts). You can also drop your own songs (e.g. Open Road Song) into the
+git-ignored `tools/test_data/local/` folder and the local audit converts
+those too — copyrighted material is never committed. The report and the
+conversion output are uploaded as CI artifacts on every release.
 
 ## 🌐 Web Interface
 

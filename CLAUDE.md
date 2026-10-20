@@ -54,13 +54,19 @@ git tag is in the FORBIDDEN list; the user tags.
 **Never claim a release is good without either (a) a green CI audit job
 on that tag, or (b) a passing local `audit_release.py --strict` run
 against it.** "Good" includes the FUNCTIONAL CONVERSION (stage 5b): the
-wheel-installed CLI must convert the committed 60s test song
-(`tools/test_data/ors_60s.mp3`) and produce substantial artifacts (CON,
-MOGG, Clone Hero folder, instrument tracks with ≥10 notes each). An
-install/import pass alone is NOT sufficient — runtime-only failures
-(lazy imports, mid-pipeline data files, optional-dep fallbacks) only
-surface when a real song is converted. If a new runtime input is added
-(model, font, data file), make sure the conversion test exercises it.
+wheel-installed CLI must convert the committed FREE benchmark song
+(`tools/test_data/benchmark_tisk_tisk.mp3`, CC BY-NC-ND — provenance in
+`tools/test_data/BENCHMARK_SONG.md`) and produce substantial artifacts
+(CON, MOGG, Clone Hero folder, instrument tracks with ≥10 notes each),
+plus any songs the developer drops into git-ignored
+`tools/test_data/local/` (e.g. Open Road Song — copyrighted, NEVER
+committed; the ignore is enforced by test). An install/import pass alone
+is NOT sufficient — runtime-only failures (lazy imports, mid-pipeline
+data files, optional-dep fallbacks) only surface when a real song is
+converted. If a new runtime input is added (model, font, data file),
+make sure the conversion test exercises it. NEVER commit copyrighted
+audio (or any copyrighted material) to the repo — test fixtures come
+from free-licensed sources only.
 
 
 ## Mandatory End-of-Cycle Workflow (hook-enforced)

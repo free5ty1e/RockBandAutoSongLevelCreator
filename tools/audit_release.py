@@ -449,21 +449,57 @@ def stage_fresh_venv_smoke(wheel_path: Path | None, version: str,
     stage_functional_conversion(work, audit, skip)
 
 
+BENCHMARK = {
+    "audio": "benchmark_tisk_tisk.mp3",
+    "artist": "Trans Atlantic Rage",
+    "title": "Tisk Tisk Sadness",
+    "year": "2010",
+    "genre": "Punk",
+}
+
+
 def stage_functional_conversion(venv: Path, audit: Audit, skip: bool) -> None:
-    print("\n=== STAGE 5b — functional conversion (60s test song) ===")
+    """Convert real songs with the wheel-installed CLI and validate artifacts.
+
+    Two tiers (see tools/test_data/BENCHMARK_SONG.md):
+      1. The committed FREE benchmark ("Tisk Tisk Sadness" by Trans Atlantic
+         Rage, CC BY-NC-ND 3.0 — see tools/test_data/BENCHMARK_SONG.md for
+         provenance) — always runs, in CI too.
+      2. Local songs in tools/test_data/local/ (git-IGNORED, e.g. Open Road
+         Song — copyrighted, NEVER committed): each mp3 (+optional matching
+         .lrc) found there is additionally converted and validated when
+         present. CI never sees these; they enrich local validation.
+    """
+    print("\n=== STAGE 5b — functional conversion ===")
     if skip:
         audit.warn("skipped (--skip-smoke skips the conversion too)")
         return
     py = str(venv / "bin" / "python")
-    clip = REPO_ROOT / "tools" / "test_data" / "ors_60s.mp3"
-    lrc = REPO_ROOT / "tools" / "test_data" / "ors_60s.lrc"
-    if not clip.exists():
-        audit.fail("committed test clip tools/test_data/ors_60s.mp3 missing")
+    data_dir = REPO_ROOT / "tools" / "test_data"
+
+    # ---- build the conversion queue --------------------------------------
+    jobs = []
+    bench_audio = data_dir / BENCHMARK["audio"]
+    if bench_audio.exists():
+        jobs.append((BENCHMARK["artist"], BENCHMARK["title"],
+                     BENCHMARK["year"], BENCHMARK["genre"],
+                     bench_audio, None))
+    else:
+        audit.warn("benchmark song missing (tools/test_data/"
+                   f"{BENCHMARK['audio']}) — run "
+                   "tools/test_data/fetch_benchmark.sh; testing local songs only")
+
+    local_dir = data_dir / "local"
+    if local_dir.is_dir():
+        for mp3 in sorted(local_dir.glob("*.mp3")):
+            lrc = mp3.with_suffix(".lrc")
+            jobs.append(("Local Test", mp3.stem, "", "Rock",
+                         mp3, lrc if lrc.exists() else None))
+
+    if not jobs:
+        audit.fail("no conversion test songs available (benchmark missing "
+                    "and no local songs) — stage 5b cannot run")
         return
-    out = venv.parent / "conversion_out"
-    if out.exists():
-        shutil.rmtree(out)
-    out.mkdir(parents=True)
 
     # Pre-fetch the Demucs model ONCE into the venv user's HF cache so a
     # flaky network mid-run doesn't read as a broken wheel (models are
@@ -482,21 +518,41 @@ get_model('{model}')
     else:
         audit.ok(f"demucs '{model}' model fetches (HF cache warm)")
 
-    cmd = [py, "-m", "autorb.cli", str(clip),
-           "--artist", "Eve 6", "--title", "Open Road Song (60s test)",
-           "--year", "1998", "--genre", "Alternative",
-           "--lyrics", str(lrc),
+    for idx, (artist, title, year, genre, audio, lrc) in enumerate(jobs):
+        _run_conversion(py, model, artist, title, year, genre,
+                        audio, lrc, venv.parent / f"conversion_out_{idx:02d}",
+                        audit)
+
+
+def _run_conversion(py: str, model: str, artist: str, title: str,
+                    year: str, genre: str, audio: Path, lrc: Path | None,
+                    out: Path, audit: "Audit") -> None:
+    """Convert one song with the wheel-installed CLI and validate artifacts."""
+    print(f"\n  --- converting: {artist} - {title} ---")
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+    cmd = [py, "-m", "autorb.cli", str(audio),
+           "--artist", artist, "--title", title,
            "--separator", model,
            "--output-dir", str(out),
            "--build-clone-hero"]
-    print("  running:", " ".join(cmd[:8]), "...")
-    r = _run(cmd, timeout=3600)   # CPU Demucs on 60s ≈ a few minutes
+    # Omit optional empty-value flags entirely: click rejects "--year ''"
+    # ("not a valid integer") and an empty genre would write empty strings
+    # into songs.dta (the local-song jobs have no metadata by design).
+    if year:
+        cmd.extend(["--year", year])
+    if genre:
+        cmd.extend(["--genre", genre])
+    if lrc is not None:
+        cmd.extend(["--lyrics", str(lrc)])
+    r = _run(cmd, timeout=3600)   # CPU Demucs ≈ minutes per short song
     if r.returncode != 0:
         tail = (r.stderr or r.stdout)[-800:]
-        audit.fail(f"conversion FAILED (the release wheel cannot chart a "
-                   f"song!): ...{tail}")
+        audit.fail(f"conversion FAILED for '{artist} - {title}' (the "
+                   f"release wheel cannot chart a song!): ...{tail}")
         return
-    audit.ok("wheel-installed CLI converts the 60s test song end-to-end")
+    audit.ok(f"wheel-installed CLI converts '{artist} - {title}' end-to-end")
 
     # ---- artifact validation -------------------------------------------
     problems = []
@@ -570,9 +626,9 @@ get_model('{model}')
 
     if problems:
         for p in problems:
-            audit.fail(f"artifact validation: {p}")
+            audit.fail(f"artifact validation [{artist} - {title}]: {p}")
     else:
-        audit.ok(f"artifacts complete and substantial: "
+        audit.ok(f"artifacts [{artist} - {title}] complete and substantial: "
                  + ", ".join(f"{k}={v:,}B" if isinstance(v, int) and v > 10_000
                               else f"{k}={v}"
                               for k, v in sorted(found.items())))

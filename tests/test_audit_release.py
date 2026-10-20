@@ -216,40 +216,67 @@ class TestPep427WheelFilenames:
 
 
 class TestFunctionalConversionStage:
-    """Stage 5b (functional conversion): the release wheel must convert
-    the committed 60s test song and produce substantial artifacts — an
-    install/import pass alone cannot catch runtime-only failures. These
-    tests pin the stage's existence and its inputs."""
+    """Stage 5b (functional conversion): the release wheel must convert a
+    FREE-licensed benchmark song (never copyrighted material) plus any
+    git-ignored local songs the developer drops in. These tests pin the
+    stage's contract: benchmark committed + curl-able, local/ ignored,
+    copyrighted content banned from the tree."""
 
     def test_stage_5b_exists_in_audit_tool(self):
         tool = (REPO_ROOT / "tools" / "audit_release.py").read_text()
         assert "stage_functional_conversion" in tool, \
             "the functional-conversion stage must stay in the audit tool"
         assert "STAGE 5b" in tool
+        assert "local" in tool and "benchmark" in tool, \
+            "stage 5b must support BOTH the committed benchmark and local songs"
 
-    def test_test_clip_committed(self):
-        clip = REPO_ROOT / "tools" / "test_data" / "ors_60s.mp3"
-        lrc = REPO_ROOT / "tools" / "test_data" / "ors_60s.lrc"
+    def test_benchmark_song_committed_and_licensed(self):
+        clip = REPO_ROOT / "tools" / "test_data" / "benchmark_tisk_tisk.mp3"
+        doc = REPO_ROOT / "tools" / "test_data" / "BENCHMARK_SONG.md"
+        fetch = REPO_ROOT / "tools" / "test_data" / "fetch_benchmark.sh"
         assert clip.exists() and clip.stat().st_size > 100_000, \
-            "the committed 60s conversion test clip is missing"
-        assert lrc.exists() and lrc.stat().st_size > 50, \
-            "the committed 60s LRC slice is missing"
+            "the free benchmark song is missing — run tools/test_data/fetch_benchmark.sh"
+        assert doc.exists(), "BENCHMARK_SONG.md provenance/license doc required"
+        assert fetch.exists(), "fetch_benchmark.sh must be committed"
+        text = doc.read_text()
+        assert "creativecommons.org/licenses/by-nc-nd/3.0" in text, \
+            "the benchmark's license must be documented"
+        assert "archive.org" in text, "the benchmark's source must be documented"
 
-    def test_clip_is_60s_of_ors(self):
-        """The clip must be a real 60s slice of Open Road Song (not a
-        synthetic tone) so the conversion exercises guitar/drums/vocals."""
-        import wave
-        clip = REPO_ROOT / "tools" / "test_data" / "ors_60s.mp3"
+    def test_local_songs_dir_is_git_ignored(self):
+        """tools/test_data/local/ (for copyrighted songs like Open Road
+        Song) MUST be git-ignored — copyrighted material can never be
+        committed to the repo."""
+        gi = (REPO_ROOT / ".gitignore").read_text()
+        assert "tools/test_data/local" in gi, \
+            "tools/test_data/local must be git-ignored (see BENCHMARK_SONG.md)"
+        r = subprocess.run(["git", "check-ignore",
+                            "tools/test_data/local/probe.mp3"],
+                           capture_output=True, text=True, cwd=REPO_ROOT)
+        assert r.returncode == 0, "local songs dir must ignore files"
+
+    def test_no_copyrighted_material_in_committed_tree(self):
+        """The committed tree must never contain Open Road Song (or other
+        copyrighted audio) — the release-audit fixtures are the free
+        benchmark + git-ignored local files only."""
+        r = subprocess.run(["git", "ls-files", "tools/test_data"],
+                           capture_output=True, text=True, cwd=REPO_ROOT)
+        for line in r.stdout.splitlines():
+            assert "ors_60s" not in line and "eve6" not in line.lower(), \
+                f"copyrighted test audio committed: {line}"
+
+    def test_benchmark_is_rock_like(self):
+        """The benchmark must be a real full-band recording (~1 min of
+        drums/bass/guitar/vocals), not a synthetic tone."""
+        clip = REPO_ROOT / "tools" / "test_data" / "benchmark_tisk_tisk.mp3"
         r = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
                             "format=duration", "-of", "csv=p=0", str(clip)],
                            capture_output=True, text=True)
-        assert r.returncode == 0 and 55 <= float(r.stdout) <= 65, \
-            f"test clip should be ~60s, got {r.stdout.strip()}"
+        assert r.returncode == 0 and 40 <= float(r.stdout) <= 300, \
+            f"benchmark should be ~1-4 min, got {r.stdout.strip()}"
 
     def test_ci_audit_runs_conversion_with_ffmpeg(self):
-        wf = (REPO_ROOT / ".github" / "ci" / "workflows" / "ci-cd.yml"
-              ).read_text() if False else \
-             (REPO_ROOT / ".github" / "workflows" / "ci-cd.yml").read_text()
+        wf = (REPO_ROOT / ".github" / "workflows" / "ci-cd.yml").read_text()
         assert "timeout-minutes: 75" in wf, \
             "the audit job needs a generous timeout for the conversion"
         assert "ffmpeg libsndfile1" in wf, \

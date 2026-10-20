@@ -12,6 +12,7 @@ All heavy models are mocked (whisperx load/align/transcribe, Basic-Pitch
 predict, syllable segmentation) — these tests exercise plumbing only.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -134,3 +135,63 @@ class TestCliOptionalLyrics:
         src = Path("autorb/cli.py").read_text()
         assert 'year if year is not None else 1998' in src
         assert 'genre if genre not in (None, "") else "Rock"' in src
+
+
+class TestEmptyVocalsRobustness:
+    """v0.1.32: a song whose vocal stem yields NO detectable speech
+    (instrumentals; or buried/screamed punk vocals that WhisperX's VAD
+    rejects — the free benchmark song) must chart as a song with an EMPTY
+    vocal track, not crash step 4 with IndexError (caught by the release
+    audit's functional conversion on the alpha04 wheel)."""
+
+    def _empty_cache(self, tmp):
+        import numpy as np
+        (tmp / "tempo_map.json").write_text(json.dumps(
+            {"beat_times": list(np.arange(0, 50, 0.35)),
+             "bpms": [170.0] * 143}))
+        (tmp / "vocals_cache.json").write_text(json.dumps(
+            {"version": 2, "lyrics_data": [], "word_segments": [],
+             "note_events": [], "alignment_result": {},
+             "syllable_pitches": []}))
+
+    def test_step4_survives_empty_words(self, tmp_path):
+        from autorb.audio.step4_sync import run_step_4
+        self._empty_cache(tmp_path)
+        run_step_4(str(tmp_path/"tempo_map.json"),
+                   str(tmp_path/"vocals_cache.json"),
+                   str(tmp_path/"synced_track.json"),
+                   vocals_stem=None, lrc_path=None)
+        out = json.loads((tmp_path/"synced_track.json").read_text())
+        words = out.get("words", out.get("word_segments", []))
+        assert words == []
+
+    def test_zero_word_pyin_pitches_survives(self):
+        """The _compute_word_pyin_pitches zero-word guard: `ends[-1]` on an
+        empty word list crashed (IndexError) — the benchmark conversion's
+        second crash, found after the first (_clip_and_extend) fix."""
+        from autorb.audio.step4_sync import _compute_word_pyin_pitches
+        import numpy as np
+        times = np.arange(0.0, 50.0, 0.01)
+        f0 = np.full(len(times), np.nan)
+        voiced = np.zeros(len(times), dtype=bool)
+        probs = np.zeros(len(times))
+        out = _compute_word_pyin_pitches(times, f0, voiced, probs,
+                                         starts=[], ends=[])
+        assert out == []
+
+    def test_vocal_midi_survives_empty_words(self, tmp_path):
+        import numpy as np
+        from autorb.audio.step4_sync import run_step_4
+        from autorb.export.midi_generator import generate_vocal_midi
+        self._empty_cache(tmp_path)
+        run_step_4(str(tmp_path/"tempo_map.json"),
+                   str(tmp_path/"vocals_cache.json"),
+                   str(tmp_path/"synced_track.json"),
+                   vocals_stem=None, lrc_path=None)
+        mid = generate_vocal_midi(tmp_path/"synced_track.json", tmp_path,
+                                  "empty_test", song_length_ms=50000,
+                                  bpm=170.0,
+                                  beat_times=list(np.arange(0, 50, 0.35)),
+                                  dynamic_bpms=[170.0]*143,
+                                  count_in_ticks=0, count_in_ms=0)
+        assert Path(mid).exists()
