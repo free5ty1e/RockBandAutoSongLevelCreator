@@ -284,3 +284,54 @@ class TestFunctionalConversionStage:
 
 
 import subprocess  # noqa: E402  (used by TestFunctionalConversionStage)
+
+
+class TestConversionArtifactUpload:
+    """The CI conversion-output artifact must match stage 5b's actual output
+    dirs (conversion_out_00, _01, ... since the two-tier redesign). The
+    singular 'conversion_out' path silently uploaded nothing on
+    v0.1.32-alpha01."""
+
+    def test_workflow_artifact_path_matches_stage5b_output(self):
+        wf = (REPO_ROOT / ".github" / "workflows" / "ci-cd.yml").read_text()
+        assert "conversion_out_*" in wf, \
+            ("the release-conversion-output artifact path must glob "
+             "conversion_out_* (per-song output dirs)")
+        assert "Install audit-tool deps" in wf and "mido" in wf, \
+            "CI must install mido for the chart-substance check"
+
+    def test_stage5b_output_dirs_are_indexed(self):
+        tool = (REPO_ROOT / "tools" / "audit_release.py").read_text()
+        assert 'conversion_out_{idx:02d}' in tool, \
+            "stage 5b writes per-song conversion_out_NN dirs"
+
+
+class TestStage6TagVersion:
+    """Auditing a HISTORICAL tag from a newer working tree must not
+    false-fail: stage 6 compares against the TAG's version.py (via
+    git show), not the live tree. (The v0.1.32-alpha01 local audit
+    false-FAILED when the tree was already at 0.1.33 for staged fixes.)"""
+
+    def test_stage6_reads_tag_version(self):
+        tool = (REPO_ROOT / "tools" / "audit_release.py").read_text()
+        helper_body = tool.split("def _tag_version")[1].split(
+            "def stage_tag_hygiene")[0]
+        assert "_tag_version" in tool
+        assert "git" in helper_body and "show" in helper_body, \
+            "_tag_version must read the TAG's version.py via git show"
+        assert "fine when auditing an older release" in tool, \
+            "working-tree drift must be a WARN, never a FAIL"
+
+    def test_tag_version_helper(self):
+        import importlib
+        spec = importlib.util.spec_from_file_location(
+            "ar", REPO_ROOT / "tools" / "audit_release.py")
+        ar = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ar)
+        # use the current HEAD's tag if it exists, else skip
+        r = ar._run(["git", "tag", "--points-at", "HEAD"])
+        tags = r.stdout.split()
+        if not tags:
+            import pytest
+            pytest.skip("no tag on HEAD")
+        assert ar._tag_version(tags[0]) is not None

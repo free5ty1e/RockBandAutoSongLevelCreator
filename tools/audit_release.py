@@ -635,16 +635,38 @@ def _run_conversion(py: str, model: str, artist: str, title: str,
 
 
 # --------------------------------------------------------------- stage 6 ---
+def _tag_version(tag: str) -> str | None:
+    """The version recorded in the TAG's autorb/version.py (not the working
+    tree — auditing a historical tag from a tree that has since bumped its
+    version would otherwise false-fail the comparison)."""
+    r = _run(["git", "show", f"{tag}:autorb/version.py"])
+    if r.returncode != 0:
+        return None
+    m = re.search(r"__version__\s*=\s*[\"']([^\"']+)", r.stdout)
+    return m.group(1) if m else None
+
+
 def stage_tag_hygiene(tag: str, version: str, audit: Audit) -> None:
     print("\n=== STAGE 6 — tag hygiene ===")
+    tagged = _tag_version(tag)
+    if tagged is None:
+        audit.warn(f"could not read the tag's version.py (is {tag} fetched?)")
+    elif version == tagged:
+        audit.ok(f"tag prefix v{version} == the TAG's autorb/version.py "
+                 f"({tagged})")
+    else:
+        audit.fail(f"tag prefix v{version} does NOT match the TAG's "
+                   f"autorb/version.py ({tagged}) — the workflow's own "
+                   "check should have caught this")
     current = current_version()
     if version == current:
-        audit.ok(f"tag prefix v{version} == autorb/version.py "
-                 f"({current})")
+        audit.ok(f"(also matches the working tree: {current})")
     else:
-        audit.fail(f"tag prefix v{version} does NOT match "
-                   f"autorb/version.py ({current}) — the workflow's own "
-                   "check should have caught this")
+        # informational only — the working tree commonly moves on after a
+        # historical tag (this false-FAILED the v0.1.32-alpha01 local audit
+        # when the tree was already at 0.1.33)
+        audit.warn(f"working tree is at {current} (the tag is {version}) — "
+                   "fine when auditing an older release after moving on")
     if re.search(rf"^## \[{re.escape(current)}\]",
                  (REPO_ROOT / "CHANGELOG.md").read_text(), re.M):
         audit.ok(f"CHANGELOG entry exists for the working-tree version "

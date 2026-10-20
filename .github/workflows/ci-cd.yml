@@ -152,6 +152,8 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install FFmpeg (pipeline requirement)
       run: sudo apt-get update && sudo apt-get install -y ffmpeg libsndfile1
+    - name: Install audit-tool deps (mido for the chart-substance check)
+      run: pip install mido
     - name: Wait for release assets to settle
       run: sleep 20
     - name: Run the release audit
@@ -165,7 +167,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: release-conversion-output
-        path: ${{ runner.temp }}/audit/conversion_out
+        path: ${{ runner.temp }}/audit/conversion_out_*
         if-no-files-found: ignore
     - name: Upload audit report
       if: always()
