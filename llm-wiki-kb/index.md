@@ -21,11 +21,15 @@ If you are new, read in this order:
 | [[architecture]] | End-to-end pipeline, packaging, supported Python range, release wheel naming. |
 | [[rock_band_customs_domain]] | Rock Band charting domain rules, MIDI requirements, count-in, tempo maps, difficulty ranks. |
 | [[vocal_alignment]] | LRC ingestion, WhisperX alignment, onset-snapped timing, pyin-primary pitch resolution, note-end clipping. |
+| [[instrument_charting]] | Real instrument charts (v0.0.92): transcription backends, difficulty reducer, MIDI pitch-offset packing, Clone Hero `.chart` writer quirks. |
+| [[charting_basics]] | How AutoRB's packed MIDI becomes a Clone Hero-loading `notes.chart`: the drum lane mapping (0–4), per-instrument lane decoding, integer-BPM rule, and headless verification. |
+| [[difficulty_charting]] | Rock Band/RBN rules for deriving Hard/Medium/Easy from Expert (cascade, lane consistency, sustain pull-back) + how AutoRB's reducer currently diverges. |
 | [[con_stfs_format]] | Xbox 360 STFS / CON container format and block addressing. |
 | [[mogg_audio_format]] | MOGG container layout, Ogg page-size constraints, channel layout, song_length. |
 | [[forgetool_compat]] | ForgeTool / LibForge CON->PKG compatibility: crashes fixed, interleave-aware I/O, freestyle patch. |
 | [[ps4-environment]] | The live PS4 RB4DX test environment, ground-truth findings, and open questions. |
 | [[local_preview_and_testing]] | No-PS4 preview & rapid-testing loop: Clone Hero export (`--build-clone-hero`), lyrics .srt, alignment report + spectrograms, automation. |
+| [[release_process]] | Release pipeline, pre-tag checklist (version/CHANGELOG/packages/deps), the release audit tool + its 6 stages, notes generator, tag rules. |
 
 ## How this wiki is maintained
 
@@ -39,3 +43,6 @@ If you are new, read in this order:
 - Root README: `../README.md` (user-facing install/usage docs).
 - Roadmap: `../ROADMAP.md`. Spec/task tracking: `../AGENT_PLAN.md`.
 - Changelog: `../CHANGELOG.md`. Version: `autorb/version.py`.
+
+## Web interface
+- `webui/` package: FastAPI engine + static UI (GitHub Pages deploy via `docs/`) — batches, output-folder option, copyable output path, headless-safe reveal. Details in `[[architecture]]` § Web Interface and `[[log]]` 2026-10-05 → 2026-10-09.

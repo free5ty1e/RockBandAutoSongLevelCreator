@@ -24,7 +24,36 @@ torchvision<0.24.0
 soundfile
 pydub
 
-mido
 pyphen>=0.10
+
+# Instrument transcription (new)
+# NOTE (v0.1.31): `crepe` was removed (v0.1.30): never imported anywhere in
+# autorb/ (an early-experiment leftover), and its build uses pkg_resources
+# at requirements-parse time, which broke every fresh CI install under
+# setuptools>=82 (observed on the v0.1.30-alpha01 tag build).
+# NOTE (v0.1.31): `madmom` and `scikit-learn` were removed from the REQUIRED
+# list — the same fresh-install failure class as crepe. madmom's sdist needs
+# Cython at build time (ModuleNotFoundError: No module named 'Cython' —
+# observed on the v0.1.31-alpha01 tag build), and its one call site
+# (autorb/transcribe/instruments/drums.py) is a GUARDED import with a full
+# librosa fallback (drum onsets), itself only a fallback now that ADTOF is
+# the primary drum transcriber. scikit-learn was never imported at all.
+# Both follow the spleeter/adtof pattern: code stays, install is optional —
+# `pip install madmom` (with cython) restores the madmom path if ever
+# wanted. Verified: full drum chart on Open Road Song is ADTOF-primary;
+# the librosa fallback covers the ADTOF-absent case.
+
+# Neural drum transcription: ADTOF Frame-RNN (kick/snare/toms/hihat/cymbals).
+# Not on PyPI — installed from source (needs git, torch, librosa, pretty_midi).
+# Falls back to the librosa band-based detector+classifier when absent.
+adtof-pytorch @ git+https://github.com/xavriley/ADTOF-pytorch.git
+
+# Web UI engine (autorb-webui): FastAPI + uvicorn + multipart uploads
+fastapi>=0.115
+uvicorn>=0.30
+python-multipart>=0.0.9
+# starlette's TestClient (used by the webui tests) requires httpx2 on
+# current releases — the older starlette in dev containers uses httpx.
+httpx2
 
 

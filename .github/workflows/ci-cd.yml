@@ -27,6 +27,10 @@ jobs:
         pip install -r requirements.txt
         pip install -e .
         pip install pytest pytest-cov
+        # starlette's TestClient needs httpx2 on current releases (the
+        # devcontainer's older starlette uses httpx) — the webui tests
+        # failed at collection on fresh runners without it.
+        pip install httpx2 || pip install httpx
     - name: Run Tests with Coverage
       run: |
         pytest tests/ --cov=autorb --cov-report=term-missing --cov-report=xml:coverage.xml
@@ -87,7 +91,17 @@ jobs:
                              'autorb/export/alignment_report.py',
                              'autorb/audio/preview.py',
                              'autorb/audio/mix_preview.py',
-                             'autorb/export/data/fonts/DejaVuSans.ttf']:
+                             'autorb/export/data/fonts/DejaVuSans.ttf',
+                             # v0.1.30 release audit: instruments was missing
+                             # from [tool.setuptools].packages — released
+                             # wheels could not chart instruments at all.
+                             'autorb/transcribe/instruments/__init__.py',
+                             'autorb/transcribe/instruments/guitar.py',
+                             'autorb/transcribe/instruments/drums.py',
+                             'autorb/transcribe/instruments/difficulty.py',
+                             # the web UI ships as a core package + script
+                             'webui/server.py',
+                             'webui/static/index.html']:
                 if required not in names:
                     print(f'FAIL: {required} not found in wheel', file=sys.stderr)
                     sys.exit(1)
@@ -110,6 +124,59 @@ jobs:
         name: dist
         path: dist/*
 
+  audit:
+    # Release audit (v0.1.30): run tools/audit_release.py against the tag we
+    # just built — CI state, release assets, wheel contents (every source
+    # module + data asset ships), release-notes contract, tag hygiene, a
+    # FRESH-VENV install/import smoke of the downloaded wheel (the check
+    # that would have caught the v0.1.30-alpha01 crepe/pkg_resources failure
+    # and the missing instruments package), and (v0.1.31) a FUNCTIONAL
+    # CONVERSION: the wheel-installed CLI runs the committed FREE benchmark
+    # song ("Tisk Tisk Sadness" by Trans Atlantic Rage, CC BY-NC-ND —
+    # tools/test_data/, see BENCHMARK_SONG.md) through the full pipeline
+    # and the artifacts are validated (CON/MOGG/MID/Clone Hero folder
+    # present and substantial, instrument tracks carry real note counts —
+    # the placeholder-class failure catcher). Developers can additionally
+    # drop local songs into git-ignored tools/test_data/local/ for richer
+    # LOCAL validation (never committed — copyrighted material stays out
+    # of the repo). CPU Demucs adds ~5-10 min per short song; the job
+    # carries its own generous timeout.
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: read
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install FFmpeg (pipeline requirement)
+      run: sudo apt-get update && sudo apt-get install -y ffmpeg libsndfile1
+    - name: Install audit-tool deps (mido for the chart-substance check)
+      run: pip install mido
+    - name: Wait for release assets to settle
+      run: sleep 20
+    - name: Run the release audit
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        python tools/audit_release.py --tag "${{ github.ref_name }}" \
+          --work-dir "$RUNNER_TEMP/audit" --strict
+    - name: Upload conversion output
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-conversion-output
+        path: ${{ runner.temp }}/audit/conversion_out_*
+        if-no-files-found: ignore
+    - name: Upload audit report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-audit-report
+        path: ${{ runner.temp }}/audit/AUDIT_REPORT.txt
+        if-no-files-found: ignore
+
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
@@ -126,11 +193,15 @@ jobs:
     - name: Tag wheel/sdist filenames as PEP 440 local versions
       run: |
         TAG="${{ github.ref_name }}"
-        # Sanitize the git tag into a PEP 440 local-version label (alnum, dot, underscore, hyphen).
-        # Appending to the VERSION (e.g. autorb-0.62+v0.005xTest17-py3-none-any.whl) keeps the
-        # wheel filename valid for pip; appending after the platform tag (the old behavior) made
-        # pip reject the file with "Invalid build number".
-        LOCAL="${TAG//[^a-zA-Z0-9._-]/-}"
+        # Sanitize the git tag into a PEP 440 local-version label. CRITICAL
+        # (v0.1.31-alpha03 audit finding): the local segment must contain NO
+        # dashes — pip's wheel-filename parser treats the text after a dash
+        # in the local segment as a build number and rejects non-numeric
+        # values ("Invalid build number: alpha03"). Dashes become DOTS
+        # (underscores work too); everything else non-alnum also becomes a
+        # dot. v0.1.31-alpha03 -> v0.1.31.alpha03 -> a pip-accepted
+        # autorb-0.1.31+v0.1.31.alpha03-py3-none-any.whl.
+        LOCAL="${TAG//[^a-zA-Z0-9._]/.}"
         for f in dist/*; do
           if [[ "$f" == *.whl ]]; then
             newname="${f%-py3-none-any.whl}+${LOCAL}-py3-none-any.whl"

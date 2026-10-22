@@ -104,7 +104,13 @@ def main() -> None:
     version = args.version or current_version()
     out = REPO_ROOT / args.out
     out.write_text(build(version, args.tag), encoding="utf-8")
-    print(f"wrote {out.relative_to(REPO_ROOT)} for AutoRB {version}")
+    # --out may be outside the repo (e.g. a tmp dir); relative_to() raised
+    # ValueError there, printing a misleading traceback AFTER a good write.
+    try:
+        shown = out.relative_to(REPO_ROOT)
+    except ValueError:
+        shown = out
+    print(f"wrote {shown} for AutoRB {version}")
 
 
 if __name__ == "__main__":

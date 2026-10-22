@@ -5,6 +5,31 @@ The AutoRB pipeline is an end-to-end automation system for converting raw audio 
 ## Fresh-User Wheel Install (v0.0066)
 Fresh users install only the wheel (no git clone). Known macOS/Linux pitfall: `python3 -m venv venv` can fail with `ensurepip ... non-zero exit status 1` — see the "Troubleshooting `python3 -m venv venv` failures" section in README.md and the GitHub release body (run `python3.12 -m ensurepip --upgrade` to see the real error; fixes: `unset PYTHONPATH PYTHONHOME`, verify `which python3.12`, or bootstrap pip with `--without-pip` + `get-pip.py`). The wheel enforces `Requires-Python >=3.11,<3.14` (Python 3.14 unsupported — WhisperX caps at `<3.14`).
 
+## Web Interface (v0.1.23+, `webui/`)
+
+A FastAPI engine (`python -m webui.server` / `autorb-webui`, default
+`127.0.0.1:7860`) wraps the REAL CLI as a subprocess — never re-implementing
+pipeline logic: uploads (audio/stems/LRC/art) stage into
+`webui_jobs/<id>/uploads/`, jobs run one-at-a-time through a single worker
+queue, and progress is parsed from the CLI's own stage markers + Demucs strip
+counters (`webui/progress.py`). Batches (`webui/batch.py`) stage songs into a
+durable `batch_store/`, save/load to `batch_store/batches/<name>.json`
+(format `autorb-batch/1`), run each song's pipeline, then package all CONs via
+`--package-con-dir`. The same single-file UI (`webui/static/index.html`)
+deploys to GitHub Pages via `docs/` — kept byte-identical by a test and a
+workflow guard; on Pages it shows a connect panel and posts to the local
+engine (Pages is static-only; the engine always runs on the user's machine).
+An optional **output folder** (per-job or per-batch) relocates just the
+user-facing output (`<root>/<job_id>/`); uploads and logs always stay under
+the jobs root. UI section 0 shows the resolved output path (`<folder>/<job>`)
+with a Browse dialog served by `GET /api/browse` (directories-only listings
+of the engine's filesystem — a native browser picker can't return a
+server-side path; never list file names/contents) and a reset-to-auto. Contract notes: CLI failure paths MUST `sys.exit(1)` (a bare
+`return` in a click callback exits 0 and the engine reads failures as
+successes), and the reveal endpoint reports `ok: False` + the path on
+headless machines so the UI can show a copyable chip instead of silently
+doing nothing.
+
 ## Pipeline Components
 
 1.  **Audio Processing (`autorb.audio`)**:
@@ -37,6 +62,10 @@ The sparse tempo map (v0.0071) was necessary but not sufficient — the in-game 
 The wheel declares `requires-python = ">=3.11,<3.14"`. Python 3.14 is NOT supported: current WhisperX releases cap at `<3.14`, and the only whisperx release without an upper bound (3.2.0) pins `ctranslate2==4.4.0`, which ships no Python 3.14 wheel. Without the upper bound, pip on 3.14 backtracked to whisperx 3.2.0 and failed with the cryptic `No matching distribution found for ctranslate2==4.4.0`; with it, pip refuses immediately and clearly. macOS's default `python3` is 3.9.6 (too old) — use `brew install python@3.12` and `python3.12`.
 
 ## Release Packaging: PEP 440 Wheel Filenames
+
+(Full release pipeline, pre-tag checklist, and the automated release audit:
+see **[[release_process]]**.)
+
 The CI release job renames the built artifacts to carry the git tag. The old code appended the tag **after** the platform tag (`autorb-0.62-py3-none-any-v0.005xTest17.whl`), which pip rejects with `ERROR: Invalid build number` — macOS users could not install release wheels. The fix inserts the sanitized tag as a **PEP 440 local version** before the platform tag: `autorb-0.62+v0.005xTest17-py3-none-any.whl` (and `autorb-0.62+v0.005xTest17.tar.gz` for the sdist). Tag characters are sanitized with `${TAG//[^a-zA-Z0-9._-]/-}`. pip install instructions must use `python3`/`pip3` (macOS's default `python3` is 3.9.6, below the `>=3.11` requirement).
 
 ## Default Album Art Legibility + CP Logo (v0.0075)

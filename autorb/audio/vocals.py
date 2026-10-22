@@ -65,34 +65,81 @@ def process_vocals(vocal_stem_path, lrc_path, out_dir):
     """
     Parses the LRC file, force-aligns words via WhisperX, extracts vocal pitches,
     and caches the result to JSON.
+
+    When ``lrc_path`` is None (no lyrics file supplied — e.g. the web UI's
+    "optional LRC"), the words come from WhisperX *transcription* instead:
+    the vocal stem is transcribed end-to-end and the resulting segments are
+    treated exactly like LRC lines (time + text), so the same alignment,
+    pitch-tracking and syllable machinery downstream is unchanged.
     """
     vocal_stem_path = Path(vocal_stem_path)
-    lrc_path = Path(lrc_path)
     out_dir = Path(out_dir)
-    
-    click.echo(f"Parsing LRC lyrics from {lrc_path.name}...")
-    
-    lyrics_data = []
-    lrc_pattern = re.compile(r'\[(\d+):(\d+\.\d+)\](.*)')
-    
-    with open(lrc_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            match = lrc_pattern.search(line)
-            if match:
-                minutes = int(match.group(1))
-                seconds = float(match.group(2))
-                text = match.group(3).strip()
-                if text:
-                    timestamp = (minutes * 60) + seconds
-                    lyrics_data.append({"time": timestamp, "text": text})
-                    
-    click.echo(f"Successfully parsed {len(lyrics_data)} lyric lines.")
-    
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    click.echo(f"Loading WhisperX alignment model on {device}...")
+
+    lyrics_data = []
+    if lrc_path is not None:
+        lrc_path = Path(lrc_path)
+        click.echo(f"Parsing LRC lyrics from {lrc_path.name}...")
+        lrc_pattern = re.compile(r'\[(\d+):(\d+\.\d+)\](.*)')
+
+        with open(lrc_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                match = lrc_pattern.search(line)
+                if match:
+                    minutes = int(match.group(1))
+                    seconds = float(match.group(2))
+                    text = match.group(3).strip()
+                    if text:
+                        timestamp = (minutes * 60) + seconds
+                        lyrics_data.append({"time": timestamp, "text": text})
+
+        click.echo(f"Successfully parsed {len(lyrics_data)} lyric lines.")
+    else:
+        click.echo("No LRC file supplied — transcribing lyrics from the vocal "
+                   "stem with WhisperX (timestamps become suggestions, same "
+                   "as LRC).")
+
+    click.echo(f"Loading audio...")
     audio = whisperx.load_audio(str(vocal_stem_path))
     audio_duration = len(audio) / 16000.0
+
+    if lrc_path is None:
+        # Transcription mode: let WhisperX listen and produce segments+words.
+        # These become this song's "LRC" — each segment is one lyric line.
+        click.echo("Loading WhisperX transcription model on %s..." % device)
+        # torch>=2.6 defaults torch.load(weights_only=True), which rejects the
+        # pyannote VAD checkpoint whisperx loads internally (the checkpoint
+        # pickles omegaconf objects and typing state, and the rejected-globals
+        # list keeps growing: ListConfig -> ContainerMetadata -> typing.Any...).
+        # lightning_fabric passes weights_only=True EXPLICITLY, so the only
+        # scoped fix for this TRUSTED checkpoint (HuggingFace-hosted pyannote
+        # weights) is to force weights_only=False during the model load and
+        # restore the original function right after.
+        orig_load = torch.load
+        def _permissive_load(*args, **kwargs):
+            kwargs["weights_only"] = False
+            return orig_load(*args, **kwargs)
+        torch.load = _permissive_load
+        try:
+            transcribe_model = whisperx.load_model("small", device=device,
+                                                   compute_type="int8")
+        finally:
+            torch.load = orig_load
+        click.echo("Transcribing vocal stem...")
+        transcription = transcribe_model.transcribe(
+            audio, batch_size=16, language="en")
+        segments = transcription.get("segments", [])
+        for seg in segments:
+            text = (seg.get("text") or "").strip()
+            if text:
+                lyrics_data.append({
+                    "time": float(seg.get("start", 0.0)),
+                    "text": text,
+                })
+        click.echo(f"Transcribed {len(lyrics_data)} lyric lines from the vocal stem.")
+
+    click.echo(f"Loading WhisperX alignment model on {device}...")
 
     # The MP3 and the .lrc come from different sources, so LRC timestamps are
     # suggestions only — they carry a global offset and occasionally a badly

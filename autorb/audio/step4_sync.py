@@ -241,6 +241,13 @@ def _compute_word_pyin_pitches(times, f0, voiced, probs, starts, ends,
     (e.g. fundamental + strong harmonic both present) while keeping real
     vibrato, slides, and sustained vowels.
     """
+    if len(starts) == 0:
+        # Zero words (instrumental / no detectable vocal speech — e.g. a
+        # vocal stem WhisperX's VAD rejects entirely, like the free
+        # benchmark song's screamed punk vocals). An empty vocal chart is a
+        # valid outcome; nothing to compute. (The old `ends[-1]` crashed
+        # with IndexError: index -1 out of bounds for size 0.)
+        return []
     next_starts = starts[1:].tolist() + [ends[-1]]
     results = []
     for i in range(len(starts)):
@@ -403,6 +410,12 @@ def _clip_and_extend_word_ends(refined, lyrics_data, audio_times=None,
 
     # --- 2) Clip to next word's start ---
     sorted_words = sorted(refined, key=lambda w: w.get("start", 0.0))
+    if not sorted_words:
+        # Empty vocals (instrumental / no-LRC song whose vocal stem has no
+        # detectable speech — WhisperX VAD rejects buried or screamed punk
+        # vocals, e.g. the free benchmark song): nothing to clip. The vocal
+        # chart is then simply empty, which is a valid outcome.
+        return
     for i in range(len(sorted_words) - 1):
         curr = sorted_words[i]
         nxt = sorted_words[i + 1]
