@@ -414,15 +414,21 @@ locally; the two connect over `http://127.0.0.1:7860`.
 
 ```bash
 # 1. Install (once)
-pip install -e ".[web]"
+pip install -e .
 
 # 2. Start the engine — Windows (PowerShell) and macOS/Linux (Terminal) alike:
 python -m webui.server          # or: autorb-webui
 # → http://127.0.0.1:7860
 
-# 3. Open the hosted control panel (or http://127.0.0.1:7860 directly):
-#    https://free5ty1e.github.io/RockBandAutoSongLevelCreator/
+# 3. Open the control panel in your browser:
+#    http://127.0.0.1:7860
 ```
+
+> The GitHub Pages site (https://free5ty1e.github.io/RockBandAutoSongLevelCreator/)
+> is a landing page with these same instructions — browsers' Private Network
+> Access policy forbids a public https page from calling a local engine, so
+> the working control panel is always the engine's own page at
+> http://127.0.0.1:7860.
 
 What the UI covers: a top **Output folder** section showing exactly where
 this run's files will go (`<folder>/<job>`) with a **Browse…** dialog that

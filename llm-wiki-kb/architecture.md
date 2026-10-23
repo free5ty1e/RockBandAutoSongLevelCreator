@@ -15,10 +15,16 @@ queue, and progress is parsed from the CLI's own stage markers + Demucs strip
 counters (`webui/progress.py`). Batches (`webui/batch.py`) stage songs into a
 durable `batch_store/`, save/load to `batch_store/batches/<name>.json`
 (format `autorb-batch/1`), run each song's pipeline, then package all CONs via
-`--package-con-dir`. The same single-file UI (`webui/static/index.html`)
-deploys to GitHub Pages via `docs/` — kept byte-identical by a test and a
-workflow guard; on Pages it shows a connect panel and posts to the local
-engine (Pages is static-only; the engine always runs on the user's machine).
+`--package-con-dir`. GitHub Pages (`docs/index.html`, deployed by `.github/workflows/pages.yml`)
+is a **landing page** — install/launch instructions pointing users at the
+engine's own UI (http://127.0.0.1:7860). It deliberately contains NO
+engine-calling code: a public https origin cannot reach a loopback engine —
+Chrome's Private Network Access denies the loopback address space, and
+uvicorn's CORS middleware rejects the PNA preflight with `400 Disallowed
+CORS private-network` (verified live on the v0.1.33 Pages deploy; see
+`tests/check_pages_landing.py`, which guards this in pages.yml AND the test
+suite). The pages workflow uses `configure-pages@v5` with `enablement: true`
+so a missing Pages site self-heals instead of failing the deploy.
 An optional **output folder** (per-job or per-batch) relocates just the
 user-facing output (`<root>/<job_id>/`); uploads and logs always stay under
 the jobs root. UI section 0 shows the resolved output path (`<folder>/<job>`)
