@@ -28,16 +28,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Guard: the Pages site must match webui/static exactly (the same UI
-      # is served by the local engine at /). tests/test_webui.py enforces
-      # this in CI; enforce it here too so a bad merge can't split the UIs.
-      - name: Verify docs/ is in sync with webui/static/
+      # Guard: docs/ is a self-contained LANDING PAGE (install + launch
+      # instructions pointing users at the engine's own UI). The live
+      # control panel runs on the engine itself (http://127.0.0.1:7860) —
+      # browsers' Private Network Access policy blocks a public https origin
+      # (GitHub Pages) from calling a loopback engine, so the Pages copy
+      # intentionally contains NO engine-calling JS.
+      - name: Verify the landing page references the engine UI correctly
         run: |
-          diff -r webui/static docs \
-            || (echo "::error::docs/ is out of sync with webui/static/ — run: cp webui/static/index.html docs/index.html" && exit 1)
+          python tests/check_pages_landing.py
 
+      # enablement: true creates the Pages site if it does not exist yet
+      # (the v0.1.33 merge deploy failed with "Get Pages site failed ... Not
+      # Found" when the site was absent — with enablement the workflow
+      # self-heals instead of hard-failing).
       - name: Setup Pages
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: Upload docs/ as Pages artifact
         uses: actions/upload-pages-artifact@v3

@@ -822,22 +822,32 @@ def test_no_placeholder_statuses_leak():
                               "failed", "cancelled"}
 
 
-def test_docs_dir_in_sync_with_webui_static():
-    """docs/ is the GitHub Pages deploy of webui/static/ (verbatim copy).
+def test_docs_is_pna_safe_landing_page():
+    """docs/ (GitHub Pages) is a LANDING PAGE, not a copy of the engine UI.
 
-    Pages serves docs/ as-is, so the two directories must be identical —
-    this test (and the pages.yml sync guard) fail the build the moment they
-    drift. Fix: cp webui/static/index.html docs/index.html
+    Browsers' Private Network Access policy denies the public https Pages
+    origin permission to reach the loopback address space — a Pages copy of
+    the control panel could never connect to a local engine (verified live:
+    "Permission was denied for this request to access the loopback address
+    space", and uvicorn answers the PNA preflight with 400 Disallowed). So
+    the landing page instructs (install -> start engine -> open
+    http://127.0.0.1:7860) and must contain NO engine-calling code. The
+    full check is tests/check_pages_landing.py (also run in pages.yml);
+    this pins it into the suite.
     """
-    import filecmp
-    src, dst = Path("webui/static"), Path("docs")
-    assert (src / "index.html").read_text() == (dst / "index.html").read_text(), \
-        ("docs/index.html is out of sync with webui/static/index.html — "
-         "re-copy it: cp webui/static/index.html docs/index.html")
-    cmp = filecmp.dircmp(src, dst)
-    assert not cmp.left_only and not cmp.right_only and not cmp.funny_files, (
-        f"docs/ and webui/static/ differ: only-in-static={cmp.left_only} "
-        f"only-in-docs={cmp.right_only}")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "check_pages_landing",
+        Path("tests") / "check_pages_landing.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    problems = mod.check()
+    assert not problems, problems
+
+    # and the two files must now intentionally DIFFER
+    assert Path("webui/static/index.html").read_text() != \
+        Path("docs/index.html").read_text(), \
+        "docs/index.html must not be a copy of the engine UI (PNA blocks it)"
 
 
 class TestFsBrowse:
