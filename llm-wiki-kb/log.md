@@ -6,6 +6,14 @@ date: 2026-08-07
 
 Append-only ledger of changes to this knowledge base. Newest first. Each entry records: timestamp, what was added, and why (the reasoning that future agents should not have to re-derive).
 
+## 2026-10-24 — v0.1.35: CLAUDE.md rules mirrored into AGENTS.md (one operating manual for every harness)
+
+**What:** The project is now worked from multiple agent harnesses. The Claude CLI auto-loads `CLAUDE.md` (the mature operating manual: Release Rules, end-of-cycle workflow, git/gh guardrails), but Pi and opencode auto-load `AGENTS.md` — which held only a subset (versioning, git, scratch, testing). The full CLAUDE.md rule set was transferred into AGENTS.md: Release Rules (the two validation gates, diagnose-from-`gh run view --log-failed`, the 7-item pre-tag checklist, the tag rule, never-claim-good incl. stage 5b + the copyright rule), the end-of-cycle workflow (validate → stage → suggest commit message; hook-enforced only in Claude CLI), the git allowed/forbidden tables (working-tree safety ops `git restore` / `git stash push` explicitly ALLOWED, matching CLAUDE.md — the old AGENTS.md blanket-forbade them), the gh read-only allowlist (+ `gh pr edit` for PR titles/bodies), and the file-system cautions.
+
+**Why:** Rules only one harness can see are rules the other harness breaks. Without the transfer, a Pi session would have had no pre-tag checklist, no audit contract, no gh policy, and a stricter-but-different git table. AGENTS.md is now the canonical file; CLAUDE.md declares itself its mirror.
+
+**Contract:** `tests/test_audit_release.py::TestReleaseDocsConsistency::test_agent_rules_have_release_section` now loops over BOTH files (release + workflow needles), and the new `test_agents_md_carries_the_guardrails` pins the guardrail sections in AGENTS.md. `.opencode/agent/rules.md` summary updated to match.
+
 ## 2026-10-22 — v0.1.34: GitHub Pages becomes a landing page (PNA forbids a Pages control panel)
 
 **What:** The v0.1.33 merge triggered the Pages workflow for the first time ever (the paths filter had never matched a main push before) and it failed: `configure-pages@v5` → "Get Pages site failed... Not Found" — the Pages site was absent at that moment. Live validation of the redeployed site then proved the deeper problem: a Pages copy of the control panel can NEVER connect to a local engine. Chrome logs "Permission was denied for this request to access the `loopback` address space" (Private Network Access), and the engine's own server stack answers the PNA preflight with `400 Disallowed CORS private-network` (uvicorn/CORSMiddleware does not support the PNA header). Two blockers, neither fixable in app code.

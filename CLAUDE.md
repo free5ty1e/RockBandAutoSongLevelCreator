@@ -1,5 +1,10 @@
 # Project Instructions
 
+**This file mirrors `AGENTS.md`** — the canonical AutoRB rules file that
+the Pi and opencode harnesses auto-load. Keep the two in sync: every rule
+here must also live in `AGENTS.md` (key contracts are pinned in both by
+`tests/test_audit_release.py::TestReleaseDocsConsistency`).
+
 
 ## Release Rules (read before any release/tagging work)
 
