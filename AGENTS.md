@@ -138,6 +138,7 @@ Only the following **Staging & Read** operations are allowed:
 | `git log` | View commit history |
 | `git show` | View a commit |
 | `git blame` | Annotate a file |
+| `git checkout <ref>` | Switch branches (no history/remote writes) |
 | `git restore <file>` | Discard unstaged local changes |
 | `git stash push` | Save WIP temporarily |
 | `git stash list` | View stashes |
@@ -149,7 +150,6 @@ Only the following **Staging & Read** operations are allowed:
 | `git commit` | Would record changes permanently |
 | `git push` / `git push --force` | Would publish to remote |
 | `git branch` / `git checkout -b` | Would create branches |
-| `git checkout <ref>` | Would switch branches / move HEAD |
 | `git merge` / `git rebase` | Would alter history |
 | `git tag` | Would tag releases |
 | `git fetch` / `git pull` | Would contact remote |

@@ -115,6 +115,7 @@ Only the following **Staging & Read** operations are allowed:
 | `git log` | View commit history |
 | `git show` | View a commit |
 | `git blame` | Annotate a file |
+| `git checkout <ref>` | Switch branches (no history/remote writes) |
 | `git restore <file>` | Discard unstaged local changes |
 | `git stash push` | Save WIP temporarily |
 | `git stash list` | View stashes |

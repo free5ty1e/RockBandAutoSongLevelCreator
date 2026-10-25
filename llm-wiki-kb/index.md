@@ -24,6 +24,7 @@ If you are new, read in this order:
 | [[instrument_charting]] | Real instrument charts (v0.0.92): transcription backends, difficulty reducer, MIDI pitch-offset packing, Clone Hero `.chart` writer quirks. |
 | [[charting_basics]] | How AutoRB's packed MIDI becomes a Clone Hero-loading `notes.chart`: the drum lane mapping (0–4), per-instrument lane decoding, integer-BPM rule, and headless verification. |
 | [[difficulty_charting]] | Rock Band/RBN rules for deriving Hard/Medium/Easy from Expert (cascade, lane consistency, sustain pull-back) + how AutoRB's reducer currently diverges. |
+| [[rb_charting_guidelines]] | Engine-verified charting mechanics: HOPO natural/forced rules per engine (LibForge/CH/Moonscraper), sustain floors, lane/gem conventions, marker pitch table, and AutoRB gaps. |
 | [[con_stfs_format]] | Xbox 360 STFS / CON container format and block addressing. |
 | [[mogg_audio_format]] | MOGG container layout, Ogg page-size constraints, channel layout, song_length. |
 | [[forgetool_compat]] | ForgeTool / LibForge CON->PKG compatibility: crashes fixed, interleave-aware I/O, freestyle patch. |
