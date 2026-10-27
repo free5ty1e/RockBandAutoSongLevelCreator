@@ -76,7 +76,7 @@ markers = [
 # tools/audit_release.py stage 3.2 compares this list against the wheel's
 # actual files (and tests/test_audit_release.py pins the lesson).
 packages = ["autorb", "autorb.audio", "autorb.export", "autorb.pitch",
-            "autorb.transcribe", "autorb.transcribe.instruments", "webui"]
+            "autorb.reference", "autorb.transcribe", "autorb.transcribe.instruments", "webui"]
 
 [tool.setuptools.package-data]
 autorb = ["export/data/*.con", "export/data/*.bin", "export/data/fonts/*.ttf"]

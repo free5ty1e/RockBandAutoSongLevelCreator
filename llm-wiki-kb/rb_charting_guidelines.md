@@ -43,6 +43,13 @@ converter ForgeTool runs on our `notes.mid` (our PS4/RB output):
   `IsHopo = diff > 1 ? hopo : false` (diff 0=Easy, 1=Medium). This is the
   engine-level confirmation of the RBN rule "never force HOPOs on Medium or
   Easy" ([[difficulty_charting]] §1); forced markers below Hard are useless.
+  **USER DECISION (2026-10-24, overrides the RBN rule for MEDIUM):** Medium
+  should allow **SOME HOPOs** — natural HOPOs where the transcribed part
+  genuinely moves at 16th-note speed (sparingly; Easy stays strum-only).
+  Engine consequence: the vendored LibForge's `diff > 1` guard must be
+  relaxed to `diff > 0` for the CON path (a planned accuracy-phase item;
+  the Clone Hero path already renders Medium HOPOs natively). Until that
+  patch lands, Medium HOPOs materialize only in Clone Hero exports.
 - **Sustain/tail floors** (`NoTail`): a note renders with NO tail if
   `length ≤ 120 ticks` (a 16th note at 480 tpq) at any difficulty, OR
   `length ≤ 160 ticks` when the note is a HOPO or the difficulty is

@@ -270,6 +270,14 @@ def _normalize_options(raw: dict) -> dict:
                  "freestyle_drums", "guitar_solo_charting"):
         opts[flag] = bool(raw.get(flag))
 
+    # Tab search gate (charting-accuracy Tier 1): the web fetch is opt-in AND
+    # requires the explicit copyright-disclaimer acknowledgement — the UI
+    # shows the checkbox unchecked every session; there is no persistent ack.
+    if bool(raw.get("fetch_tabs")) and not bool(raw.get("tabs_disclaimer_ack")):
+        raise JobError("fetch_tabs requires the tab-copyright disclaimer "
+                       "acknowledgement (tabs_disclaimer_ack)")
+    opts["fetch_tabs"] = bool(raw.get("fetch_tabs"))
+
     return opts
 
 

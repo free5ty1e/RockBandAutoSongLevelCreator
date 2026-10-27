@@ -36,6 +36,12 @@ Thumbs.db
 tools/libforge/**/bin/
 tools/libforge/**/obj/
 
+# Pi coding-agent workspace persistence (sessions/extensions/auth — auth.json
+# holds SECRETS; only the README is ever committed). Managed by
+# devscripts/setup_pi_persistence.sh.
+.pi/*
+!.pi/README.md
+
 # Local scratch/temp workspace
 .tmp/
 .coverage

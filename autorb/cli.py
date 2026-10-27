@@ -51,9 +51,11 @@ def _generate_ps4_pkg_id(artist: str, title: str, custom_id: str | None = None) 
 @click.option('--generate-freestyle-vocals', is_flag=True, help='Enable Rock Band 4 freestyle-vocals guide lines (Hard/Expert) by setting HasFreestyleVocals in the PS4 songdta')
 @click.option('--freestyle-drums', is_flag=True, help='Create drum freestyle mode: drum track gets only one placeholder note at the start, allowing free drum play throughout the song')
 @click.option('--guitar-solo-charting', 'guitar_solo_charting', is_flag=True, default=False, help='EXPERIMENTAL: in detected lead-guitar solo regions, chart the solo line (single notes following the lead pitch) instead of the rhythm guitar. Without this flag the rhythm guitar is charted throughout, and detected solo regions are reported in the log for review.')
+@click.option('--fetch-tabs', 'fetch_tabs', is_flag=True, default=False, help='EXPERIMENTAL/OPT-IN: search the web (Songsterr) for guitar/bass tabs matching artist+title and write a structured report (with download attempts) under <output>/reference_tabs/. Tabs are user-made arrangements fetched for your private use at runtime — none are ever committed to the repo; downloads are gated by the sites and may come back empty. The pipeline never fails on this stage. Passing this flag IS your acknowledgement.')
+@click.option('--guitar-tab', 'guitar_tabs', type=click.Path(exists=True), multiple=True, help='Path to a user-supplied reference tab (GuitarPro .gp3/.gp4/.gp5/.gpx, MIDI .mid, or plain ASCII tab) — may be repeated; staged under <output>/reference_tabs/ for the charting-accuracy work (Tier 0).')
 @click.option('--package-con-dir', type=click.Path(exists=True, file_okay=False, dir_okay=True), default=None, help='Package all .con files in this directory into a single PS4 PKG installer (batch packaging mode)')
 @click.option('--ps4-pkg-id', type=str, default=None, help='Optional 16-char PS4 Content ID for the PKG (auto-generated from artist+title if omitted)')
-def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, separator, use_ft_stems, ft_shifts, ft_strip_seconds, ft_segment, ft_overlap, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, build_clone_hero, generate_freestyle_vocals, freestyle_drums, guitar_solo_charting, package_con_dir, ps4_pkg_id):
+def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separation, separator, use_ft_stems, ft_shifts, ft_strip_seconds, ft_segment, ft_overlap, skip_tempo_detection, skip_vocals, skip_mogg, album_art, build_pkg, build_clone_hero, generate_freestyle_vocals, freestyle_drums, guitar_solo_charting, fetch_tabs, guitar_tabs, package_con_dir, ps4_pkg_id):
     # Batch packaging mode: package all .con files in a directory into a single PS4 PKG
     if package_con_dir:
         click.echo(f"Batch packaging mode: packaging all .con files in {package_con_dir}")
@@ -155,6 +157,25 @@ def main(audio_file, artist, title, year, genre, lyrics, output_dir, skip_separa
                                    strip_seconds=ft_strip_seconds, segment=ft_segment)
 
     click.echo(f"Stems ready: {stems}")
+
+    # Reference-material stage (Tier 0/1 of the charting-accuracy plan):
+    # user-supplied tabs are staged whenever given; the web fetch only runs
+    # when the user opted in (--fetch-tabs / the acknowledged web UI checkbox).
+    if guitar_tabs:
+        click.echo("\n[1b/5] Staging user-supplied reference tab(s)...")
+        from autorb.reference import run_tab_fetch_stage
+        run_tab_fetch_stage(artist or "", title or "", Path(out_path),
+                            user_tabs=list(guitar_tabs))
+        click.echo(f"Reference tabs staged under {Path(out_path) / 'reference_tabs'}")
+    if fetch_tabs:
+        click.echo("\n[1b/5] Searching the web for reference tabs (opt-in)...")
+        from autorb.reference import run_tab_fetch_stage
+        report = run_tab_fetch_stage(artist or "", title or "", Path(out_path),
+                                     user_tabs=list(guitar_tabs))
+        click.echo(f"Tab search status: {report['status']} "
+                   f"({len(report['candidates'])} candidate(s), "
+                   f"{len(report['downloads'])} download(s)) — "
+                   f"see reference_tabs/report.json")
 
     if skip_tempo_detection:
         click.echo("\n[2/5] Skipping tempo detection. Loading cached tempo map...")

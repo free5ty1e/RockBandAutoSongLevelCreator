@@ -37,3 +37,6 @@ bash tools/build_forgetool.sh
 
 echo "Installing Clone Hero headless playtest harness (box64 + Clone Hero + ALSA-seq shim)..."
 bash tools/setup_clone_hero_headless.sh || echo "WARN: Clone Hero harness setup failed (network/restriction) — run tools/setup_clone_hero_headless.sh manually."
+
+echo "Setting up Pi agent workspace persistence (sessions/extensions/auth in <workspace>/.pi)..."
+bash devscripts/setup_pi_persistence.sh || echo "WARN: Pi persistence setup failed (non-fatal; re-run devscripts/setup_pi_persistence.sh after installing Pi)."
