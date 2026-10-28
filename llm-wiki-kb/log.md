@@ -6,6 +6,14 @@ date: 2026-08-07
 
 Append-only ledger of changes to this knowledge base. Newest first. Each entry records: timestamp, what was added, and why (the reasoning that future agents should not have to re-derive).
 
+## 2026-10-25 — v0.1.38: GP tab-collection audit (user-supplied Ultimate Guitar dump)
+
+**What:** `tools/guitar_tab_alignment/audit_gp_collection.py` + tests. The user supplied a ~96k-file UG archive in the git-ignored `tabs/` folder. Sample audit (600 files): 53.4% FULL BAND (guitar+bass+drums), 63% bass, 62% drums, 15% keys, 2.7% lyric text, 0.7% parse failures. Eve 6 - Inside Out is full-band (the chosen first tab-backed test song — official RB DLC, user finds mp3/lrc/CON). Eight further full-band candidates verified (All The Small Things, Dammit, Self Esteem, Buddy Holly, Everlong, My Hero, Fat Lip, My Own Worst Enemy). Findings + the official-DLC-CON three-way-ground-truth plan recorded in `.ai_memory/plans/tab_backed_charting_and_accuracy.md` §9.
+
+**Why:** Phase-2 (Tier-0 GP ingest) needs to know what the collection actually contains before designing the parser/sync; the full-band fraction (53%) means one tab can back EVERY instrument chart for half the songs, not guitar only. pyguitarpro stays out of requirements (GPL, research-only) — the same optional-dependency pattern as adtof/spleeter.
+
+**Lesson:** the synthetic-fixture tests caught two real audit bugs immediately (attrs default factories: `Lyrics()` pre-populates 5 EMPTY lines → false 100% lyric rate; `Song()` built in code has no `.version` attr → crash) — synthetic fixtures + monkeypatched parse test OUR logic without any copyrighted fixture data.
+
 ## 2026-10-25 — v0.1.37: Tier-1 tab discovery + web-UI disclaimer gate; Pi workspace persistence; Medium HOPOs allowed
 
 **What:** (1) The charting-accuracy plan's Tier-1 slice landed as `autorb/reference/tab_fetch.py`: Songsterr search (the only tab API reachable from datacenter IPs — UG is Cloudflare-gated), artist/title scoring, GPX download attempts (gated by Songsterr's JS player — all known patterns 404; the stage reports "found_no_download" with track hashes/tunings), Tier-0 user-supplied tab staging (`--guitar-tab`), and a structured `reference_tabs/report.json` for the future sync phase. The web UI gate is TWO checkboxes: EXPERIMENTAL fetch + a server-enforced copyright-disclaimer ack (no persistent ack; CLI `--fetch-tabs` is its own ack). (2) `[[difficulty_charting]]` + `[[rb_charting_guidelines]]` amended by user decision: **Medium allows some natural HOPOs** (16th-speed motion, sparse); Easy stays strums-only; the CON path needs the vendored-LibForge `diff > 1` patch (tracked as an accuracy-phase item). (3) Pi agent data (sessions/extensions/auth/settings) now persists in `<workspace>/.pi/` via `devscripts/setup_pi_persistence.sh` (symlinks, union-merge, nothing deleted, post-install.sh hook) — agent harness setup no longer dies with the container.
