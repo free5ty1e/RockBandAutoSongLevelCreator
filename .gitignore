@@ -61,3 +61,6 @@ webui_jobs/
 tools/test_data/local/*
 !tools/test_data/local/.gitkeep
 !tools/test_data/local/README.md
+
+#available guitar tabs
+tabs
