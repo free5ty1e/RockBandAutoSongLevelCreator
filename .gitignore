@@ -42,6 +42,11 @@ tools/libforge/**/obj/
 .pi/*
 !.pi/README.md
 
+# C# build artifacts (devscripts/con_extract compiles from source with mcs)
+*.exe
+*.dll
+obj/
+
 # Local scratch/temp workspace
 .tmp/
 .coverage

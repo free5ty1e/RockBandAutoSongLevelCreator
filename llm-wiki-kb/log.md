@@ -6,6 +6,14 @@ date: 2026-08-07
 
 Append-only ledger of changes to this knowledge base. Newest first. Each entry records: timestamp, what was added, and why (the reasoning that future agents should not have to re-derive).
 
+## 2026-10-28 — v0.1.39: official-DLC ground-truth loop established (Inside Out three-way)
+
+**What:** CON extraction (`devscripts/con_extract`, mono + GameArchives — ForgeTool con2gp4 crashes on RB2-era dta), `tools/dlc_ground_truth.py` (analyze/diff/align with a GLOBAL conductor-track tempo map — regression-tested: per-track tempo scans mis-time every gem), and the first measured comparison of our auto chart vs an official RB2 DLC chart (Eve 6 - Inside Out; tab + official CON + mp3/lrc all supplied by the user into git-ignored folders).
+
+**Numbers (Expert, ±150 ms):** drums F1 0.839 (near parity — ADTOF validated), guitar recall 0.538/precision 0.692, bass recall 0.619; lane agreement 0.19–0.31 (random-level — lane mapping is the gap); cascade nearly absent (bass 469 at Expert/Hard/Medium; official Easy is 221). Official facts confirmed: single-note bass, 2 forced-HOPO markers total, Easy = 3 lanes 0 chords, Medium 46% chords.
+
+**Why it matters:** this converts "charts feel sloppy" into four measured workstreams with priorities: (1) guitar/bass recall (tab-backed lanes + completeness), (2) lane agreement (GP frets), (3) difficulty cascade rework, (4) drum lane/cymbal polish. Numbers recorded in the accuracy plan §10; repeat with `tools/dlc_ground_truth.py align <official.mid> <ours.mid>` after each accuracy change.
+
 ## 2026-10-25 — v0.1.38: GP tab-collection audit (user-supplied Ultimate Guitar dump)
 
 **What:** `tools/guitar_tab_alignment/audit_gp_collection.py` + tests. The user supplied a ~96k-file UG archive in the git-ignored `tabs/` folder. Sample audit (600 files): 53.4% FULL BAND (guitar+bass+drums), 63% bass, 62% drums, 15% keys, 2.7% lyric text, 0.7% parse failures. Eve 6 - Inside Out is full-band (the chosen first tab-backed test song — official RB DLC, user finds mp3/lrc/CON). Eight further full-band candidates verified (All The Small Things, Dammit, Self Esteem, Buddy Holly, Everlong, My Hero, Fat Lip, My Own Worst Enemy). Findings + the official-DLC-CON three-way-ground-truth plan recorded in `.ai_memory/plans/tab_backed_charting_and_accuracy.md` §9.
