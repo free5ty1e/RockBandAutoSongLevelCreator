@@ -31,6 +31,7 @@ If you are new, read in this order:
 | [[ps4-environment]] | The live PS4 RB4DX test environment, ground-truth findings, and open questions. |
 | [[local_preview_and_testing]] | No-PS4 preview & rapid-testing loop: Clone Hero export (`--build-clone-hero`), lyrics .srt, alignment report + spectrograms, automation. |
 | [[release_process]] | Release pipeline, pre-tag checklist (version/CHANGELOG/packages/deps), the release audit tool + its 6 stages, notes generator, tag rules. |
+| [[research_tooling]] | Ground-truth loop tooling: CON extractor (GameArchives), chart analyzer/diff/align, rb_song_matcher (YouTube+lrclib+MusicBrainz+tabs), GP collection audit, research deps. |
 
 ## How this wiki is maintained
 

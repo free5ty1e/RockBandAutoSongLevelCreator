@@ -611,6 +611,37 @@ pytest
 python3 autorb/export/stfs_validator.py output/open_road_song.con
 ```
 
+### Research & Accuracy Tooling (official-DLC ground-truth loop)
+
+The charting-accuracy work measures our auto charts against **official Rock
+Band DLC charts**. Devcontainer research tooling (installed automatically by
+`.devcontainer/post-install.sh`; defined in `requirements-research.txt`,
+never shipped in the wheel):
+
+- **`yt-dlp`** — YouTube search + exact upload durations (matching song sets)
+- **`pyguitarpro`** (GPL, devcontainer-only) — Guitar Pro .gp3/.gp4/.gp5
+  parsing for the git-ignored `tabs/` collection audit
+
+Key tools (full usage in `llm-wiki-kb/research_tooling.md`):
+
+```bash
+# extract the official chart from an RB DLC CON (mono + vendored GameArchives)
+mono devscripts/con_extract/con-extract.exe "input/rockbanddlc/Song.con" out_dir/
+
+# measure our chart vs the official chart (Expert, ±150ms note alignment)
+python3 tools/dlc_ground_truth.py align official.mid output/validation/notes.mid
+
+# find song sets where RB DLC + YouTube + synced LRC + a tab all line up
+python3 tools/rb_song_matcher.py --list candidates.json --out report.json
+
+# audit the Guitar Pro tab collection (instruments, full-band coverage)
+python3 tools/guitar_tab_alignment/audit_gp_collection.py --sample 600
+```
+
+Copyright: official CONs, mp3s, and tabs stay in git-ignored folders
+(`input/rockbanddlc/`, `tabs/`) and are never committed — only what we learn
+(measurements, guidelines, code) lands in the repo.
+
 ### ForgeTool Verification (PS4)
 We include a vendored, buildable version of `ForgeTool` to verify CON-to-PKG conversion on Linux:
 ```bash
