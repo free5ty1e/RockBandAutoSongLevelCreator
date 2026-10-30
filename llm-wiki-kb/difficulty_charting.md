@@ -92,7 +92,7 @@ Gem **focus** per difficulty (which lanes players are eased into):
 |---|---|---|---|
 | Expert | all 5 (R G Y B O) | all types | yes (game + forced) |
 | Hard | all 5 | no Green/Orange, no 3-note | yes |
-| Medium | R G Y B (first 4) | 2-note only, no G/B G/O R/O, no 3-note | strums only (no HOPO) |
+| Medium | R G Y B (first 4) | 2-note only, no G/B G/O R/O, no 3-note | a few natural HOPOs (16th-speed motion) |
 | Easy | R G Y (first 3) | **none** | strums only (no HOPO) |
 
 - **Expert:** all 5 buttons; all chord types (1-2 G/R, 1-3 G/Y, 1-4 G/B, 1-5 G/O,
@@ -121,8 +121,13 @@ Gem **focus** per difficulty (which lanes players are eased into):
   **restrict added patterns (including orange) to the top three colors
   (Y B O)** to minimize hand movement.
 - **HOPOs:** normally game-generated. Forced HOPOs are used sparingly; **never
-  force HOPOs on Medium or Easy**. Repeating same-color gems should always be
-  strummed (a forced HOPO after the same color won't register).
+  force HOPOs on Easy** — and on Medium keep only a few NATURAL HOPOs where the
+  charted part genuinely moves at 16th-note speed (**user decision 2026-10-24**,
+  superseding the original RBN "never on Medium or Easy" line for Medium).
+  Repeating same-color gems should always be strummed (a forced HOPO after the
+  same color won't register). Engine note: the CON converter currently refuses
+  Medium HOPOs — the vendored-LibForge patch item is in `[[rb_charting_guidelines]]`
+  §1.1; the Clone Hero path renders them natively.
 - **Bass:** same rules as guitar; maintain consistency **within each section**
   (bassists change register — drop an octave in the chorus, slide up in the
   bridge — so author each section to the pattern that fits, consistent within it).

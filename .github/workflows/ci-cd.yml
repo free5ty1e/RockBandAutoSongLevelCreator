@@ -91,6 +91,7 @@ jobs:
                              'autorb/export/alignment_report.py',
                              'autorb/audio/preview.py',
                              'autorb/audio/mix_preview.py',
+                             'autorb/reference/tab_fetch.py',
                              'autorb/export/data/fonts/DejaVuSans.ttf',
                              # v0.1.30 release audit: instruments was missing
                              # from [tool.setuptools].packages — released

@@ -36,6 +36,17 @@ Thumbs.db
 tools/libforge/**/bin/
 tools/libforge/**/obj/
 
+# Pi coding-agent workspace persistence (sessions/extensions/auth — auth.json
+# holds SECRETS; only the README is ever committed). Managed by
+# devscripts/setup_pi_persistence.sh.
+.pi/*
+!.pi/README.md
+
+# C# build artifacts (devscripts/con_extract compiles from source with mcs)
+*.exe
+*.dll
+obj/
+
 # Local scratch/temp workspace
 .tmp/
 .coverage
@@ -55,3 +66,6 @@ webui_jobs/
 tools/test_data/local/*
 !tools/test_data/local/.gitkeep
 !tools/test_data/local/README.md
+
+#available guitar tabs
+tabs

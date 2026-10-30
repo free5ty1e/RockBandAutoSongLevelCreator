@@ -353,6 +353,12 @@ python -m webui.server</code></div>
         <label class="check"><input type="checkbox" id="guitarSoloCharting">
           <span>Chart lead solos on guitar <span class="badge">EXPERIMENTAL</span>
             <span class="d">Chart the solo line instead of rhythm during detected solos</span></span></label>
+        <label class="check"><input type="checkbox" id="fetchTabs">
+          <span>Search the web for reference tabs <span class="badge">EXPERIMENTAL</span>
+            <span class="d">Searches Songsterr for matching guitar/bass tabs and writes a report (+ download attempts) under reference_tabs/ — future tab-sync charting will consume it</span></span></label>
+        <label class="check"><input type="checkbox" id="tabsDisclaimerAck">
+          <span>Acknowledge: tabs are user-made copyrighted arrangements — private runtime use, never committed
+            <span class="d">Required to enable the tab search; leave unchecked to keep the run fully offline</span></span></label>
       </div>
 
       <details class="adv">
@@ -733,6 +739,8 @@ function collectOptions() {
     generate_freestyle_vocals: $("freestyleVocals").checked,
     freestyle_drums: $("freestyleDrums").checked,
     guitar_solo_charting: $("guitarSoloCharting").checked,
+    fetch_tabs: $("fetchTabs").checked,
+    tabs_disclaimer_ack: $("tabsDisclaimerAck").checked,
   };
   if ($("ftShifts").value) opts.ft_shifts = +$("ftShifts").value;
   if ($("ftStripSeconds").value) opts.ft_strip_seconds = +$("ftStripSeconds").value;

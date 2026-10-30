@@ -106,6 +106,7 @@ EXPECTED_IMPORTS = [
     "autorb.export.album_art", "autorb.export.alignment_report",
     "autorb.export.forge_simulator", "autorb.export.stfs_validator",
     "autorb.pitch", "autorb.pitch.inference",
+    "autorb.reference", "autorb.reference.tab_fetch",
     "autorb.transcribe.instruments",
     "autorb.transcribe.instruments.guitar",
     "autorb.transcribe.instruments.drums",

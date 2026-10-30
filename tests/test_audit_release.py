@@ -150,12 +150,37 @@ class TestReleaseDocsConsistency:
             "KB index must list the release_process page"
 
     def test_agent_rules_have_release_section(self):
-        cm = (REPO_ROOT / "CLAUDE.md").read_text()
-        assert "## Release Rules" in cm, \
-            "CLAUDE.md must keep the Release Rules section"
-        assert "audit_release.py" in cm, "rules must point at the audit tool"
-        assert "Never claim a release is good" in cm, \
-            "the never-claim rule is the core contract"
+        """CLAUDE.md and AGENTS.md mirror the same rule set — AGENTS.md is
+        what the non-Claude harnesses (Pi, opencode) auto-load, so BOTH
+        files must carry the release + end-of-cycle contracts."""
+        for rules_file in ("CLAUDE.md", "AGENTS.md"):
+            rules = (REPO_ROOT / rules_file).read_text()
+            assert "## Release Rules" in rules, \
+                f"{rules_file} must keep the Release Rules section"
+            assert "audit_release.py" in rules, \
+                f"{rules_file} must point at the audit tool"
+            assert "Never claim a release is good" in rules, \
+                f"{rules_file} must keep the never-claim rule (the core contract)"
+            assert "Mandatory End-of-Cycle Workflow" in rules, \
+                f"{rules_file} must keep the end-of-cycle workflow"
+
+    def test_agents_md_carries_the_guardrails(self):
+        """v0.1.35 transferred CLAUDE.md's full rule set into AGENTS.md so
+        every harness follows the same rules. Pin key guardrail needles so
+        the mirror cannot silently rot."""
+        ag = (REPO_ROOT / "AGENTS.md").read_text()
+        for needle in (
+            "Development Cycle Documentation & Versioning",
+            "never `0.0.100`",        # version rollover rule
+            "git commit",             # forbidden git op
+            "git tag",                # forbidden: the user tags releases
+            "gh release create",      # forbidden gh op
+            "gh pr edit",             # the one allowed gh mutation (PR text)
+            "Do not delete files",    # file-system caution
+            "err on the side of refusing",
+            "Scratch / Temp Files",
+        ):
+            assert needle in ag, f"AGENTS.md lost the rule: {needle!r}"
 
     def test_workflow_has_audit_job(self):
         wf = (REPO_ROOT / ".github" / "workflows" / "ci-cd.yml").read_text()

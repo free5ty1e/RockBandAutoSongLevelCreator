@@ -1,5 +1,10 @@
 # Project Instructions
 
+**This file mirrors `AGENTS.md`** — the canonical AutoRB rules file that
+the Pi and opencode harnesses auto-load. Keep the two in sync: every rule
+here must also live in `AGENTS.md` (key contracts are pinned in both by
+`tests/test_audit_release.py::TestReleaseDocsConsistency`).
+
 
 ## Release Rules (read before any release/tagging work)
 
@@ -110,6 +115,7 @@ Only the following **Staging & Read** operations are allowed:
 | `git log` | View commit history |
 | `git show` | View a commit |
 | `git blame` | Annotate a file |
+| `git checkout <ref>` | Switch branches (no history/remote writes) |
 | `git restore <file>` | Discard unstaged local changes |
 | `git stash push` | Save WIP temporarily |
 | `git stash list` | View stashes |

@@ -6,6 +6,56 @@ date: 2026-08-07
 
 Append-only ledger of changes to this knowledge base. Newest first. Each entry records: timestamp, what was added, and why (the reasoning that future agents should not have to re-derive).
 
+## 2026-10-29 — v0.1.41: [[dlc_song_sets]] — the curated ground-truth song list
+
+**What:** New page organizing the 25 verified song sets from the v0.1.40 matcher run into Tier 1 (11 songs with full-band tab + Δ ≤ 3 s: Say It Ain't So, Everlong, Du Hast, 20th Century Boy, Self Esteem, Cold as Ice, All The Small Things, Caught in a Mosh, Beast and the Harlot, Time Is Running Out, Fat Lip) and Tier 2, each with RB source label, YouTube link + duration, LRC duration + lrclib id + BOTH direct links (the lrclib.net song page AND the working API endpoint — note the API `get?id=` form needs extra params; `search?track_name=&artist_name=` is the reliable direct download), and the exact local tab path. Avoid-list documents the traps found during verification (Buddy Holly/Snow YT version mismatches, More Than a Feeling's live-compilation LRC, Lit has no synced LRC). Usage steps + copyright reminder included.
+
+**Why:** the user needs a pick-list to fetch files; hand-triangulating YouTube/LRC/CON per song was the bottleneck. All links verified live (HTTP 200) at write time.
+
+## 2026-10-28 — v0.1.40: research tooling survives rebuilds; song-set matcher delivers 25 ground-truth candidates
+
+**What:** `requirements-research.txt` (yt-dlp + pyguitarpro, devcontainer-only) wired into post-install alongside the con-extract build; new KB page `[[research_tooling]]` documenting every research tool (CON extractor, dlc_ground_truth, rb_song_matcher, GP audit, web-tools) + README section + contract tests. `tools/rb_song_matcher.py` cross-references YouTube (yt-dlp), lrclib.net (synced LRC), MusicBrainz, and the local `tabs/` collection; the RB catalog is sourced from hmxmilohax/rock-band-3-deluxe (rb3_songs.dta with full metadata, official_additional_metadata.dta game_origin annotations, songs_yarg.dta 2559-song id list). First run produced 25 usable song sets (see the accuracy plan §11).
+
+**Why:** the ground-truth loop needs song sets where RB DLC + same-master audio + synced LRC (+ tab) all line up; sourcing them by hand was the bottleneck. The matcher makes it reproducible.
+
+## 2026-10-28 — v0.1.39: official-DLC ground-truth loop established (Inside Out three-way)
+
+**What:** CON extraction (`devscripts/con_extract`, mono + GameArchives — ForgeTool con2gp4 crashes on RB2-era dta), `tools/dlc_ground_truth.py` (analyze/diff/align with a GLOBAL conductor-track tempo map — regression-tested: per-track tempo scans mis-time every gem), and the first measured comparison of our auto chart vs an official RB2 DLC chart (Eve 6 - Inside Out; tab + official CON + mp3/lrc all supplied by the user into git-ignored folders).
+
+**Numbers (Expert, ±150 ms):** drums F1 0.839 (near parity — ADTOF validated), guitar recall 0.538/precision 0.692, bass recall 0.619; lane agreement 0.19–0.31 (random-level — lane mapping is the gap); cascade nearly absent (bass 469 at Expert/Hard/Medium; official Easy is 221). Official facts confirmed: single-note bass, 2 forced-HOPO markers total, Easy = 3 lanes 0 chords, Medium 46% chords.
+
+**Why it matters:** this converts "charts feel sloppy" into four measured workstreams with priorities: (1) guitar/bass recall (tab-backed lanes + completeness), (2) lane agreement (GP frets), (3) difficulty cascade rework, (4) drum lane/cymbal polish. Numbers recorded in the accuracy plan §10; repeat with `tools/dlc_ground_truth.py align <official.mid> <ours.mid>` after each accuracy change.
+
+## 2026-10-25 — v0.1.38: GP tab-collection audit (user-supplied Ultimate Guitar dump)
+
+**What:** `tools/guitar_tab_alignment/audit_gp_collection.py` + tests. The user supplied a ~96k-file UG archive in the git-ignored `tabs/` folder. Sample audit (600 files): 53.4% FULL BAND (guitar+bass+drums), 63% bass, 62% drums, 15% keys, 2.7% lyric text, 0.7% parse failures. Eve 6 - Inside Out is full-band (the chosen first tab-backed test song — official RB DLC, user finds mp3/lrc/CON). Eight further full-band candidates verified (All The Small Things, Dammit, Self Esteem, Buddy Holly, Everlong, My Hero, Fat Lip, My Own Worst Enemy). Findings + the official-DLC-CON three-way-ground-truth plan recorded in `.ai_memory/plans/tab_backed_charting_and_accuracy.md` §9.
+
+**Why:** Phase-2 (Tier-0 GP ingest) needs to know what the collection actually contains before designing the parser/sync; the full-band fraction (53%) means one tab can back EVERY instrument chart for half the songs, not guitar only. pyguitarpro stays out of requirements (GPL, research-only) — the same optional-dependency pattern as adtof/spleeter.
+
+**Lesson:** the synthetic-fixture tests caught two real audit bugs immediately (attrs default factories: `Lyrics()` pre-populates 5 EMPTY lines → false 100% lyric rate; `Song()` built in code has no `.version` attr → crash) — synthetic fixtures + monkeypatched parse test OUR logic without any copyrighted fixture data.
+
+## 2026-10-25 — v0.1.37: Tier-1 tab discovery + web-UI disclaimer gate; Pi workspace persistence; Medium HOPOs allowed
+
+**What:** (1) The charting-accuracy plan's Tier-1 slice landed as `autorb/reference/tab_fetch.py`: Songsterr search (the only tab API reachable from datacenter IPs — UG is Cloudflare-gated), artist/title scoring, GPX download attempts (gated by Songsterr's JS player — all known patterns 404; the stage reports "found_no_download" with track hashes/tunings), Tier-0 user-supplied tab staging (`--guitar-tab`), and a structured `reference_tabs/report.json` for the future sync phase. The web UI gate is TWO checkboxes: EXPERIMENTAL fetch + a server-enforced copyright-disclaimer ack (no persistent ack; CLI `--fetch-tabs` is its own ack). (2) `[[difficulty_charting]]` + `[[rb_charting_guidelines]]` amended by user decision: **Medium allows some natural HOPOs** (16th-speed motion, sparse); Easy stays strums-only; the CON path needs the vendored-LibForge `diff > 1` patch (tracked as an accuracy-phase item). (3) Pi agent data (sessions/extensions/auth/settings) now persists in `<workspace>/.pi/` via `devscripts/setup_pi_persistence.sh` (symlinks, union-merge, nothing deleted, post-install.sh hook) — agent harness setup no longer dies with the container.
+
+**Why:** The user greenlit testing auto-downloadable tabs gated by an explicit disclaimer; the environment testing showed honest limits (search works, download gated) — so v0.1.37 ships discovery + report rather than pretending downloads work. The Medium-HOPO decision supersedes the RBN docs' stricter line (the real game's Medium charts do carry HOPOs; our vendored converter is the thing that needs changing).
+
+## 2026-10-24 — v0.1.36: engine-verified charting guidelines page + web research capability for agents
+
+**What:** New page `[[rb_charting_guidelines]]` capturing the engine-level charting mechanics gathered for the instrument-charting-accuracy feature: the natural-HOPO window (LibForge `hopoThreshold = 170` ticks @480 ≈ 0.354 beat; CH SightRead `resolution/3+1` = 161; Moonscraper 65@192 ≈ 163 — consensus ~⅓ beat), the forced HOPO/strum markers (base+5/base+6 → 65/66, 77/78, 89/90, 101/102), taps (key 104 + sysex), the Easy/Medium-never-HOPO engine rule (`IsHopo = diff > 1 ? hopo : false`), sustain/tail floors (≤120 ticks no tail; ≤160 for HOPO/≤Hard), the packed-MIDI marker pitch table, the drums base+lane vs official-35–59 encoding nuance (resolving the apparent [[charting_basics]]/[[instrument_charting]] contradiction), and lane/gem selection conventions (community fret bands marked TO-VERIFY — the C3 RBN docs mirror is offline).
+
+**Why:** The accuracy work (tab-backed charting) must emit notes the *engines* will interpret as intended. Three concrete AutoRB gaps fell out of the verification: (1) **the transcriber's `is_hopo` computation is dead code** — no export layer serializes it, so CON/CH HOPOs are purely engine-derived from quantized tick gaps; (2) forced-strum markers unused (fast same-lane runs can become accidental HOPOs); (3) trill/tremolo/tap markers unused.
+
+**Also:** Agents now have web research capability — `devscripts/pi_extensions/web-tools.ts` installs `web_search` (Bing RSS; DuckDuckGo blocks datacenter IPs) + `web_fetch` (HTML→text) tools into the Pi harness (`~/.pi/agent/extensions/`), smoke-tested live. The charting-accuracy research plan itself is captured in `.ai_memory/plans/tab_backed_charting_and_accuracy.md`.
+
+## 2026-10-24 — v0.1.35: CLAUDE.md rules mirrored into AGENTS.md (one operating manual for every harness)
+
+**What:** The project is now worked from multiple agent harnesses. The Claude CLI auto-loads `CLAUDE.md` (the mature operating manual: Release Rules, end-of-cycle workflow, git/gh guardrails), but Pi and opencode auto-load `AGENTS.md` — which held only a subset (versioning, git, scratch, testing). The full CLAUDE.md rule set was transferred into AGENTS.md: Release Rules (the two validation gates, diagnose-from-`gh run view --log-failed`, the 7-item pre-tag checklist, the tag rule, never-claim-good incl. stage 5b + the copyright rule), the end-of-cycle workflow (validate → stage → suggest commit message; hook-enforced only in Claude CLI), the git allowed/forbidden tables (working-tree safety ops `git restore` / `git stash push` explicitly ALLOWED, matching CLAUDE.md — the old AGENTS.md blanket-forbade them), the gh read-only allowlist (+ `gh pr edit` for PR titles/bodies), and the file-system cautions.
+
+**Why:** Rules only one harness can see are rules the other harness breaks. Without the transfer, a Pi session would have had no pre-tag checklist, no audit contract, no gh policy, and a stricter-but-different git table. AGENTS.md is now the canonical file; CLAUDE.md declares itself its mirror.
+
+**Contract:** `tests/test_audit_release.py::TestReleaseDocsConsistency::test_agent_rules_have_release_section` now loops over BOTH files (release + workflow needles), and the new `test_agents_md_carries_the_guardrails` pins the guardrail sections in AGENTS.md. `.opencode/agent/rules.md` summary updated to match.
+
 ## 2026-10-22 — v0.1.34: GitHub Pages becomes a landing page (PNA forbids a Pages control panel)
 
 **What:** The v0.1.33 merge triggered the Pages workflow for the first time ever (the paths filter had never matched a main push before) and it failed: `configure-pages@v5` → "Get Pages site failed... Not Found" — the Pages site was absent at that moment. Live validation of the redeployed site then proved the deeper problem: a Pages copy of the control panel can NEVER connect to a local engine. Chrome logs "Permission was denied for this request to access the `loopback` address space" (Private Network Access), and the engine's own server stack answers the PNA preflight with `400 Disallowed CORS private-network` (uvicorn/CORSMiddleware does not support the PNA header). Two blockers, neither fixable in app code.

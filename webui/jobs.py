@@ -254,6 +254,8 @@ def build_cli_command(job: Job, repo_root: Path) -> list[str]:
         args.append("--freestyle-drums")
     if opts.get("guitar_solo_charting"):
         args.append("--guitar-solo-charting")
+    if opts.get("fetch_tabs"):
+        args.append("--fetch-tabs")
 
     return args
 

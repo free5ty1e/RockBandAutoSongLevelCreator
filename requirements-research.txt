@@ -1,0 +1,11 @@
+# Research/devcontainer-only tooling — NOT shipped in the autorb wheel and
+# NEVER imported by autorb code. Installed by .devcontainer/post-install.sh
+# so the research workflow survives container rebuilds.
+#
+# - yt-dlp (Unlicense): YouTube search + exact upload durations for the
+#   official-DLC ground-truth matching loop (tools/rb_song_matcher.py).
+# - pyguitarpro (GPL-3.0): Guitar Pro .gp3/.gp4/.gp5 parsing for the tab
+#   collection audit (tools/guitar_tab_alignment/audit_gp_collection.py).
+#   GPL + research-only is why it is kept out of requirements.txt/pyproject.
+yt-dlp
+pyguitarpro
