@@ -32,6 +32,7 @@ If you are new, read in this order:
 | [[local_preview_and_testing]] | No-PS4 preview & rapid-testing loop: Clone Hero export (`--build-clone-hero`), lyrics .srt, alignment report + spectrograms, automation. |
 | [[release_process]] | Release pipeline, pre-tag checklist (version/CHANGELOG/packages/deps), the release audit tool + its 6 stages, notes generator, tag rules. |
 | [[research_tooling]] | Ground-truth loop tooling: CON extractor (GameArchives), chart analyzer/diff/align, rb_song_matcher (YouTube+lrclib+MusicBrainz+tabs), GP collection audit, research deps. |
+| [[dlc_song_sets]] | Verified official-DLC song sets (Tier 1/2): per-song YouTube, synced-LRC (page + API links, lrclib ids), RB source, and local tab paths — with usage steps and caveats. |
 
 ## How this wiki is maintained
 

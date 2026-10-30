@@ -6,6 +6,12 @@ date: 2026-08-07
 
 Append-only ledger of changes to this knowledge base. Newest first. Each entry records: timestamp, what was added, and why (the reasoning that future agents should not have to re-derive).
 
+## 2026-10-29 — v0.1.41: [[dlc_song_sets]] — the curated ground-truth song list
+
+**What:** New page organizing the 25 verified song sets from the v0.1.40 matcher run into Tier 1 (11 songs with full-band tab + Δ ≤ 3 s: Say It Ain't So, Everlong, Du Hast, 20th Century Boy, Self Esteem, Cold as Ice, All The Small Things, Caught in a Mosh, Beast and the Harlot, Time Is Running Out, Fat Lip) and Tier 2, each with RB source label, YouTube link + duration, LRC duration + lrclib id + BOTH direct links (the lrclib.net song page AND the working API endpoint — note the API `get?id=` form needs extra params; `search?track_name=&artist_name=` is the reliable direct download), and the exact local tab path. Avoid-list documents the traps found during verification (Buddy Holly/Snow YT version mismatches, More Than a Feeling's live-compilation LRC, Lit has no synced LRC). Usage steps + copyright reminder included.
+
+**Why:** the user needs a pick-list to fetch files; hand-triangulating YouTube/LRC/CON per song was the bottleneck. All links verified live (HTTP 200) at write time.
+
 ## 2026-10-28 — v0.1.40: research tooling survives rebuilds; song-set matcher delivers 25 ground-truth candidates
 
 **What:** `requirements-research.txt` (yt-dlp + pyguitarpro, devcontainer-only) wired into post-install alongside the con-extract build; new KB page `[[research_tooling]]` documenting every research tool (CON extractor, dlc_ground_truth, rb_song_matcher, GP audit, web-tools) + README section + contract tests. `tools/rb_song_matcher.py` cross-references YouTube (yt-dlp), lrclib.net (synced LRC), MusicBrainz, and the local `tabs/` collection; the RB catalog is sourced from hmxmilohax/rock-band-3-deluxe (rb3_songs.dta with full metadata, official_additional_metadata.dta game_origin annotations, songs_yarg.dta 2559-song id list). First run produced 25 usable song sets (see the accuracy plan §11).
